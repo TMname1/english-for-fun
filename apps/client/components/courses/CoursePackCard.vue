@@ -3,15 +3,6 @@
     class="course-pack-card"
     @click="$emit('cardClick', coursePack)"
   >
-    <figure class="relative aspect-video overflow-hidden">
-      <NuxtImg
-        :src="coursePack.cover"
-        :placeholder="[288, 180]"
-        width="288"
-        height="180"
-        class="inset-0 h-full w-full object-cover"
-      />
-    </figure>
     <div class="card-body">
       <h2 class="card-title truncate">{{ coursePack.title }}</h2>
       <p
@@ -31,7 +22,6 @@ interface Props {
     id: string;
     title: string;
     description: string;
-    cover: string;
   };
 }
 

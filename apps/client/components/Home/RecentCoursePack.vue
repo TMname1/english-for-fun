@@ -13,15 +13,17 @@
     >
       <div
         v-if="coursePacks.length"
-        class="grid w-full grid-cols-1 gap-4 min-[500px]:grid-cols-2 md:grid-cols-1 min-[850px]:grid-cols-2 xl:grid-cols-3"
+        class="grid w-full auto-rows-fr grid-cols-1 gap-4 min-[500px]:grid-cols-2 md:grid-cols-1 min-[850px]:grid-cols-2 xl:grid-cols-3"
       >
-        <template v-for="coursePack in coursePacks">
+        <template
+          v-for="coursePack in coursePacks"
+          :key="coursePack.coursePackId"
+        >
           <CoursePackCard
             :coursePack="{
               id: coursePack.coursePackId,
               title: coursePack.title,
               description: coursePack.description,
-              cover: coursePack.cover,
             }"
           >
             <template #actions>
@@ -71,12 +73,13 @@ const isLoading = ref(false);
 setup();
 
 async function setup() {
-  if (coursePacks.value.length === 0) {
-    isLoading.value = true;
+  isLoading.value = true;
+  try {
     await fetchCoursePacks();
+  } catch {
+    // 请求失败时保持空列表并展示“暂无记录”，不影响页面其余部分
+  } finally {
     isLoading.value = false;
-  } else {
-    await fetchCoursePacks();
   }
 }
 </script>

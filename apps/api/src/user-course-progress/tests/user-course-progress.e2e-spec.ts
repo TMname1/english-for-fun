@@ -5,7 +5,7 @@ import { and, eq } from "drizzle-orm";
 import * as request from "supertest";
 
 import { userCourseProgress } from "@earthworm/schema";
-import { insertUserCourseProgress } from "../../../test/fixture/db";
+import { insertCoursePack, insertUserCourseProgress } from "../../../test/fixture/db";
 import { cleanDB } from "../../../test/helper/utils";
 import { AppModule } from "../../app/app.module";
 import { appGlobalMiddleware } from "../../app/useGlobal";
@@ -37,18 +37,57 @@ describe("user-progress e2e", () => {
   });
 
   it("get: /user-course-progress/recent-course-packs", async () => {
-    const coursePackIdFirst = createId();
-    const courseIdFirst = createId();
-    const coursePackIdSecond = createId();
-    const courseIdSecond = createId();
-    await insertUserCourseProgress(db, coursePackIdFirst, courseIdFirst, 0);
-    await insertUserCourseProgress(db, coursePackIdSecond, courseIdSecond, 10);
+    const firstPack = await insertCoursePack(db, {
+      order: 1,
+      title: "零基础",
+      description: "从零开始",
+    });
+    const secondPack = await insertCoursePack(db, {
+      order: 2,
+      title: "300个基础句子",
+      description: "常用句子",
+    });
+    await insertUserCourseProgress(db, firstPack.id, createId(), 0);
+    await insertUserCourseProgress(db, secondPack.id, createId(), 10);
+    // 课程包被删除后遗留的孤儿进度，不应出现在返回结果里
+    await insertUserCourseProgress(db, createId(), createId(), 3);
 
     await request(app.getHttpServer())
       .get("/user-course-progress/recent-course-packs")
       .expect(200)
       .expect(({ body }) => {
         expect(body.length).toBe(2);
+        expect(body.map((item: { coursePackId: string }) => item.coursePackId)).toEqual(
+          expect.arrayContaining([firstPack.id, secondPack.id]),
+        );
+        expect(body[0]).toEqual(
+          expect.objectContaining({
+            title: expect.any(String),
+            description: expect.any(String),
+          }),
+        );
+        expect(body[0]).not.toHaveProperty("cover");
+      });
+  });
+
+  it("get: /user-course-progress/recent-course-packs should never return more than 3 items", async () => {
+    for (let order = 1; order <= 4; order++) {
+      const pack = await insertCoursePack(db, { order, title: `课程包${order}` });
+      await insertUserCourseProgress(db, pack.id, createId(), order);
+    }
+
+    await request(app.getHttpServer())
+      .get("/user-course-progress/recent-course-packs?limit=100")
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body.length).toBe(3);
+      });
+
+    await request(app.getHttpServer())
+      .get("/user-course-progress/recent-course-packs?limit=abc")
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body.length).toBe(3);
       });
   });
 

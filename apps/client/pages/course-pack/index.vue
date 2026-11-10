@@ -9,13 +9,15 @@
         <div
           class="grid auto-rows-fr grid-cols-1 gap-4 px-4 sm:grid-cols-2 sm:px-0 md:grid-cols-3 lg:grid-cols-4"
         >
-          <template v-for="coursePack in coursePackStore.coursePacks">
+          <template
+            v-for="coursePack in coursePackStore.coursePacks"
+            :key="coursePack.id"
+          >
             <CoursePackCard
               :coursePack="{
                 id: coursePack.id,
                 title: coursePack.title,
                 description: coursePack.description,
-                cover: coursePack.cover,
               }"
               @cardClick="handleGoToCoursePack"
             ></CoursePackCard>

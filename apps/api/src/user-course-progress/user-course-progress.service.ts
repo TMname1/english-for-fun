@@ -27,12 +27,11 @@ export class UserCourseProgressService {
         courseId: userCourseProgress.courseId,
         title: coursePack.title,
         description: coursePack.description,
-        cover: coursePack.cover,
       })
       .from(userCourseProgress)
       .orderBy(desc(userCourseProgress.updatedAt))
       .limit(limit)
-      .leftJoin(coursePack, eq(userCourseProgress.coursePackId, coursePack.id));
+      .innerJoin(coursePack, eq(userCourseProgress.coursePackId, coursePack.id));
   }
 
   async upsert(coursePackId: string, courseId: string, statementIndex: number) {

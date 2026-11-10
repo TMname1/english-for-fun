@@ -10,7 +10,6 @@ export interface UserRecentCoursePackApiResponse {
   courseId: string;
   title: string;
   description: string;
-  cover: string;
 }
 
 export interface UserProgressUpdate {
