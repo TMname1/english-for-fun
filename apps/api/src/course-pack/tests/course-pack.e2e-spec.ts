@@ -43,6 +43,45 @@ describe("course-pack e2e", () => {
       });
   });
 
+  it("post: /course-pack", async () => {
+    return request(app.getHttpServer())
+      .post("/course-pack")
+      .send({
+        title: "新对话课程",
+        description: "用 POST 创建",
+        cover: "",
+        courses: [
+          {
+            title: "第一课",
+            description: "",
+            statements: [
+              { english: "How are you?", chinese: "你好吗？", phonetic: "" },
+              { english: "I am fine.", chinese: "我很好。" },
+            ],
+          },
+        ],
+      })
+      .expect(201)
+      .expect(async ({ body }) => {
+        expect(body.coursePackId).toBeTruthy();
+        expect(body.courseIds).toHaveLength(1);
+
+        const packs = await db.query.coursePack.findMany();
+        expect(packs).toHaveLength(1);
+        expect(packs[0]!.title).toBe("新对话课程");
+
+        const statements = await db.query.statement.findMany();
+        expect(statements).toHaveLength(2);
+      });
+  });
+
+  it("post: /course-pack with invalid payload returns 400", async () => {
+    return request(app.getHttpServer())
+      .post("/course-pack")
+      .send({ title: "", courses: [] })
+      .expect(400);
+  });
+
   it("get: /course-pack/:coursePackId", async () => {
     const { id: coursePackId } = await insertCoursePack(db);
     await insertCourse(db, coursePackId);

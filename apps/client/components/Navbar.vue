@@ -24,17 +24,43 @@
           </div>
         </NuxtLink>
 
-        <button
-          aria-label="更多"
-          class="btn btn-ghost btn-sm gap-2 text-base"
-          @click="openMoreMenu"
-        >
-          <UIcon
-            name="i-ph-dots-three-circle"
-            class="h-6 w-6"
-          />
-          <span class="hidden sm:inline">更多</span>
-        </button>
+        <nav class="flex items-center gap-1 sm:gap-2">
+          <button
+            aria-label="管理课程"
+            class="btn btn-ghost btn-sm gap-1.5 text-base"
+            @click="handleGoToCoursePackManage"
+          >
+            <UIcon
+              name="i-ph-toolbox"
+              class="h-6 w-6"
+            />
+            <span class="hidden sm:inline">管理课程</span>
+          </button>
+
+          <button
+            aria-label="帮助文档"
+            class="btn btn-ghost btn-sm gap-1.5 text-base"
+            @click="handleHelpDocs"
+          >
+            <UIcon
+              name="i-ph-book-open-text-duotone"
+              class="h-6 w-6"
+            />
+            <span class="hidden sm:inline">帮助文档</span>
+          </button>
+
+          <button
+            aria-label="主题切换"
+            class="btn btn-ghost btn-sm gap-1.5 text-base"
+            @click="toggleDarkMode"
+          >
+            <UIcon
+              :name="isDarkMode ? 'i-ph-moon' : 'i-ph-sun'"
+              class="h-6 w-6"
+            />
+            <span class="hidden sm:inline">{{ isDarkMode ? "深色" : "浅色" }}</span>
+          </button>
+        </nav>
       </div>
     </div>
   </header>
@@ -42,20 +68,31 @@
 
 <script setup lang="ts">
 import { useWindowScroll } from "@vueuse/core";
+import { navigateTo, useRuntimeConfig } from "#imports";
 import { computed } from "vue";
 import { useRoute } from "vue-router";
 
-import { useMoreMenu } from "~/composables/useMoreMenu";
+import { Theme, useDarkMode } from "~/composables/darkMode";
 
-const { openMoreMenu } = useMoreMenu();
 const route = useRoute();
 const { y } = useWindowScroll();
+const { darkMode, toggleDarkMode } = useDarkMode();
+const runtimeConfig = useRuntimeConfig();
+
+const isDarkMode = computed(() => darkMode.value === Theme.DARK);
 
 const SCROLL_THRESHOLD = 8;
 
-// TODO: 设置需要固定导航栏的页面
 const isStickyNavBar = computed(() =>
   ["index", "mastered-elements"].includes(route.name as string),
 );
 const isScrolled = computed(() => y.value >= SCROLL_THRESHOLD);
+
+function handleGoToCoursePackManage() {
+  navigateTo("/course-pack/manage");
+}
+
+function handleHelpDocs() {
+  window.open(runtimeConfig.public.helpDocsURL, "_blank");
+}
 </script>

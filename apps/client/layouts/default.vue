@@ -13,5 +13,4 @@
       <Footer></Footer>
     </div>
   </div>
-  <MoreMenu />
 </template>

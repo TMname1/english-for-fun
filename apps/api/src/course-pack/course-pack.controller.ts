@@ -1,6 +1,7 @@
-import { Controller, Get, Param, Post } from "@nestjs/common";
+import { Body, Controller, Get, Param, Post } from "@nestjs/common";
 
 import { CoursePackService } from "./course-pack.service";
+import { CreateCoursePackDto } from "./dto/create-course-pack.dto";
 
 @Controller("course-pack")
 export class CoursePackController {
@@ -9,6 +10,11 @@ export class CoursePackController {
   @Get()
   async findAll() {
     return await this.coursePackService.findAll();
+  }
+
+  @Post()
+  async create(@Body() createCoursePackDto: CreateCoursePackDto) {
+    return await this.coursePackService.create(createCoursePackDto);
   }
 
   @Get(":coursePackId")

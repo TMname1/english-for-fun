@@ -21,6 +21,7 @@
   "dependencies": {
     "drizzle-orm": "^0.32.0",
     "@earthworm/schema": "workspace:^",
+    "@earthworm/game-data-sdk": "workspace:^",
     "@nestjs/common": "^10.0.0",
     "@nestjs/config": "^3.1.1",
     "@nestjs/core": "^10.0.0",
