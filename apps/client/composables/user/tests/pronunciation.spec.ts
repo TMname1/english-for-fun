@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { PronunciationType, usePronunciation } from "../pronunciation";
+import { PronunciationType, setupPronunciation, usePronunciation } from "../pronunciation";
 
 const PRONUNCIATION_TYPE = "pronunciationType";
+const API_BASE = "http://localhost:3001";
 
 function expectPronunciation(type: PronunciationType) {
   const { pronunciation } = usePronunciation();
@@ -16,6 +17,7 @@ describe("pronunciation", () => {
     const { pronunciation } = usePronunciation();
     pronunciation.value = PronunciationType.American;
     localStorage.clear();
+    setupPronunciation({ apiBase: API_BASE });
   });
 
   it("get default pronunciation if it was stored", () => {
@@ -43,5 +45,37 @@ describe("pronunciation", () => {
     togglePronunciation(PronunciationType.British);
 
     expectPronunciation(PronunciationType.British);
+  });
+
+  it("builds tts url with encoded text", () => {
+    const { getPronunciationUrl } = usePronunciation();
+
+    expect(getPronunciationUrl("british english")).toBe(
+      `${API_BASE}/tts?accent=American&text=british%20english`,
+    );
+  });
+
+  it("escapes url-significant characters in the text", () => {
+    const { getPronunciationUrl } = usePronunciation();
+
+    expect(getPronunciationUrl("a # b & c?")).toBe(
+      `${API_BASE}/tts?accent=American&text=a%20%23%20b%20%26%20c%3F`,
+    );
+  });
+
+  it("uses the selected accent in the url", () => {
+    const { getPronunciationUrl, togglePronunciation } = usePronunciation();
+
+    togglePronunciation(PronunciationType.British);
+
+    expect(getPronunciationUrl("hello")).toBe(`${API_BASE}/tts?accent=British&text=hello`);
+  });
+
+  it("returns an empty url for empty input", () => {
+    const { getPronunciationUrl } = usePronunciation();
+
+    expect(getPronunciationUrl(undefined)).toBe("");
+    expect(getPronunciationUrl("")).toBe("");
+    expect(getPronunciationUrl("   ")).toBe("");
   });
 });

@@ -6,6 +6,7 @@ import { CourseModule } from "../course/course.module";
 import { GlobalModule } from "../global/global.module";
 import { MasteredElementModule } from "../mastered-element/mastered-element.module";
 import { ToolModule } from "../tool/tool.module";
+import { TtsModule } from "../tts/tts.module";
 import { UserCourseProgressModule } from "../user-course-progress/user-course-progress.module";
 import { UserLearningActivityModule } from "../user-learning-activity/user-learning-activity.module";
 
@@ -19,6 +20,7 @@ import { UserLearningActivityModule } from "../user-learning-activity/user-learn
     ToolModule,
     CourseHistoryModule,
     MasteredElementModule,
+    TtsModule,
   ],
 })
 export class AppModule {}

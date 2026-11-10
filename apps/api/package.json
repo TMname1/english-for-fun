@@ -19,9 +19,8 @@
     "test:cov": "jest --coverage"
   },
   "dependencies": {
-    "drizzle-orm": "^0.32.0",
-    "@earthworm/schema": "workspace:^",
     "@earthworm/game-data-sdk": "workspace:^",
+    "@earthworm/schema": "workspace:^",
     "@nestjs/common": "^10.0.0",
     "@nestjs/config": "^3.1.1",
     "@nestjs/core": "^10.0.0",
@@ -29,6 +28,9 @@
     "@nestjs/swagger": "^7.1.17",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.1",
+    "drizzle-orm": "^0.32.0",
+    "https-proxy-agent": "^7.0.5",
+    "msedge-tts": "^2.1.1",
     "postgres": "^3.4.4",
     "reflect-metadata": "^0.1.13",
     "rxjs": "^7.8.1",

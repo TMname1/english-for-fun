@@ -1,10 +1,9 @@
 import { ref } from "vue";
 
 /**
- * 有道 Web 发音 API 接口
+ * 服务端 TTS 发音接口（Edge 神经网络语音，见 apps/api/src/tts）
  *
- * 美式发音：https://dict.youdao.com/dictvoice?type=2&audio=word
- * 英式发音：https://dict.youdao.com/dictvoice?type=1&audio=word
+ * GET ${apiBase}/tts?accent=American|British&text=<encoded text>
  */
 
 export enum PronunciationType {
@@ -19,6 +18,17 @@ export const pronunciationLabels: { [key in PronunciationType]: string } = {
 
 const PRONUNCIATION_TYPE = "pronunciationType";
 const pronunciation = ref<PronunciationType>(PronunciationType.American); // 默认美音
+
+let apiBase = "";
+
+/**
+ * 在应用启动时（plugins/http.ts）注入 API 基础地址，
+ * 避免在模块顶层调用 useRuntimeConfig 拿不到 Nuxt 上下文
+ */
+export function setupPronunciation(options: { apiBase: string }) {
+  apiBase = options.apiBase;
+}
+
 export function usePronunciation() {
   loadCache();
 
@@ -36,10 +46,6 @@ export function usePronunciation() {
     return localStorage.getItem(PRONUNCIATION_TYPE) as PronunciationType;
   }
 
-  function getPronunciationType(): number {
-    return pronunciation.value === PronunciationType.American ? 2 : 1;
-  }
-
   function getPronunciationOptions() {
     return Object.entries(pronunciationLabels).map(([key, value]) => {
       return {
@@ -50,7 +56,11 @@ export function usePronunciation() {
   }
 
   function getPronunciationUrl(english: string | undefined): string {
-    return `https://dict.youdao.com/dictvoice?type=${getPronunciationType()}&audio=${english}`;
+    const text = english?.trim();
+    if (!text) {
+      return "";
+    }
+    return `${apiBase}/tts?accent=${pronunciation.value}&text=${encodeURIComponent(text)}`;
   }
 
   // 切换发音
