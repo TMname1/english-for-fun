@@ -361,19 +361,7 @@ importers:
       drizzle-orm:
         specifier: ^0.32.0
         version: 0.32.0(@electric-sql/pglite@0.1.5)(@opentelemetry/api@1.9.0)(pg@8.12.0)(postgres@3.4.4)
-      inquirer:
-        specifier: ^9.2.13
-        version: 9.2.23
-      pdf-parse:
-        specifier: ^1.1.1
-        version: 1.1.1
     devDependencies:
-      '@types/inquirer':
-        specifier: ^9.0.7
-        version: 9.0.7
-      '@types/pdf-parse':
-        specifier: ^1.1.4
-        version: 1.1.4
       vitest:
         specifier: ^2.0.3
         version: 2.0.3(@types/node@20.14.9)(happy-dom@13.10.1)(terser@5.31.1)
@@ -2382,9 +2370,6 @@ packages:
 
   '@types/normalize-package-data@2.4.4':
     resolution: {integrity: sha512-37i+OaWTh9qeK4LSHPsyRC7NahnGotNuZvjLSgcPzblpHB3rrCJxAOgI5gCdKm7coonsaX1Of0ILiTcnZjbfxA==}
-
-  '@types/pdf-parse@1.1.4':
-    resolution: {integrity: sha512-+gbBHbNCVGGYw1S9lAIIvrHW47UYOhMIFUsJcMkMrzy1Jf0vulBN3XQIjPgnoOXveMuHnF3b57fXROnY/Or7eg==}
 
   '@types/qs@6.9.15':
     resolution: {integrity: sha512-uXHQKES6DQKKCLh441Xv/dwxOq1TVS3JPUMlEqoEglvlhR6Mxnlew/Xq/LRVHpLyk7iK3zODe1qYHIMltO7XGg==}
@@ -5710,9 +5695,6 @@ packages:
   node-emoji@1.11.0:
     resolution: {integrity: sha512-wo2DpQkQp7Sjm2A0cq+sN7EHKO6Sl0ctXeBdFZrL9T9+UywORbufTcTZxom8YqpLQt/FqNMUkOpkZrJVYSKD3A==}
 
-  node-ensure@0.0.0:
-    resolution: {integrity: sha512-DRI60hzo2oKN1ma0ckc6nQWlHU69RH6xN0sjQTjMpChPfTYvKZdcQFfdYK2RWbJcKyUizSIy/l8OTGxMAM1QDw==}
-
   node-fetch-native@1.6.4:
     resolution: {integrity: sha512-IhOigYzAKHd244OC0JIMIUrjzctirCmPkaIfhDeGcEETWof5zKYUW7e7MYvChGWh/4CJeXEgsRyGzuF334rOOQ==}
 
@@ -6023,10 +6005,6 @@ packages:
 
   pause-stream@0.0.11:
     resolution: {integrity: sha512-e3FBlXLmN/D1S+zHzanP4E/4Z60oFAa3O051qt1pxa7DEJWKAyil6upYVXCWadEnuoqa4Pkc9oUx9zsxYeRv8A==}
-
-  pdf-parse@1.1.1:
-    resolution: {integrity: sha512-v6ZJ/efsBpGrGGknjtq9J/oC8tZWq0KWL5vQrk2GlzLEQPUDB1ex+13Rmidl1neNN358Jn9EHZw5y07FFtaC7A==}
-    engines: {node: '>=6.8.1'}
 
   pend@1.2.0:
     resolution: {integrity: sha512-F3asv42UuXchdzt+xXqfW1OGlVBe+mxa2mqI0pg5yAHZPvFmY3Y6drSf/GQ1A86WgWEN9Kzh/WrgKa6iGcHXLg==}
@@ -10410,8 +10388,6 @@ snapshots:
 
   '@types/normalize-package-data@2.4.4': {}
 
-  '@types/pdf-parse@1.1.4': {}
-
   '@types/qs@6.9.15': {}
 
   '@types/range-parser@1.2.7': {}
@@ -14532,8 +14508,6 @@ snapshots:
     dependencies:
       lodash: 4.17.21
 
-  node-ensure@0.0.0: {}
-
   node-fetch-native@1.6.4: {}
 
   node-fetch@2.7.0(encoding@0.1.13):
@@ -14983,13 +14957,6 @@ snapshots:
   pause-stream@0.0.11:
     dependencies:
       through: 2.3.8
-
-  pdf-parse@1.1.1:
-    dependencies:
-      debug: 3.2.7(supports-color@8.1.1)
-      node-ensure: 0.0.0
-    transitivePeerDependencies:
-      - supports-color
 
   pend@1.2.0: {}
 
