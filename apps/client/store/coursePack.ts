@@ -3,7 +3,7 @@ import { ref } from "vue";
 
 import type { CoursePack, CoursePacksItem } from "~/types";
 import { fetchCourseHistory } from "~/api/course-history";
-import { fetchCoursePack, fetchCoursePacks } from "~/api/course-pack";
+import { deleteCoursePack, fetchCoursePack, fetchCoursePacks } from "~/api/course-pack";
 
 export const useCoursePackStore = defineStore("course-pack", () => {
   const coursePacks = ref<CoursePacksItem[]>([]);
@@ -12,6 +12,20 @@ export const useCoursePackStore = defineStore("course-pack", () => {
   async function setupCoursePacks() {
     const res = await fetchCoursePacks();
     coursePacks.value = res;
+  }
+
+  /**
+   * 删除课程包并刷新列表。
+   */
+  async function removeCoursePack(coursePackId: string) {
+    await deleteCoursePack(coursePackId);
+
+    coursePacks.value = coursePacks.value.filter((item) => item.id !== coursePackId);
+    if (currentCoursePack.value?.id === coursePackId) {
+      currentCoursePack.value = undefined;
+    }
+
+    await setupCoursePacks();
   }
 
   async function setupCoursePack(coursePackId: string) {
@@ -39,6 +53,7 @@ export const useCoursePackStore = defineStore("course-pack", () => {
   return {
     setupCoursePack,
     setupCoursePacks,
+    removeCoursePack,
     updateCoursesCompleteCount,
     currentCoursePack,
     coursePacks,

@@ -62,3 +62,15 @@ export async function createCoursePack(payload: CreateCoursePackPayload) {
     body: payload,
   });
 }
+
+export interface DeleteCoursePackResponse {
+  deleted: boolean;
+  coursePackId: string;
+}
+
+export async function deleteCoursePack(coursePackId: string) {
+  const http = getHttp();
+  return await http<DeleteCoursePackResponse>(`/course-pack/${coursePackId}`, {
+    method: "delete",
+  });
+}

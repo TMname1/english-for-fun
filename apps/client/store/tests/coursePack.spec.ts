@@ -1,9 +1,9 @@
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { Course, CoursePack } from "~/types";
+import type { Course, CoursePack, CoursePacksItem } from "~/types";
 import { fetchCourseHistory } from "~/api/course-history";
-import { fetchCoursePack } from "~/api/course-pack";
+import { deleteCoursePack, fetchCoursePack, fetchCoursePacks } from "~/api/course-pack";
 import { useCoursePackStore } from "../coursePack";
 
 vi.mock("~/api/course-pack");
@@ -90,5 +90,24 @@ describe("course pack store", () => {
 
     expect(coursePackStore.currentCoursePack?.courses[0].completionCount).toBe(5);
     expect(coursePackStore.currentCoursePack?.courses[1].completionCount).toBe(0);
+  });
+
+  it("removeCoursePack should delete the pack and refresh the list", async () => {
+    const packA: CoursePacksItem = { id: "a", title: "课程包A", description: "", cover: "" };
+    const packB: CoursePacksItem = { id: "b", title: "课程包B", description: "", cover: "" };
+
+    vi.mocked(fetchCoursePacks)
+      .mockResolvedValueOnce([packA, packB])
+      .mockResolvedValueOnce([packB]);
+    vi.mocked(deleteCoursePack).mockResolvedValue({ deleted: true, coursePackId: "a" });
+
+    const coursePackStore = useCoursePackStore();
+    await coursePackStore.setupCoursePacks();
+    expect(coursePackStore.coursePacks).toHaveLength(2);
+
+    await coursePackStore.removeCoursePack("a");
+
+    expect(deleteCoursePack).toHaveBeenCalledWith("a");
+    expect(coursePackStore.coursePacks.map((item) => item.id)).toEqual(["b"]);
   });
 });

@@ -1,8 +1,16 @@
 import { INestApplication } from "@nestjs/common";
 import { Test, TestingModule } from "@nestjs/testing";
+import { createId } from "@paralleldrive/cuid2";
+import { eq } from "drizzle-orm";
 import * as request from "supertest";
 
-import { insertCourse, insertCoursePack, insertStatement } from "../../../test/fixture/db";
+import { course, courseHistory, coursePack, statement } from "@earthworm/schema";
+import {
+  insertCourse,
+  insertCoursePack,
+  insertStatement,
+  insertUserCourseProgress,
+} from "../../../test/fixture/db";
 import { cleanDB } from "../../../test/helper/utils";
 import { AppModule } from "../../app/app.module";
 import { appGlobalMiddleware } from "../../app/useGlobal";
@@ -80,6 +88,41 @@ describe("course-pack e2e", () => {
       .post("/course-pack")
       .send({ title: "", courses: [] })
       .expect(400);
+  });
+
+  it("delete: /course-pack/:coursePackId removes pack with its courses, statements and progress", async () => {
+    const { id: coursePackId } = await insertCoursePack(db);
+    const { id: courseId } = await insertCourse(db, coursePackId);
+    await insertStatement(db, courseId, 1);
+    await insertStatement(db, courseId, 2);
+    await insertUserCourseProgress(db, coursePackId, courseId, 0);
+    await db.insert(courseHistory).values({ coursePackId, courseId, completionCount: 1 });
+
+    return request(app.getHttpServer())
+      .delete(`/course-pack/${coursePackId}`)
+      .expect(200)
+      .expect(async ({ body }) => {
+        expect(body).toEqual({ deleted: true, coursePackId });
+
+        expect(
+          await db.query.coursePack.findFirst({ where: eq(coursePack.id, coursePackId) }),
+        ).toBeUndefined();
+        expect(
+          await db.query.course.findMany({ where: eq(course.coursePackId, coursePackId) }),
+        ).toHaveLength(0);
+        expect(
+          await db.query.statement.findMany({ where: eq(statement.courseId, courseId) }),
+        ).toHaveLength(0);
+        expect(
+          await db.query.courseHistory.findMany({
+            where: eq(courseHistory.coursePackId, coursePackId),
+          }),
+        ).toHaveLength(0);
+      });
+  });
+
+  it("delete: /course-pack/:coursePackId with unknown id returns 404", async () => {
+    return request(app.getHttpServer()).delete(`/course-pack/${createId()}`).expect(404);
   });
 
   it("get: /course-pack/:coursePackId", async () => {

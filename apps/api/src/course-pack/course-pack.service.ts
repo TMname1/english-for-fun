@@ -3,7 +3,7 @@ import { ConfigService } from "@nestjs/config";
 import { asc, eq } from "drizzle-orm";
 
 import type { CreateCoursePack } from "@earthworm/game-data-sdk";
-import { createCoursePack, setupGameDataSDK } from "@earthworm/game-data-sdk";
+import { createCoursePack, deleteCoursePack, setupGameDataSDK } from "@earthworm/game-data-sdk";
 import { course, coursePack } from "@earthworm/schema";
 import type { CreateCoursePackDto } from "./dto/create-course-pack.dto";
 import { CourseHistoryService } from "../course-history/course-history.service";
@@ -116,6 +116,20 @@ export class CoursePackService {
     };
 
     return await createCoursePack(payload);
+  }
+
+  /**
+   * 删除课程包（级联删除其下课程、句子及学习记录、进度）。
+   */
+  async delete(coursePackId: string) {
+    this.ensureGameDataSdk();
+
+    // 先走 API 层查询，保证不存在时返回 404 而不是 SDK 内部的 500
+    await this.findOne(coursePackId);
+
+    await deleteCoursePack(coursePackId);
+
+    return { deleted: true, coursePackId };
   }
 
   // SDK 使用自己的全局连接，只需按当前 DATABASE_URL 初始化一次
