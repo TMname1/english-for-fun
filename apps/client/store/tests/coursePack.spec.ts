@@ -19,7 +19,6 @@ describe("course pack store", () => {
       id: "coursePackId",
       title: "课程包1",
       description: "这是一个课程包",
-      isFree: true,
       courses: [],
       cover: "",
     };

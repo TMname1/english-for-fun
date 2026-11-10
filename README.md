@@ -28,7 +28,6 @@ By constructing sentences with conjunctions, it helps you learn English better~ 
 - **Node.js version >= v20**
   > Use the version from .node-version. [Supported tools](https://github.com/shadowspawn/node-version-usage#compatibility-testing)
 - **Postgres version >= 14.0.0**
-- **Redis version >= 5.0.0**
 - **Docker**. please make sure it is installed and running successfully on your local machine.
 
 ```bash
@@ -69,23 +68,9 @@ cp ./apps/api/.env.example ./apps/api/.env
 cp ./apps/client/.env.example ./apps/client/.env
 ```
 
-### 3. Restore Data Of Logto
+### 3. Start Docker Compose Service
 
-Uncompress `logto_db_init_data.zip` to `.volumes/`
-
-```bash
-unzip logto_db_init_data.zip -d .volumes/
-```
-
-- Admin URL: http://localhost:3011
-- Username: admin
-- Password: WkN7g5-i8ZrJckX
-
-> if you want to [Manual Configuration Logto](https://github.com/cuixueshe/earthworm/wiki/%E8%BF%81%E7%A7%BB-Logto-%E7%94%A8%E6%88%B7%E7%B3%BB%E7%BB%9F%E5%90%8E%E6%9C%AC%E5%9C%B0%E5%90%AF%E5%8A%A8%E9%85%8D%E7%BD%AE%E6%96%B9%E6%A1%88%EF%BC%88%E8%B4%A1%E7%8C%AE%E8%80%85%EF%BC%89)
-
-### 4. Start Docker Compose Service
-
-The backend relies on Postgres and Redis services. Start and stop these services using the commands configured in `package.json` below.
+The backend relies on Postgres. Start and stop these services using the commands configured in `package.json` below.
 
 ```bash
 # start
@@ -111,7 +96,7 @@ docker compose down
 docker-compose up -d
 ```
 
-### 5. Initialize Database Schema
+### 4. Initialize Database Schema
 
 When executing this command, try to keep a little time from the previous command, because the `-d` parameter just used will suspend its service execution in the background. At this time, the docker service may still be running. If an error is found, execute it again.
 
@@ -119,7 +104,7 @@ When executing this command, try to keep a little time from the previous command
 pnpm db:init
 ```
 
-### 6. Create and Upload Course Data
+### 5. Create and Upload Course Data
 
 **Only Execute This During the Initial Database Initialization**.
 
@@ -127,13 +112,13 @@ pnpm db:init
 pnpm db:upload
 ```
 
-### 7. Start the Backend Service
+### 6. Start the Backend Service
 
 ```bash
 pnpm dev:serve
 ```
 
-### 8. Start the Frontend Service
+### 7. Start the Frontend Service
 
 ```bash
 pnpm dev:client
@@ -164,7 +149,7 @@ pnpm test:unit:watch
 
 Mainly Jest single test and end-to-end test, but need to access the test database, so you need to ensure that:
 
-1. testdb and testRedis services in Docker Compose started normally.
+1. testdb service in Docker Compose started normally.
 2. The configuration information in the `.env.test` file is correct. If there is no such file, you can copy the contents of the `apps/api/.env.test.example` file to the `apps/api/.env.test` file. The following command is provided to directly use.
 
 Execute the following command:
@@ -224,11 +209,6 @@ pnpm i -g pnpm
 # or
 npx pnpm i -g pnpm@latest
 ```
-
-**Error Installing the argon2 Module On Windows**
-
-- Install Visual Studio 2015 or later, specifically the "Desktop development with C++" component. (In practice, any component containing C++ development tools and libraries will suffice.)
-- If you encounter Chinese characters display issues during compilation, execute `chcp 437` in the command prompt, then rerun the install command.
 
 ### Docker Permission Denied in Docker?
 

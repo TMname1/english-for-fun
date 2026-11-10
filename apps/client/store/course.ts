@@ -4,7 +4,6 @@ import { computed, ref, watchEffect } from "vue";
 import type { Course, Statement } from "~/types";
 import { fetchCompleteCourse, fetchCourse } from "~/api/course";
 import { useActiveCourseMap } from "~/composables/courses/activeCourse";
-import { isAuthenticated } from "~/services/auth";
 import { useMasteredElementsStore } from "~/store/masteredElements";
 import { useStatement } from "./statement";
 
@@ -129,11 +128,9 @@ export const useCourseStore = defineStore("course", () => {
     course.statements = markMasteredElements(course.statements);
 
     currentCourse.value = course;
-    if (isAuthenticated()) {
-      setupAutoSaveProgress(currentCourse);
-      if (statementIndex.value === 0) {
-        resetStatementIndex();
-      }
+    setupAutoSaveProgress(currentCourse);
+    if (statementIndex.value === 0) {
+      resetStatementIndex();
     }
   }
 

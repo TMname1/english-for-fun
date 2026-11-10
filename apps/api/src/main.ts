@@ -15,7 +15,6 @@ async function bootstrap() {
     .setTitle("EarthWorm Swagger")
     .setDescription("The EarthWorm API description")
     .setVersion("v1.0")
-    .addBearerAuth()
     .build();
   const document = SwaggerModule.createDocument(app, config);
   SwaggerModule.setup("/swagger", app, document);

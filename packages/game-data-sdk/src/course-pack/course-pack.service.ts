@@ -12,18 +12,15 @@ import { db } from "../db";
 
 export async function createCoursePack(coursePackInfo: CreateCoursePack) {
   const result = await db.transaction(async (tx) => {
-    const coursePackOrder = await calculateCoursePackOrder(coursePackInfo.uId);
+    const coursePackOrder = await calculateCoursePackOrder();
 
     const [coursePackEntity] = await tx
       .insert(coursePackSchema)
       .values({
         order: coursePackOrder,
-        creatorId: coursePackInfo.uId,
-        shareLevel: coursePackInfo.shareLevel,
         title: coursePackInfo.title,
         description: coursePackInfo.description,
         cover: coursePackInfo.cover,
-        isFree: true,
       })
       .returning();
 
@@ -36,7 +33,6 @@ export async function createCoursePack(coursePackInfo: CreateCoursePack) {
           order: cIndex + 1,
           title: course.title,
           description: course.description,
-          learningContent: course.learningContent,
         })
         .returning({
           id: courseSchema.id,
@@ -66,10 +62,9 @@ export async function createCoursePack(coursePackInfo: CreateCoursePack) {
       courseIds,
     };
 
-    async function calculateCoursePackOrder(userId: string) {
+    async function calculateCoursePackOrder() {
       const entity = await tx.query.coursePack.findFirst({
         orderBy: (table, { desc }) => [desc(table.order)],
-        where: (table, { eq }) => eq(table.creatorId, userId),
       });
 
       if (entity) {
@@ -128,7 +123,6 @@ export async function updateCoursePack(coursePackId: string, coursePackInfo: Upd
           title: coursePackInfo.title,
           description: coursePackInfo.description,
           cover: coursePackInfo.cover,
-          shareLevel: coursePackInfo.shareLevel,
         })
         .where(eq(coursePackSchema.id, coursePackId));
     }
@@ -155,7 +149,6 @@ export async function updateCoursePack(coursePackId: string, coursePackInfo: Upd
               title: newCourseInfo.title,
               description: newCourseInfo.description,
               order: newCourseIndex + 1,
-              learningContent: newCourseInfo.learningContent,
             })
             .where(eq(courseSchema.id, newCourseInfo.publishCourseId));
 
@@ -172,7 +165,6 @@ export async function updateCoursePack(coursePackId: string, coursePackInfo: Upd
               description: newCourseInfo.description,
               order: newCourseIndex + 1,
               coursePackId: coursePackId,
-              learningContent: newCourseInfo.learningContent,
             })
             .returning({
               id: courseSchema.id,
@@ -277,10 +269,7 @@ export async function updateCoursePack(coursePackId: string, coursePackInfo: Upd
     }
 
     const coursePack = await tx.query.coursePack.findFirst({
-      where: and(
-        eq(coursePackSchema.id, coursePackId),
-        eq(coursePackSchema.creatorId, coursePackInfo.uId),
-      ),
+      where: eq(coursePackSchema.id, coursePackId),
     });
 
     if (!coursePack) {

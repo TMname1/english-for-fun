@@ -3,7 +3,6 @@ import { toast } from "vue-sonner";
 
 import { useGameMode } from "~/composables/main/game";
 import { useSummary } from "~/composables/main/summary";
-import { isAuthenticated } from "~/services/auth";
 import { useCourseStore } from "~/store/course";
 import { useMasteredElementsStore } from "~/store/masteredElements";
 import { cancelShortcut, registerShortcut } from "~/utils/keyboardShortcuts";
@@ -20,11 +19,6 @@ export function useMastered() {
 
   const addLoading = ref(false);
   async function markStatementAsMastered() {
-    if (!isAuthenticated()) {
-      toast.warning("需要登录哦");
-      return;
-    }
-
     // updateMarketedStatements 会影响 isLastStatement 返回的结果
     // 所以我们提前调用 isLastStatement 来记录好值
     if (addLoading.value) return;

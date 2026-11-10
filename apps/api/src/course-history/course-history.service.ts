@@ -1,5 +1,5 @@
 /**
- * 记录用户当前课程包的课程学习了多少次
+ * 记录当前课程包每门课的学习次数
  */
 import { Inject, Injectable } from "@nestjs/common";
 import { and, eq, sql } from "drizzle-orm";
@@ -11,13 +11,11 @@ import { DB, DbType } from "../global/providers/db.provider";
 export class CourseHistoryService {
   constructor(@Inject(DB) private db: DbType) {}
 
-  async findAll(userId: string) {
-    return await this.db.query.courseHistory.findMany({
-      where: eq(courseHistory.userId, userId),
-    });
+  async findAll() {
+    return await this.db.query.courseHistory.findMany();
   }
 
-  async findByCoursePackId(userId: string, coursePackId: string) {
+  async findByCoursePackId(coursePackId: string) {
     return await this.db.query.courseHistory.findMany({
       columns: {
         id: true,
@@ -25,14 +23,13 @@ export class CourseHistoryService {
         courseId: true,
         completionCount: true,
       },
-      where: and(eq(courseHistory.userId, userId), eq(courseHistory.coursePackId, coursePackId)),
+      where: eq(courseHistory.coursePackId, coursePackId),
     });
   }
 
-  async findCompletionCount(userId: string, coursePackId: string, courseId: string) {
+  async findCompletionCount(coursePackId: string, courseId: string) {
     const record = await this.db.query.courseHistory.findFirst({
       where: and(
-        eq(courseHistory.userId, userId),
         eq(courseHistory.coursePackId, coursePackId),
         eq(courseHistory.courseId, courseId),
       ),
@@ -41,17 +38,16 @@ export class CourseHistoryService {
     return record ? record.completionCount : 0;
   }
 
-  async upsert(userId: string, coursePackId: string, courseId: string) {
+  async upsert(coursePackId: string, courseId: string) {
     await this.db
       .insert(courseHistory)
       .values({
         coursePackId,
         courseId,
-        userId,
         completionCount: 1,
       })
       .onConflictDoUpdate({
-        target: [courseHistory.userId, courseHistory.courseId, courseHistory.coursePackId],
+        target: [courseHistory.courseId, courseHistory.coursePackId],
         set: { completionCount: sql`course_history.completion_count + 1` },
       });
   }

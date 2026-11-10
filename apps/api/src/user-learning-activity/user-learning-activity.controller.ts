@@ -1,7 +1,5 @@
-import { Body, Controller, Get, Post, Query, UseGuards } from "@nestjs/common";
+import { Body, Controller, Get, Post, Query } from "@nestjs/common";
 
-import { AuthGuard } from "../guards/auth.guard";
-import { User, UserEntity } from "../user/user.decorators";
 import { QueryParamsDto } from "./model/query-params.dto";
 import { UpsertActivityDto } from "./model/upsert-activity.dto";
 import { UserLearningActivityService } from "./user-learning-activity.service";
@@ -10,46 +8,28 @@ import { UserLearningActivityService } from "./user-learning-activity.service";
 export class UserLearningActivityController {
   constructor(private userLearningActivityService: UserLearningActivityService) {}
 
-  @UseGuards(AuthGuard)
   @Get()
-  async getDailyTotals(@User() user: UserEntity, @Query() queryParams: QueryParamsDto) {
+  async getDailyTotals(@Query() queryParams: QueryParamsDto) {
     const { activityType, startDate, endDate } = queryParams;
     const start = startDate ? new Date(startDate) : undefined;
     const end = endDate ? new Date(endDate) : undefined;
-    return this.userLearningActivityService.getDailyTotalTime(
-      user.userId,
-      activityType,
-      start,
-      end,
-    );
+    return this.userLearningActivityService.getDailyTotalTime(activityType, start, end);
   }
 
-  @UseGuards(AuthGuard)
   @Post()
-  async upsertActivity(@User() user: UserEntity, @Body() activityData: UpsertActivityDto) {
-    const result = await this.userLearningActivityService.upsertActivity(
-      user.userId,
+  async upsertActivity(@Body() activityData: UpsertActivityDto) {
+    return await this.userLearningActivityService.upsertActivity(
       new Date(activityData.date),
       activityData.activityType,
       activityData.duration,
     );
-
-    return result;
   }
 
-  @UseGuards(AuthGuard)
   @Get("total")
-  async getTotalLearningTime(@User() user: UserEntity, @Query() queryParams: QueryParamsDto) {
+  async getTotalLearningTime(@Query() queryParams: QueryParamsDto) {
     const { activityType, startDate, endDate } = queryParams;
     const start = startDate ? new Date(startDate) : undefined;
     const end = endDate ? new Date(endDate) : undefined;
-    const totalTime = await this.userLearningActivityService.getTotalLearningTime(
-      user.userId,
-      activityType,
-      start,
-      end,
-    );
-
-    return totalTime;
+    return await this.userLearningActivityService.getTotalLearningTime(activityType, start, end);
   }
 }

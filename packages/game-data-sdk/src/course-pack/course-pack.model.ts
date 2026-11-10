@@ -8,15 +8,13 @@ interface Course {
   title: string;
   description: string;
   statements: Statement[];
-  learningContent: string;
+  learningContent?: string;
 }
 
 export interface CreateCoursePack {
   title: string;
   description: string;
   cover: string;
-  uId: string;
-  shareLevel: string;
   courses: Course[];
 }
 
@@ -26,7 +24,5 @@ export interface UpdateCoursePack {
   title: string;
   description: string;
   cover: string;
-  uId: string;
-  shareLevel: string;
   courses: UpdateCourse[];
 }

@@ -16,7 +16,6 @@
                 title: coursePack.title,
                 description: coursePack.description,
                 cover: coursePack.cover,
-                isFree: coursePack.isFree,
               }"
               @cardClick="handleGoToCoursePack"
             ></CoursePackCard>
@@ -51,13 +50,7 @@ async function setup() {
 }
 
 function handleGoToCoursePack(coursePack: CoursePack) {
-  if (coursePack.isFree) {
-    gotoCourseList(coursePack.id);
-  } else {
-    // 看看是不是会员 不是的话 直接弹出消息告知 需要是会员
-    // TODO 还没有检测是不是会员的功能函数
-    console.log("需要是会员");
-  }
+  gotoCourseList(coursePack.id);
 }
 </script>
 

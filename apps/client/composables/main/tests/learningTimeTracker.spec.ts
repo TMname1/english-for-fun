@@ -4,12 +4,6 @@ import { nextTick } from "vue";
 import { updateDailyLearningDailyTotalTime } from "~/api/user-learning-activity";
 import { useLearningTimeTracker } from "../learningTimeTracker";
 
-vi.mock("~/store/user", () => ({
-  useUserStore: vi.fn(() => ({
-    user: { id: "testUser" },
-  })),
-}));
-
 vi.mock("~/api/user-learning-activity", () => ({
   updateDailyLearningDailyTotalTime: vi.fn(),
 }));
@@ -65,7 +59,7 @@ describe("useLearningTimeTracker", () => {
 
   it("should load time from localStorage when starting tracking", () => {
     const date = new Date().toISOString().split("T")[0];
-    localStorage.setItem(`learningTime_testUser_${date}`, "50");
+    localStorage.setItem(`learningTime_${date}`, "50");
     tracker.startTracking();
     expect(tracker.totalSeconds.value).toBe(50);
   });
@@ -100,7 +94,7 @@ describe("useLearningTimeTracker", () => {
     expect(tracker.totalSeconds.value).toBe(5);
 
     // 保存当前的存储键和值
-    const day1StorageKey = `learningTime_testUser_2023-07-23`;
+    const day1StorageKey = `learningTime_2023-07-23`;
     const day1StoredValue = localStorage.getItem(day1StorageKey);
 
     // 模拟时间跨越到下一天
@@ -117,7 +111,7 @@ describe("useLearningTimeTracker", () => {
     expect(localStorage.getItem(day1StorageKey)).toBe(day1StoredValue);
 
     // 检查新的一天是否创建了新的存储项
-    const day2StorageKey = `learningTime_testUser_2023-07-24`;
+    const day2StorageKey = `learningTime_2023-07-24`;
     expect(localStorage.getItem(day2StorageKey)).toBe("0");
 
     // 添加一些时间后再次检查

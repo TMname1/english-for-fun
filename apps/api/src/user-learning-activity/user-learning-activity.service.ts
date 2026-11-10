@@ -1,5 +1,5 @@
 import { BadRequestException, Inject, Injectable } from "@nestjs/common";
-import { and, eq, gte, lte, sql, sum } from "drizzle-orm";
+import { and, asc, eq, gte, lte, sql, sum } from "drizzle-orm";
 
 import { userLearningActivities as userLearningActivitiesSchema } from "@earthworm/schema";
 import { DB, DbType } from "../global/providers/db.provider";
@@ -9,7 +9,6 @@ export class UserLearningActivityService {
   constructor(@Inject(DB) private db: DbType) {}
 
   async upsertActivity(
-    userId: string,
     date: Date,
     activityType: string,
     duration: number,
@@ -24,7 +23,6 @@ export class UserLearningActivityService {
     await this.db
       .insert(userLearningActivitiesSchema)
       .values({
-        userId,
         date: dateStr,
         activityType,
         duration,
@@ -32,11 +30,7 @@ export class UserLearningActivityService {
         metadata,
       })
       .onConflictDoUpdate({
-        target: [
-          userLearningActivitiesSchema.userId,
-          userLearningActivitiesSchema.date,
-          userLearningActivitiesSchema.activityType,
-        ],
+        target: [userLearningActivitiesSchema.date, userLearningActivitiesSchema.activityType],
         set: {
           duration: sql`${userLearningActivitiesSchema.duration} + ${duration}`,
           metadata: metadata
@@ -49,11 +43,8 @@ export class UserLearningActivityService {
     return true;
   }
 
-  async getDailyTotalTime(userId: string, activityType: string, startDate?: Date, endDate?: Date) {
-    const conditions = [
-      eq(userLearningActivitiesSchema.userId, userId),
-      eq(userLearningActivitiesSchema.activityType, activityType),
-    ];
+  async getDailyTotalTime(activityType: string, startDate?: Date, endDate?: Date) {
+    const conditions = [eq(userLearningActivitiesSchema.activityType, activityType)];
 
     if (startDate) {
       conditions.push(
@@ -71,7 +62,8 @@ export class UserLearningActivityService {
       })
       .from(userLearningActivitiesSchema)
       .where(and(...conditions))
-      .groupBy(userLearningActivitiesSchema.date);
+      .groupBy(userLearningActivitiesSchema.date)
+      .orderBy(asc(userLearningActivitiesSchema.date));
 
     return result.map((item) => ({
       date: item.date,
@@ -79,16 +71,8 @@ export class UserLearningActivityService {
     }));
   }
 
-  async getTotalLearningTime(
-    userId: string,
-    activityType: string,
-    startDate?: Date,
-    endDate?: Date,
-  ) {
-    const conditions = [
-      eq(userLearningActivitiesSchema.userId, userId),
-      eq(userLearningActivitiesSchema.activityType, activityType),
-    ];
+  async getTotalLearningTime(activityType: string, startDate?: Date, endDate?: Date) {
+    const conditions = [eq(userLearningActivitiesSchema.activityType, activityType)];
 
     if (startDate) {
       conditions.push(

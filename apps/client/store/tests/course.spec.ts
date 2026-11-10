@@ -5,14 +5,12 @@ import { ref } from "vue";
 import { fetchCompleteCourse, fetchCourse } from "~/api/course";
 import { fetchAddMasteredElement, fetchGetMasteredElements } from "~/api/mastered-elements";
 import { useActiveCourseMap } from "~/composables/courses/activeCourse";
-import { isAuthenticated } from "~/services/auth";
 import { useMasteredElementsStore } from "~/store/masteredElements";
 import { useCourseStore } from "../course";
 import { useStatement } from "../statement";
 
 vi.mock("~/api/course");
 vi.mock("~/api/mastered-elements");
-vi.mock("~/services/auth");
 vi.mock("~/composables/courses/activeCourse");
 
 let mockSetupAutoSaveProgress = vi.fn();
@@ -75,7 +73,6 @@ describe("CourseStore", () => {
   beforeEach(async () => {
     setActivePinia(createPinia());
     vi.mocked(fetchCourse).mockResolvedValue(mockCourse);
-    vi.mocked(isAuthenticated).mockReturnValue(true);
     vi.mocked(useActiveCourseMap).mockReturnValue({
       updateActiveCourseMap: vi.fn(),
     } as any);
@@ -108,15 +105,9 @@ describe("CourseStore", () => {
       expect(courseStore.currentCourse?.statements[0].isMastered).toBe(false); // Hello
     });
 
-    it("should set up auto-save progress when user is authenticated", async () => {
+    it("should set up auto-save progress", async () => {
       await courseStore.setup("pack1", "1");
       expect(mockSetupAutoSaveProgress).toHaveBeenCalled();
-    });
-
-    it("should not set up auto-save progress when user is not authenticated", async () => {
-      vi.mocked(isAuthenticated).mockReturnValue(false);
-      await courseStore.setup("pack1", "1");
-      expect(mockSetupAutoSaveProgress).not.toHaveBeenCalled();
     });
   });
 

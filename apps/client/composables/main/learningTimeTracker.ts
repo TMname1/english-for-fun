@@ -1,7 +1,6 @@
 import { ref } from "vue";
 
 import { updateDailyLearningDailyTotalTime } from "~/api/user-learning-activity";
-import { useUserStore } from "~/store/user";
 
 const totalSeconds = ref(0);
 const lastTotalSeconds = ref(0);
@@ -9,12 +8,9 @@ const isTracking = ref(false);
 let timer: NodeJS.Timeout | null = null;
 
 export function useLearningTimeTracker() {
-  const userStore = useUserStore();
-  const userId = userStore.user?.id || "";
-
   function getStorageKey() {
     const today = new Date().toISOString().split("T")[0];
-    return `learningTime_${userId}_${today}`;
+    return `learningTime_${today}`;
   }
 
   function setupLearningTime(duration: number) {

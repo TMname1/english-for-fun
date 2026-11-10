@@ -11,7 +11,6 @@ export interface UserRecentCoursePackApiResponse {
   title: string;
   description: string;
   cover: string;
-  isFree: boolean;
 }
 
 export interface UserProgressUpdate {

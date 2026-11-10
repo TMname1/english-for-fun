@@ -50,7 +50,6 @@
           }}
         </p>
         <p
-          v-if="isAuthenticated()"
           class="pl-2 text-xs leading-loose text-gray-400 sm:pl-4 sm:text-sm lg:pl-14 lg:text-base"
         >
           今天一共学习 <span class="text-purple-500">{{ formattedMinutes }}分钟</span> 啦！
@@ -94,11 +93,9 @@
 </template>
 
 <script setup lang="ts">
-import { useModal } from "#imports";
 import { computed, ref, watch } from "vue";
 import { toast } from "vue-sonner";
 
-import Dialog from "~/components/common/Dialog.vue";
 import { useActiveCourseMap } from "~/composables/courses/activeCourse";
 import { courseTimer } from "~/composables/courses/courseTimer";
 import { useConfetti } from "~/composables/main/confetti/useConfetti";
@@ -108,7 +105,6 @@ import { useLearningTimeTracker } from "~/composables/main/learningTimeTracker";
 import { useShareModal } from "~/composables/main/shareImage/share";
 import { useDailySentence, useSummary } from "~/composables/main/summary";
 import { useNavigation } from "~/composables/useNavigation";
-import { isAuthenticated, signIn } from "~/services/auth";
 import { useCourseStore } from "~/store/course";
 import { useCoursePackStore } from "~/store/coursePack";
 import { useGameStore } from "~/store/game";
@@ -130,28 +126,18 @@ const { updateActiveCourseMap } = useActiveCourseMap();
 const { totalMinutes, formattedMinutes } = useTotalLearningTime();
 
 const gameStore = useGameStore();
-const modal = useModal();
 
 watch(showModal, (val) => {
   if (val) {
-    // 阻止包含 statement 完成课程后会自动把用户的进度设置成下一课
-    // 这里是为了防止先设置成下一课 后更新了 statement 的进度
-    // 这就会造成获取用户最近的课程包进度出现错误  因为是基于时间来获取的
     preventSaveStatement();
-    // 注册回车键进入下一课
     registerShortcut("enter", goToNextCourse);
-    // 显示结算面板代表当前课程已经完成
     completeCourse();
-    // 朗读每日一句
     soundSentence();
-    // 延迟一小会放彩蛋
-    // 停止计时
     gameStore.completeLevel();
     setTimeout(async () => {
       playConfetti();
     }, 300);
   } else {
-    // 取消回车键进入下一课
     cancelShortcut("enter", goToNextCourse);
     permitSaveStatement();
   }
@@ -173,8 +159,6 @@ function useTotalLearningTime() {
 
 function useDoAgain() {
   async function handleDoAgain() {
-    // 看看是不是没有全部掌握了
-    // 如果是全部掌握了 那么给个提示 然后挑战到课程列表
     if (courseStore.isAllMastered()) {
       toast.info("你已经全部都掌握 自动帮你跳转到课程列表啦", {
         duration: 1500,
@@ -209,25 +193,6 @@ function useCourse() {
   });
 
   async function goToNextCourse() {
-    if (!isAuthenticated()) {
-      // 去注册
-      modal.open(Dialog, {
-        title: "✨ 解锁更多学习体验",
-        content: "注册后可以进行下一课学习 记录每日学习数据 开启更多功能哦",
-        showCancel: true,
-        showConfirm: true,
-        cancelText: "稍后再说",
-        confirmText: "立即注册",
-        async onConfirm() {
-          courseStore.resetStatementIndex();
-          showQuestion();
-          signIn();
-        },
-      });
-
-      return;
-    }
-
     hideSummary();
 
     if (!haveNextCourse.value) {
@@ -253,7 +218,7 @@ function useCourse() {
   }
 
   async function completeCourse() {
-    if (isAuthenticated() && courseStore.currentCourse) {
+    if (courseStore.currentCourse) {
       const { coursePackId } = courseStore.currentCourse;
       const { nextCourse } = await courseStore.completeCourse();
       coursePackStore.updateCoursesCompleteCount(coursePackId);

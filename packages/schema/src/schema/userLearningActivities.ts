@@ -7,7 +7,6 @@ export const userLearningActivities = pgTable(
     id: text("id")
       .primaryKey()
       .$defaultFn(() => createId()),
-    userId: text("user_id").notNull(),
     date: date("date").notNull(),
     activityType: text("activity_type").notNull(),
     courseId: text("course_id"),
@@ -17,6 +16,6 @@ export const userLearningActivities = pgTable(
     updatedAt: timestamp("updated_at").$onUpdateFn(() => new Date()),
   },
   (t) => ({
-    unq: unique().on(t.userId, t.date, t.activityType),
+    unq: unique().on(t.date, t.activityType),
   }),
 );

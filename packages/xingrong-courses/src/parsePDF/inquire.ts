@@ -30,7 +30,7 @@ export async function inquire(folderPath: string): Promise<string[]> {
               },
             ])
             .then((selected) => {
-              const result = selected.selectedFiles.map((file) => file);
+              const result = selected.selectedFiles.map((file: string) => file);
               resolve(result);
             });
         }
@@ -38,7 +38,7 @@ export async function inquire(folderPath: string): Promise<string[]> {
   });
 }
 
-function listAllFiles(folderPath) {
+function listAllFiles(folderPath: string) {
   let files = fs.readdirSync(folderPath);
   // 筛选出以 .pdf 结尾的文件
   files = files.filter((file) => file.endsWith(".pdf"));

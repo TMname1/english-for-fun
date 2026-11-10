@@ -8,27 +8,25 @@ import { cleanDB, testImportModules } from "../../../test/helper/utils";
 import { endDB } from "../../common/db";
 import { CourseHistoryService } from "../../course-history/course-history.service";
 import { DB } from "../../global/providers/db.provider";
-import { RankService } from "../../rank/rank.service";
 import { UserCourseProgressService } from "../../user-course-progress/user-course-progress.service";
 import { CourseService } from "../course.service";
 
 describe("course service", () => {
   let db: DbType;
   let courseService: CourseService;
-  let rankService: RankService;
   let courseHistoryService: CourseHistoryService;
   let userCourseProgressService: UserCourseProgressService;
 
   beforeAll(async () => {
     const testHelper = await setupTesting();
-    await setupDatabaseData(testHelper.db);
+    await cleanDB(testHelper.db);
 
     db = testHelper.db;
     courseService = testHelper.courseService;
-    rankService = testHelper.rankService;
     courseHistoryService = testHelper.courseHistoryService;
-    userCourseProgressService = testHelper.UserCourseProgressService;
+    userCourseProgressService = testHelper.userCourseProgressService;
   });
+
   beforeEach(async () => {
     await cleanDB(db);
   });
@@ -60,17 +58,17 @@ describe("course service", () => {
     });
   });
 
-  describe("findWithUserProgress", () => {
-    it("should return a course with user progress information", async () => {
-      const { coursePackId, courseEntityFirst, userId } = await setupDBData(db);
+  describe("findWithProgress", () => {
+    it("should return a course with progress information", async () => {
+      const { coursePackId, courseEntityFirst } = await setupDBData(db);
 
-      const result = await courseService.findWithUserProgress(
-        coursePackId,
-        courseEntityFirst.id,
-        userId,
-      );
+      const result = await courseService.findWithProgress(coursePackId, courseEntityFirst.id);
 
       expect(result).toHaveProperty("statementIndex");
+      expect(userCourseProgressService.findStatement).toHaveBeenCalledWith(
+        coursePackId,
+        courseEntityFirst.id,
+      );
     });
   });
 
@@ -93,63 +91,41 @@ describe("course service", () => {
   });
 
   describe("completeCourse", () => {
-    it("should perform actions to complete a course for a user with userId and return the next course", async () => {
-      const { userId, courseEntityFirst, coursePackId } = await setupDBData(db);
+    it("should record completion and return the next course", async () => {
+      const { courseEntityFirst, coursePackId } = await setupDBData(db);
 
-      const result = await courseService.completeCourse(userId, coursePackId, courseEntityFirst.id);
+      const result = await courseService.completeCourse(coursePackId, courseEntityFirst.id);
 
       expect(result).toHaveProperty("nextCourse");
-      expect(rankService.userFinishCourse).toHaveBeenCalled();
-      expect(courseHistoryService.upsert).toHaveBeenCalled();
+      expect(courseHistoryService.upsert).toHaveBeenCalledWith(coursePackId, courseEntityFirst.id);
       expect(userCourseProgressService.upsert).toHaveBeenCalled();
     });
 
-    it("should perform actions to complete a course and return the next course when have not userId", async () => {
-      const { courseEntityFirst, coursePackId } = await setupDBData(db);
-
-      const result = await courseService.completeCourse("", coursePackId, courseEntityFirst.id);
-
-      expect(result).toHaveProperty("nextCourse");
-      expect(rankService.userFinishCourse).not.toHaveBeenCalled();
-      expect(courseHistoryService.upsert).not.toHaveBeenCalled();
-      expect(userCourseProgressService.upsert).not.toHaveBeenCalled();
-    });
-
-    it("should not have nextCourse when not exist next course", async () => {
+    it("should not have nextCourse when the last course is completed", async () => {
       const { courseEntitySecond, coursePackId } = await setupDBData(db);
 
-      const result = await courseService.completeCourse("", coursePackId, courseEntitySecond.id);
+      const result = await courseService.completeCourse(coursePackId, courseEntitySecond.id);
 
       expect(result.nextCourse).toBeUndefined();
+      expect(courseHistoryService.upsert).toHaveBeenCalled();
     });
   });
 });
 
-async function setupDatabaseData(db: DbType) {
-  await cleanDB(db);
-}
-
 async function setupTesting() {
-  const mockRankService = {
-    userFinishCourse: jest.fn(),
-  };
   const mockCourseHistoryService = {
-    upsert: jest.fn(),
-  };
-  const mockUserLearnRecordService = {
     upsert: jest.fn(),
   };
 
   const mockUserCourseProgressService = {
     upsert: jest.fn(),
-    findStatement: () => 1,
+    findStatement: jest.fn(() => 1),
   };
 
   const moduleRef = await Test.createTestingModule({
     imports: testImportModules,
     providers: [
       CourseService,
-      { provide: RankService, useValue: mockRankService },
       { provide: CourseHistoryService, useValue: mockCourseHistoryService },
       { provide: UserCourseProgressService, useValue: mockUserCourseProgressService },
     ],
@@ -157,16 +133,13 @@ async function setupTesting() {
 
   return {
     courseService: moduleRef.get<CourseService>(CourseService),
-    UserCourseProgressService: moduleRef.get<UserCourseProgressService>(UserCourseProgressService),
-    rankService: moduleRef.get<RankService>(RankService),
+    userCourseProgressService: moduleRef.get<UserCourseProgressService>(UserCourseProgressService),
     courseHistoryService: moduleRef.get<CourseHistoryService>(CourseHistoryService),
     db: moduleRef.get<DbType>(DB),
-    moduleRef,
   };
 }
 
 async function setupDBData(db: DbType) {
-  const userId = "cxr";
   const coursePackEntity = await insertCoursePack(db);
   const courseEntityFirst = await insertCourse(db, coursePackEntity.id, {
     title: "第一课",
@@ -180,7 +153,6 @@ async function setupDBData(db: DbType) {
   const statementEntitySecond = await insertStatement(db, courseEntityFirst.id, 2);
 
   return {
-    userId,
     coursePackId: coursePackEntity.id,
     courseEntityFirst,
     courseEntitySecond,

@@ -28,7 +28,6 @@
 - **Node.js version >= v20**
   > 使用来自 .node-version 的版本 [支持的工具](https://github.com/shadowspawn/node-version-usage#compatibility-testing)
 - **Postgres version >= 8.0.0**
-- **Redis version >= 5.0.0**
 - 项目依赖 **Docker**，所以请确保你本地已安装并成功运行
 
 ### 编辑器
@@ -69,23 +68,9 @@ cp ./apps/api/.env.example ./apps/api/.env
 cp ./apps/client/.env.example ./apps/client/.env
 ```
 
-### 3. 恢复 Logto 的数据
+### 3. 启动 Docker Compose 服务
 
-解压缩 `logto_db_init_data.zip` 到 `.volumes/`
-
-```bash
-unzip logto_db_init_data.zip -d .volumes/
-```
-
-- 后台地址: http://localhost:3011
-- 用户名: admin
-- 密码: WkN7g5-i8ZrJckX
-
-> 如果你想 [手动配置 Logto](https://github.com/cuixueshe/earthworm/wiki/%E8%BF%81%E7%A7%BB-Logto-%E7%94%A8%E6%88%B7%E7%B3%BB%E7%BB%9F%E5%90%8E%E6%9C%AC%E5%9C%B0%E5%90%AF%E5%8A%A8%E9%85%8D%E7%BD%AE%E6%96%B9%E6%A1%88%EF%BC%88%E8%B4%A1%E7%8C%AE%E8%80%85%EF%BC%89)
-
-### 4. 启动 Docker Compose 服务
-
-后端用到了 Postgres 和 Redis 服务，通过下面在 `package.json` 中配置的命令启动和停止。
+后端用到了 Postgres 服务，通过下面在 `package.json` 中配置的命令启动和停止。
 
 ```bash
 # 启动
@@ -111,7 +96,7 @@ docker compose down
 docker-compose up -d
 ```
 
-### 5. 初始化数据库表结构
+### 4. 初始化数据库表结构
 
 执行这个命令时，尽量与上个命令间隔一点时间，因为刚刚使用的 `-d` 参数会让其服务挂起在后台执行，此时 docker 服务可能还在 running 中，若是发现报错了那就再执行一遍。😊
 
@@ -119,7 +104,7 @@ docker-compose up -d
 pnpm db:init
 ```
 
-### 6. 创建并上传课程数据
+### 5. 创建并上传课程数据
 
 **只有第一次初始化数据库后需要执行**。
 
@@ -127,13 +112,13 @@ pnpm db:init
 pnpm db:upload
 ```
 
-### 7. 启动后端服务
+### 6. 启动后端服务
 
 ```bash
 pnpm dev:serve
 ```
 
-### 8. 启动前端服务
+### 7. 启动前端服务
 
 ```bash
 pnpm dev:client
@@ -164,7 +149,7 @@ pnpm test:unit:watch
 
 主要就是 Jest 的单测和端对端测试，但需要接入测试的数据库，所以需要先确保：
 
-1. Docker Compose 中的 testdb 和 testRedis 服务正常启动。
+1. Docker Compose 中的 testdb 服务正常启动。
 2. `.env.test` 文件中的配置信息是正确的，如果没有这个文件，可以复制 `apps/api/.env.test.example` 文件内容到 `apps/api/.env.test` 文件，下面有提供命令直接用。
 
 执行以下命令：
@@ -223,11 +208,6 @@ pnpm i -g pnpm
 # or
 npx pnpm i -g pnpm@latest
 ```
-
-**在 Windows 上安装 argon2 模块失败的处理方式**
-
-- 安装 Visual Studio 2015 以上版本的组件，具体来说是 “使用 C++的桌面开发” 这个组件。（实际上包含 C++相关开发工具库的组件都可以）
-- 编译过程中遇到中文乱码时，在命令行中执行 `chcp 437` 后，再重新运行 install 命令。
 
 ### WSL2 中 docker 无权访问?
 

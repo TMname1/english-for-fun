@@ -6,7 +6,7 @@ import * as request from "supertest";
 
 import { userCourseProgress } from "@earthworm/schema";
 import { insertUserCourseProgress } from "../../../test/fixture/db";
-import { cleanDB, signin } from "../../../test/helper/utils";
+import { cleanDB } from "../../../test/helper/utils";
 import { AppModule } from "../../app/app.module";
 import { appGlobalMiddleware } from "../../app/useGlobal";
 import { endDB } from "../../common/db";
@@ -15,7 +15,6 @@ import { DB, DbType } from "../../global/providers/db.provider";
 describe("user-progress e2e", () => {
   let app: INestApplication;
   let db: DbType;
-  let token: string;
 
   beforeAll(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
@@ -26,7 +25,6 @@ describe("user-progress e2e", () => {
     appGlobalMiddleware(app);
     db = moduleFixture.get<DbType>(DB);
     await app.init();
-    token = await signin(moduleFixture);
   });
 
   afterEach(async () => {
@@ -48,7 +46,6 @@ describe("user-progress e2e", () => {
 
     await request(app.getHttpServer())
       .get("/user-course-progress/recent-course-packs")
-      .set("Authorization", `Bearer ${token}`)
       .expect(200)
       .expect(({ body }) => {
         expect(body.length).toBe(2);
@@ -67,7 +64,6 @@ describe("user-progress e2e", () => {
         coursePackId,
         statementIndex: 10,
       })
-      .set("Authorization", `Bearer ${token}`)
       .expect(200)
       .expect(async () => {
         const result = await db.query.userCourseProgress.findFirst({

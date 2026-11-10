@@ -3,8 +3,6 @@ import type { $Fetch } from "ofetch";
 import { useRuntimeConfig } from "#app";
 import { ofetch } from "ofetch";
 
-import { getToken } from "~/services/auth";
-
 let http: $Fetch;
 export function setupHttp() {
   if (http) return http;
@@ -15,10 +13,6 @@ export function setupHttp() {
   http = ofetch.create({
     baseURL,
     headers: { "Content-Type": "application/json" },
-    async onRequest({ options }) {
-      const token = await getToken();
-      options.headers = { ...options.headers, Authorization: `Bearer ${token}` };
-    },
     async onResponseError({ request, response, options }) {
       const { message } = response._data;
       if (Array.isArray(message)) {

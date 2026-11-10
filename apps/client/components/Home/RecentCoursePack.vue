@@ -22,7 +22,6 @@
               title: coursePack.title,
               description: coursePack.description,
               cover: coursePack.cover,
-              isFree: coursePack.isFree,
             }"
           >
             <template #actions>

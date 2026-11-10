@@ -1,17 +1,15 @@
 import { Inject, Injectable, NotFoundException } from "@nestjs/common";
-import { and, asc, eq, gt } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 
 import { course, statement } from "@earthworm/schema";
 import { CourseHistoryService } from "../course-history/course-history.service";
 import { DB, DbType } from "../global/providers/db.provider";
-import { RankService } from "../rank/rank.service";
 import { UserCourseProgressService } from "../user-course-progress/user-course-progress.service";
 
 @Injectable()
 export class CourseService {
   constructor(
     @Inject(DB) private db: DbType,
-    private readonly rankService: RankService,
     private readonly courseHistoryService: CourseHistoryService,
     private readonly userCourseProgressService: UserCourseProgressService,
   ) {}
@@ -38,11 +36,10 @@ export class CourseService {
     return courseEntity;
   }
 
-  async findWithUserProgress(coursePackId: string, courseId: string, userId: string) {
+  async findWithProgress(coursePackId: string, courseId: string) {
     const courseEntity = await this.find(coursePackId, courseId);
 
     const statementIndex = await this.userCourseProgressService.findStatement(
-      userId,
       coursePackId,
       courseId,
     );
@@ -63,29 +60,25 @@ export class CourseService {
   }
 
   private async _findNext(coursePackId: string, courseId: string) {
-    const { order } = await this.db.query.course.findFirst({
+    const currentCourse = await this.db.query.course.findFirst({
       where: eq(course.id, courseId),
     });
 
-    const nextCourse = await this.db.query.course.findFirst({
-      where: and(eq(course.coursePackId, coursePackId), eq(course.order, order + 1)),
-    });
-
-    return nextCourse;
-  }
-
-  async completeCourse(userId: string, coursePackId: string, courseId: string) {
-    const nextCourse = await this._findNext(coursePackId, courseId);
-
-    if (userId) {
-      await this.rankService.userFinishCourse(userId);
-      await this.courseHistoryService.upsert(userId, coursePackId, courseId);
-      nextCourse &&
-        (await this.userCourseProgressService.upsert(userId, coursePackId, nextCourse.id, 0));
+    if (!currentCourse) {
+      return undefined;
     }
 
-    return {
-      nextCourse: await this._findNext(coursePackId, courseId),
-    };
+    return await this.db.query.course.findFirst({
+      where: and(eq(course.coursePackId, coursePackId), eq(course.order, currentCourse.order + 1)),
+    });
+  }
+
+  async completeCourse(coursePackId: string, courseId: string) {
+    const nextCourse = await this._findNext(coursePackId, courseId);
+
+    await this.courseHistoryService.upsert(coursePackId, courseId);
+    nextCourse && (await this.userCourseProgressService.upsert(coursePackId, nextCourse.id, 0));
+
+    return { nextCourse };
   }
 }

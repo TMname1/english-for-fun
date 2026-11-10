@@ -5,7 +5,6 @@ export const tpl_2 = ({
   enSentence,
   coursePackTitle,
   courseTitle,
-  userName,
   dateStr,
 }: ShareImageTemplateData) => ({
   type: "div",
@@ -74,7 +73,7 @@ export const tpl_2 = ({
                     type: "p",
                     props: {
                       tw: "text-lg m-0",
-                      children: `${userName}${userName ? "  •  " : ""}${dateStr} `,
+                      children: `${dateStr}`,
                     },
                   },
                 ],
