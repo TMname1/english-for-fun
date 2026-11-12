@@ -16,11 +16,7 @@ export class UserProgressController {
 
   @Put()
   async upsert(@Body() dto: UpsertUserProgressDto) {
-    return await this.userCourseProgressService.upsert(
-      dto.coursePackId,
-      dto.courseId,
-      dto.statementIndex,
-    );
+    return await this.userCourseProgressService.upsert(dto.coursePackId, dto.statementIndex);
   }
 
   /**

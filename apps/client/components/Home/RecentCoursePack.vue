@@ -36,7 +36,7 @@
                 </button>
                 <button
                   class="btn btn-success btn-sm text-white"
-                  @click.stop="gotoGame(coursePack.coursePackId, coursePack.courseId)"
+                  @click.stop="gotoGame(coursePack.coursePackId)"
                 >
                   继续游戏
                 </button>

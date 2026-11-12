@@ -1,22 +1,23 @@
 import { defineStore } from "pinia";
 import { computed, ref, watchEffect } from "vue";
 
-import type { Course, Statement } from "~/types";
-import { fetchCompleteCourse, fetchCourse } from "~/api/course";
-import { useActiveCourseMap } from "~/composables/courses/activeCourse";
+import type { CoursePackLearning, Statement } from "~/types";
+import { fetchCompleteCoursePack, fetchCoursePackLearning } from "~/api/course-pack";
 import { useMasteredElementsStore } from "~/store/masteredElements";
 import { useStatement } from "./statement";
 
+/**
+ * 学习进度 store。"分课程"功能已删除：学习单元就是课程包内的唯一课程，
+ * 数据源为 CoursePackLearning（原 Course）。
+ */
 export const useCourseStore = defineStore("course", () => {
-  const currentCourse = ref<Course>();
+  const currentLearning = ref<CoursePackLearning>();
   const currentStatement = ref<Statement>();
   const { statementIndex, setupAutoSaveProgress } = useStatement();
   const masteredElementsStore = useMasteredElementsStore();
 
-  const { updateActiveCourseMap } = useActiveCourseMap();
-
   watchEffect(() => {
-    currentStatement.value = currentCourse.value?.statements[statementIndex.value];
+    currentStatement.value = currentLearning.value?.statements[statementIndex.value];
   });
 
   const words = computed(() => {
@@ -24,12 +25,12 @@ export const useCourseStore = defineStore("course", () => {
   });
 
   const visibleStatementsCount = computed(
-    () => currentCourse.value?.statements.filter((s) => !s.isMastered).length || 0,
+    () => currentLearning.value?.statements.filter((s) => !s.isMastered).length || 0,
   );
 
   const visibleStatementIndex = computed(() => {
     let masteredCount = 0;
-    currentCourse.value?.statements.forEach((statement, index) => {
+    currentLearning.value?.statements.forEach((statement, index) => {
       if (index < statementIndex.value) {
         if (statement.isMastered) {
           masteredCount++;
@@ -45,7 +46,7 @@ export const useCourseStore = defineStore("course", () => {
   });
 
   const totalQuestionsCount = computed(() => {
-    return currentCourse.value?.statements.length || 0;
+    return currentLearning.value?.statements.length || 0;
   });
 
   function toSpecificStatement(index: number) {
@@ -59,7 +60,7 @@ export const useCourseStore = defineStore("course", () => {
       if (
         index >= 0 &&
         index < totalQuestionsCount.value &&
-        !currentCourse.value!.statements[index].isMastered
+        !currentLearning.value!.statements[index].isMastered
       ) {
         return index;
       }
@@ -101,34 +102,32 @@ export const useCourseStore = defineStore("course", () => {
   }
 
   function updateMarketedStatements() {
-    if (currentCourse.value) {
-      currentCourse.value.statements = markMasteredElements(currentCourse.value.statements);
+    if (currentLearning.value) {
+      currentLearning.value.statements = markMasteredElements(currentLearning.value.statements);
     }
   }
 
   function findFirstUnmasteredIndex() {
-    if (!currentCourse.value) return 0;
-    return currentCourse.value.statements.findIndex((statement) => !statement.isMastered);
+    if (!currentLearning.value) return 0;
+    return currentLearning.value.statements.findIndex((statement) => !statement.isMastered);
   }
 
   function doAgain() {
     resetStatementIndex();
-    updateActiveCourseMap(currentCourse.value?.coursePackId!, currentCourse.value?.id!);
   }
 
-  async function completeCourse() {
-    const coursePackId = currentCourse.value?.coursePackId!;
-    const res = await fetchCompleteCourse(coursePackId, currentCourse.value?.id!);
-    return res;
+  async function completeCoursePack() {
+    const coursePackId = currentLearning.value?.coursePackId!;
+    await fetchCompleteCoursePack(coursePackId);
   }
 
-  async function setup(coursePackId: string, courseId: string) {
-    let course = await fetchCourse(coursePackId, courseId);
+  async function setup(coursePackId: string) {
+    let learning = await fetchCoursePackLearning(coursePackId);
 
-    course.statements = markMasteredElements(course.statements);
+    learning.statements = markMasteredElements(learning.statements);
 
-    currentCourse.value = course;
-    setupAutoSaveProgress(currentCourse);
+    currentLearning.value = learning;
+    setupAutoSaveProgress(currentLearning);
     if (statementIndex.value === 0) {
       resetStatementIndex();
     }
@@ -147,7 +146,7 @@ export const useCourseStore = defineStore("course", () => {
 
   return {
     statementIndex,
-    currentCourse,
+    currentLearning,
     currentStatement,
     words,
     totalQuestionsCount,
@@ -155,8 +154,7 @@ export const useCourseStore = defineStore("course", () => {
     visibleStatementsCount,
     setup,
     doAgain,
-    isAllDone,
-    completeCourse,
+    completeCoursePack,
     toSpecificStatement,
     toPreviousStatement,
     toNextStatement,
@@ -164,5 +162,6 @@ export const useCourseStore = defineStore("course", () => {
     updateMarketedStatements,
     isLastStatement,
     isAllMastered,
+    isAllDone,
   };
 });

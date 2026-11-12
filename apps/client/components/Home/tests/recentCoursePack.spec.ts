@@ -14,7 +14,6 @@ function buildCoursePack(index: number): UserRecentCoursePack {
   return {
     id: index,
     coursePackId: `pack-${index}`,
-    courseId: `course-${index}`,
     title: `课程包${index}`,
     description: `这是课程包${index}`,
   };

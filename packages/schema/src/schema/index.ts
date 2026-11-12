@@ -1,4 +1,3 @@
-export * from "./course";
 export * from "./courseHistory";
 export * from "./statement";
 export * from "./userCourseProgress";

@@ -2,16 +2,14 @@ import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ref } from "vue";
 
-import { fetchCompleteCourse, fetchCourse } from "~/api/course";
+import { fetchCompleteCoursePack, fetchCoursePackLearning } from "~/api/course-pack";
 import { fetchAddMasteredElement, fetchGetMasteredElements } from "~/api/mastered-elements";
-import { useActiveCourseMap } from "~/composables/courses/activeCourse";
 import { useMasteredElementsStore } from "~/store/masteredElements";
 import { useCourseStore } from "../course";
 import { useStatement } from "../statement";
 
-vi.mock("~/api/course");
+vi.mock("~/api/course-pack");
 vi.mock("~/api/mastered-elements");
-vi.mock("~/composables/courses/activeCourse");
 
 let mockSetupAutoSaveProgress = vi.fn();
 vi.mock("../statement.ts", () => {
@@ -27,43 +25,28 @@ vi.mock("../statement.ts", () => {
   };
 });
 
-const mockCourse = {
-  id: "1",
-  title: "Test Course",
-  description: "A test course",
-  order: 1,
+/**
+ * 课程包学习内容（"分课程"功能已删除：学习单元即包内唯一课程）
+ */
+const mockLearning = {
+  coursePackId: "pack1",
+  title: "Test Pack",
+  description: "A test pack",
+  video: "",
+  statementIndex: 0,
   statements: [
+    { order: 1, english: "Hello", chinese: "你好", soundmark: "/heləʊ/", isMastered: false },
+    { order: 2, english: "World", chinese: "世界", soundmark: "/wɜːld/", isMastered: false },
+    { order: 3, english: "Test", chinese: "测试", soundmark: "/test/", isMastered: false },
     {
-      id: "1",
-      order: 1,
-      english: "Hello",
-      chinese: "你好",
-      soundmark: "/heləʊ/",
-      isMastered: false,
-    },
-    {
-      id: "2",
-      order: 2,
-      english: "World",
-      chinese: "世界",
-      soundmark: "/wɜːld/",
-      isMastered: false,
-    },
-    { id: "3", order: 3, english: "Test", chinese: "测试", soundmark: "/test/", isMastered: false },
-    {
-      id: "4",
       order: 4,
       english: "Unit",
       chinese: "单元",
       soundmark: "/ˈjuːnɪt/",
       isMastered: false,
     },
-    { id: "5", order: 5, english: "Case", chinese: "案例", soundmark: "/keɪs/", isMastered: false },
+    { order: 5, english: "Case", chinese: "案例", soundmark: "/keɪs/", isMastered: false },
   ],
-  coursePackId: "pack1",
-  completionCount: 0,
-  statementIndex: 0,
-  video: "https://example.com/test-video.mp4",
 };
 
 describe("CourseStore", () => {
@@ -72,10 +55,7 @@ describe("CourseStore", () => {
 
   beforeEach(async () => {
     setActivePinia(createPinia());
-    vi.mocked(fetchCourse).mockResolvedValue(mockCourse);
-    vi.mocked(useActiveCourseMap).mockReturnValue({
-      updateActiveCourseMap: vi.fn(),
-    } as any);
+    vi.mocked(fetchCoursePackLearning).mockResolvedValue(JSON.parse(JSON.stringify(mockLearning)));
 
     vi.mocked(fetchGetMasteredElements).mockResolvedValue([
       { content: { english: "World" }, masteredAt: new Date().toISOString(), id: "1" },
@@ -93,20 +73,19 @@ describe("CourseStore", () => {
     await masteredElementsStore.setup();
 
     courseStore = useCourseStore();
-    await courseStore.setup("pack1", "1");
+    await courseStore.setup("pack1");
 
     vi.clearAllMocks();
   });
 
-  describe("Course initialization", () => {
-    it("should correctly load the course and mark mastered elements", () => {
-      expect(courseStore.currentCourse).toEqual(mockCourse);
-      expect(courseStore.currentCourse?.statements[1].isMastered).toBe(true); // World
-      expect(courseStore.currentCourse?.statements[0].isMastered).toBe(false); // Hello
+  describe("learning initialization", () => {
+    it("should correctly load the pack learning and mark mastered elements", () => {
+      expect(courseStore.currentLearning?.statements[1].isMastered).toBe(true); // World
+      expect(courseStore.currentLearning?.statements[0].isMastered).toBe(false); // Hello
     });
 
     it("should set up auto-save progress", async () => {
-      await courseStore.setup("pack1", "1");
+      await courseStore.setup("pack1");
       expect(mockSetupAutoSaveProgress).toHaveBeenCalled();
     });
   });
@@ -147,7 +126,7 @@ describe("CourseStore", () => {
     it("should correctly identify when all statements are mastered", async () => {
       expect(courseStore.isAllMastered()).toBe(false);
       vi.mocked(fetchGetMasteredElements).mockResolvedValue(
-        mockCourse.statements.map((s, index) => ({
+        mockLearning.statements.map((s, index) => ({
           content: { english: s.english },
           masteredAt: new Date().toISOString(),
           id: String(index),
@@ -200,7 +179,7 @@ describe("CourseStore", () => {
 
     it("should handle visibleStatementIndex when all statements are mastered", async () => {
       vi.mocked(fetchGetMasteredElements).mockResolvedValue(
-        mockCourse.statements.map((s, index) => ({
+        mockLearning.statements.map((s, index) => ({
           content: { english: s.english },
           masteredAt: new Date().toISOString(),
           id: String(index),
@@ -213,24 +192,26 @@ describe("CourseStore", () => {
     });
   });
 
-  describe("Course reset and completion", () => {
-    it("should reset course state on doAgain", () => {
+  describe("Learning reset and completion", () => {
+    it("should reset learning state on doAgain", () => {
       courseStore.toSpecificStatement(3);
       courseStore.doAgain();
       expect(courseStore.statementIndex).toBe(0);
       expect(courseStore.visibleStatementIndex).toBe(0);
     });
 
-    it("should complete the course and fetch the next course", async () => {
-      vi.mocked(fetchCompleteCourse).mockResolvedValue({ nextCourse: { ...mockCourse, id: "2" } });
-      const result = await courseStore.completeCourse();
-      expect(result).toEqual({ nextCourse: { ...mockCourse, id: "2" } });
+    it("should complete the course pack", async () => {
+      vi.mocked(fetchCompleteCoursePack).mockResolvedValue(undefined);
+      await courseStore.completeCoursePack();
+      expect(fetchCompleteCoursePack).toHaveBeenCalledWith("pack1");
     });
   });
 
   describe("Computed properties", () => {
     it("should return the correct current statement", () => {
-      expect(courseStore.currentStatement).toEqual(mockCourse.statements[0]);
+      expect(courseStore.currentStatement).toEqual(
+        expect.objectContaining({ english: "Hello", isMastered: false }),
+      );
     });
 
     it("should correctly split the current statement's English words", () => {
@@ -243,20 +224,23 @@ describe("CourseStore", () => {
   });
 
   describe("Edge cases", () => {
-    it("should handle an empty course", async () => {
-      vi.mocked(fetchCourse).mockResolvedValue({ ...mockCourse, statements: [] });
-      await courseStore.setup("pack1", "1");
+    it("should handle an empty learning", async () => {
+      vi.mocked(fetchCoursePackLearning).mockResolvedValue({
+        ...mockLearning,
+        statements: [],
+      });
+      await courseStore.setup("pack1");
       expect(courseStore.visibleStatementsCount).toBe(0);
       expect(courseStore.isAllDone()).toBe(true);
       expect(courseStore.isAllMastered()).toBe(true);
     });
 
-    it("should handle a course with only one statement", async () => {
-      vi.mocked(fetchCourse).mockResolvedValue({
-        ...mockCourse,
-        statements: [mockCourse.statements[0]],
+    it("should handle a learning with only one statement", async () => {
+      vi.mocked(fetchCoursePackLearning).mockResolvedValue({
+        ...mockLearning,
+        statements: [mockLearning.statements[0]],
       });
-      await courseStore.setup("pack1", "1");
+      await courseStore.setup("pack1");
       expect(courseStore.totalQuestionsCount).toBe(1);
       expect(courseStore.isLastStatement()).toBe(true);
     });

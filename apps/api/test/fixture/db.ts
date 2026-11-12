@@ -1,6 +1,6 @@
 import { DbType } from "src/global/providers/db.provider";
 
-import { course, coursePack, statement, userCourseProgress } from "@earthworm/schema";
+import { coursePack, statement, userCourseProgress } from "@earthworm/schema";
 
 type CoursePackInsert = typeof coursePack.$inferInsert;
 
@@ -22,39 +22,16 @@ export async function insertCoursePack(db: DbType, values?: Partial<CoursePackIn
   return entity;
 }
 
-type CourseInsert = typeof course.$inferInsert;
-export async function insertCourse(
-  db: DbType,
-  coursePackId: string,
-  values?: Partial<CourseInsert>,
-) {
-  const defaultCourse = {
-    order: 1,
-    title: "第一课",
-    coursePackId,
-  } satisfies CourseInsert;
-
-  const [entity] = await db
-    .insert(course)
-    .values({
-      ...defaultCourse,
-      ...values,
-    })
-    .returning();
-
-  return entity;
-}
-
 type StatementInsert = typeof statement.$inferInsert;
 export async function insertStatement(
   db: DbType,
-  courseId: string,
+  coursePackId: string,
   order: number,
   values?: Partial<StatementInsert>,
 ) {
   const defaultStatement = {
     order,
-    courseId,
+    coursePackId,
     chinese: "你好",
     english: "hello",
     soundmark: "nihao",
@@ -72,16 +49,14 @@ export async function insertStatement(
 }
 
 export async function insertUserCourseProgress(
-  db,
+  db: DbType,
   coursePackId: string,
-  courseId: string,
   statementIndex: number,
 ) {
   const [entity] = await db
     .insert(userCourseProgress)
     .values({
       coursePackId,
-      courseId,
       statementIndex,
     })
     .returning();

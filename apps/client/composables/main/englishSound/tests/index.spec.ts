@@ -1,15 +1,37 @@
 import { createTestingPinia } from "@pinia/testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { setupPronunciation } from "~/composables/user/pronunciation";
 import { useCourseStore } from "~/store/course";
 import { play, updateSource } from "../audio";
-import { useCurrentStatementEnglishSound } from "../index";
+import { getStatementSoundUrl, useCurrentStatementEnglishSound } from "../index";
 
 vi.mock("../audio.ts", () => {
   return {
     updateSource: vi.fn(),
     play: vi.fn(),
   };
+});
+
+setupPronunciation({ apiBase: "http://api.test" });
+
+describe("getStatementSoundUrl", () => {
+  it("prefers the real audio clip when the statement has one", () => {
+    expect(getStatementSoundUrl({ english: "I like it", audioUrl: "/course-audio/1.mp3" })).toBe(
+      "http://api.test/course-audio/1.mp3",
+    );
+  });
+
+  it("falls back to tts when no clip is attached", () => {
+    expect(getStatementSoundUrl({ english: "I like", audioUrl: null })).toContain(
+      "http://api.test/tts?",
+    );
+    expect(getStatementSoundUrl({ english: "I like" })).toContain("text=I%20like");
+  });
+
+  it("returns empty url for undefined statement", () => {
+    expect(getStatementSoundUrl(undefined)).toBe("");
+  });
 });
 
 describe("useCurrentStatementEnglishSound", () => {

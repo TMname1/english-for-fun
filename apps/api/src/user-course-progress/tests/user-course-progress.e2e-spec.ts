@@ -1,7 +1,7 @@
 import { INestApplication } from "@nestjs/common";
 import { Test, TestingModule } from "@nestjs/testing";
 import { createId } from "@paralleldrive/cuid2";
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import * as request from "supertest";
 
 import { userCourseProgress } from "@earthworm/schema";
@@ -47,10 +47,10 @@ describe("user-progress e2e", () => {
       title: "300个基础句子",
       description: "常用句子",
     });
-    await insertUserCourseProgress(db, firstPack.id, createId(), 0);
-    await insertUserCourseProgress(db, secondPack.id, createId(), 10);
+    await insertUserCourseProgress(db, firstPack.id, 0);
+    await insertUserCourseProgress(db, secondPack.id, 10);
     // 课程包被删除后遗留的孤儿进度，不应出现在返回结果里
-    await insertUserCourseProgress(db, createId(), createId(), 3);
+    await insertUserCourseProgress(db, createId(), 3);
 
     await request(app.getHttpServer())
       .get("/user-course-progress/recent-course-packs")
@@ -67,13 +67,14 @@ describe("user-progress e2e", () => {
           }),
         );
         expect(body[0]).not.toHaveProperty("cover");
+        expect(body[0]).not.toHaveProperty("courseId");
       });
   });
 
   it("get: /user-course-progress/recent-course-packs should never return more than 3 items", async () => {
     for (let order = 1; order <= 4; order++) {
       const pack = await insertCoursePack(db, { order, title: `课程包${order}` });
-      await insertUserCourseProgress(db, pack.id, createId(), order);
+      await insertUserCourseProgress(db, pack.id, order);
     }
 
     await request(app.getHttpServer())
@@ -92,27 +93,21 @@ describe("user-progress e2e", () => {
   });
 
   it("put: /user-course-progress", async () => {
-    const coursePackId = createId();
-    const courseId = createId();
-    await insertUserCourseProgress(db, coursePackId, courseId, 1);
+    const { id: coursePackId } = await insertCoursePack(db);
 
     await request(app.getHttpServer())
       .put("/user-course-progress")
       .send({
-        courseId,
         coursePackId,
         statementIndex: 10,
       })
       .expect(200)
       .expect(async () => {
         const result = await db.query.userCourseProgress.findFirst({
-          where: and(
-            eq(userCourseProgress.coursePackId, coursePackId),
-            eq(userCourseProgress.courseId, courseId),
-          ),
+          where: eq(userCourseProgress.coursePackId, coursePackId),
         });
 
-        expect(result).toBeTruthy();
+        expect(result?.statementIndex).toBe(10);
       });
   });
 });

@@ -78,4 +78,29 @@ describe("pronunciation", () => {
     expect(getPronunciationUrl("")).toBe("");
     expect(getPronunciationUrl("   ")).toBe("");
   });
+
+  describe("resolveAudioUrl", () => {
+    it("joins relative clip paths with the api base", () => {
+      const { resolveAudioUrl } = usePronunciation();
+
+      expect(resolveAudioUrl("/course-audio/a.mp3")).toBe(`${API_BASE}/course-audio/a.mp3`);
+      expect(resolveAudioUrl("course-audio/a.mp3")).toBe(`${API_BASE}/course-audio/a.mp3`);
+    });
+
+    it("keeps absolute urls untouched", () => {
+      const { resolveAudioUrl } = usePronunciation();
+
+      expect(resolveAudioUrl("https://cdn.example.com/a.mp3")).toBe(
+        "https://cdn.example.com/a.mp3",
+      );
+    });
+
+    it("returns an empty url for null/undefined/empty", () => {
+      const { resolveAudioUrl } = usePronunciation();
+
+      expect(resolveAudioUrl(undefined)).toBe("");
+      expect(resolveAudioUrl(null)).toBe("");
+      expect(resolveAudioUrl("   ")).toBe("");
+    });
+  });
 });

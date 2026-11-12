@@ -1,12 +1,10 @@
 {
   "name": "@earthworm/xingrong-courses",
   "version": "1.0.0",
-  "description": "",
+  "description": "示例课程",
   "main": "src/index.ts",
   "scripts": {
-    "upload": "tsx src/seed.ts",
-    "course:add": "tsx src/addCourse.ts",
-    "course:reset": "tsx src/resetCourseStatements.ts"
+    "upload": "tsx src/seed.ts"
   },
   "dependencies": {
     "@earthworm/db": "workspace:^",

@@ -7,13 +7,12 @@ export const courseHistory = pgTable(
     id: text("id")
       .primaryKey()
       .$defaultFn(() => createId()),
-    courseId: text("course_id").notNull(),
     coursePackId: text("course_pack_id").notNull(),
     completionCount: integer("completion_count").notNull(),
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").$onUpdateFn(() => new Date()),
   },
   (t) => ({
-    unq: unique().on(t.courseId, t.coursePackId),
+    unq: unique().on(t.coursePackId),
   }),
 );

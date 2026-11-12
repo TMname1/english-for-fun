@@ -32,17 +32,16 @@ describe("user-progress service", () => {
 
   it("should update an existing progress entry", async () => {
     const coursePackId = createId();
-    const courseId = createId();
-    await userCourseProgressService.upsert(coursePackId, courseId, 1);
-    await userCourseProgressService.upsert(coursePackId, courseId, 2);
+    await userCourseProgressService.upsert(coursePackId, 1);
+    await userCourseProgressService.upsert(coursePackId, 2);
 
-    const result = await userCourseProgressService.findStatement(coursePackId, courseId);
+    const result = await userCourseProgressService.findStatement(coursePackId);
 
     expect(result).toBe(2);
   });
 
   it("should return 0 when there is no progress", async () => {
-    const statementIndex = await userCourseProgressService.findStatement(createId(), createId());
+    const statementIndex = await userCourseProgressService.findStatement(createId());
 
     expect(statementIndex).toBe(0);
   });
@@ -52,8 +51,8 @@ describe("user-progress service", () => {
       const first = await insertCoursePack(db, { order: 1, title: "零基础" });
       const second = await insertCoursePack(db, { order: 2, title: "300个基础句子" });
 
-      await userCourseProgressService.upsert(first.id, createId(), 1);
-      await userCourseProgressService.upsert(second.id, createId(), 1);
+      await userCourseProgressService.upsert(first.id, 1);
+      await userCourseProgressService.upsert(second.id, 1);
 
       const recentCoursePacks = await userCourseProgressService.getRecentCoursePacks(1);
 
@@ -71,9 +70,9 @@ describe("user-progress service", () => {
       const second = await insertCoursePack(db, { order: 2, title: "300个基础句子" });
       const third = await insertCoursePack(db, { order: 3, title: "一般经典句子" });
 
-      await userCourseProgressService.upsert(first.id, createId(), 1);
-      await userCourseProgressService.upsert(second.id, createId(), 1);
-      await userCourseProgressService.upsert(third.id, createId(), 1);
+      await userCourseProgressService.upsert(first.id, 1);
+      await userCourseProgressService.upsert(second.id, 1);
+      await userCourseProgressService.upsert(third.id, 1);
 
       // 新插入的进度记录 updated_at 为空，显式写入时间戳保证排序可预期
       const now = Date.now();
@@ -93,9 +92,9 @@ describe("user-progress service", () => {
     it("should filter out progress rows whose course pack no longer exists", async () => {
       const existingPack = await insertCoursePack(db, { order: 1, title: "零基础" });
 
-      await userCourseProgressService.upsert(existingPack.id, createId(), 1);
+      await userCourseProgressService.upsert(existingPack.id, 1);
       // 模拟课程包被删除后遗留的孤儿进度记录
-      await userCourseProgressService.upsert(createId(), createId(), 2);
+      await userCourseProgressService.upsert(createId(), 2);
 
       const recentCoursePacks = await userCourseProgressService.getRecentCoursePacks(3);
 

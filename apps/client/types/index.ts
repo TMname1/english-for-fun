@@ -1,4 +1,3 @@
-export * from "./models/course";
 export * from "./models/course-history";
 export * from "./models/course-pack";
 export * from "./models/tool";

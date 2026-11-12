@@ -2,19 +2,17 @@ import type { UserProgress, UserRecentCoursePack } from "~/types";
 import { getHttp } from "./http";
 
 export interface UserProgressApiResponse {
-  courseId: string;
+  coursePackId: string;
 }
 export interface UserRecentCoursePackApiResponse {
   id: number;
   coursePackId: string;
-  courseId: string;
   title: string;
   description: string;
 }
 
 export interface UserProgressUpdate {
   coursePackId: string;
-  courseId: string;
   statementIndex: number;
 }
 

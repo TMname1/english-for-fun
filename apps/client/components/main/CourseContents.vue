@@ -63,7 +63,7 @@
                 <UIcon
                   name="i-ph-speaker-simple-high"
                   class="ml-1 inline-block h-7 w-7 cursor-pointer"
-                  @click="handlePlayEnglishSound($event, item.english)"
+                  @click="handlePlayEnglishSound($event, item)"
                 ></UIcon>
               </UTooltip>
             </div>
@@ -88,7 +88,7 @@ const itemRefs = ref<(HTMLElement | null)[]>([]);
 const coursesStore = useCourseStore();
 const { showQuestion } = useGameMode();
 const contentsList = computed(() => {
-  return coursesStore.currentCourse?.statements || [];
+  return coursesStore.currentLearning?.statements || [];
 });
 
 const filterOption = ref("all"); // 新增过滤选项
@@ -115,9 +115,12 @@ function jumpTo(index: number, item: any) {
   coursesStore.toSpecificStatement(index);
 }
 
-function handlePlayEnglishSound(event: Event, english: string) {
+function handlePlayEnglishSound(
+  event: Event,
+  statement: { english?: string; audioUrl?: string | null },
+) {
   event.stopPropagation();
-  playEnglish(english);
+  playEnglish(statement);
 }
 
 watch(

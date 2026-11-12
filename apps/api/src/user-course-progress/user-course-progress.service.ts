@@ -1,5 +1,5 @@
 import { Inject, Injectable } from "@nestjs/common";
-import { and, desc, eq } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 
 import { coursePack, userCourseProgress } from "@earthworm/schema";
 import { DB, DbType } from "../global/providers/db.provider";
@@ -8,12 +8,9 @@ import { DB, DbType } from "../global/providers/db.provider";
 export class UserCourseProgressService {
   constructor(@Inject(DB) private db: DbType) {}
 
-  async findStatement(coursePackId: string, courseId: string) {
+  async findStatement(coursePackId: string) {
     const result = await this.db.query.userCourseProgress.findFirst({
-      where: and(
-        eq(userCourseProgress.coursePackId, coursePackId),
-        eq(userCourseProgress.courseId, courseId),
-      ),
+      where: eq(userCourseProgress.coursePackId, coursePackId),
     });
 
     return result ? result.statementIndex : 0;
@@ -24,7 +21,6 @@ export class UserCourseProgressService {
       .select({
         id: userCourseProgress.id,
         coursePackId: userCourseProgress.coursePackId,
-        courseId: userCourseProgress.courseId,
         title: coursePack.title,
         description: coursePack.description,
       })
@@ -34,17 +30,16 @@ export class UserCourseProgressService {
       .innerJoin(coursePack, eq(userCourseProgress.coursePackId, coursePack.id));
   }
 
-  async upsert(coursePackId: string, courseId: string, statementIndex: number) {
+  async upsert(coursePackId: string, statementIndex: number) {
     await this.db
       .insert(userCourseProgress)
       .values({
         coursePackId,
-        courseId,
         statementIndex,
       })
       .onConflictDoUpdate({
         target: [userCourseProgress.coursePackId],
-        set: { courseId, statementIndex },
+        set: { statementIndex },
       });
   }
 }

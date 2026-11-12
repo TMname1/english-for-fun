@@ -9,7 +9,7 @@ export const userLearningActivities = pgTable(
       .$defaultFn(() => createId()),
     date: date("date").notNull(),
     activityType: text("activity_type").notNull(),
-    courseId: text("course_id"),
+    coursePackId: text("course_pack_id"),
     duration: integer("duration").notNull(),
     metadata: jsonb("metadata"),
     createdAt: timestamp("created_at").notNull().defaultNow(),

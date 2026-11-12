@@ -3,7 +3,7 @@ import type { Ref } from "vue";
 import { debounce } from "lodash-es";
 import { ref, watch } from "vue";
 
-import type { Course } from "~/types";
+import type { CoursePackLearning } from "~/types";
 import { fetchUpdateCourseProgress } from "~/api/user-course-progress";
 
 const DEBOUNCE_TIME = 5000;
@@ -14,14 +14,14 @@ let isSaveStatement = true;
 const statementIndex = ref(0);
 
 export function useStatement() {
-  function setupAutoSaveProgress(course: Ref<Course | undefined>) {
+  function setupAutoSaveProgress(learning: Ref<CoursePackLearning | undefined>) {
     // 课程的 statement 会被删除，
     // 如果记录的 statementIndex 所对应的 statement 被删除了
     // 那么默认返回第一个 statement
-    if (course.value!.statementIndex >= course.value!.statements.length) {
+    if (learning.value!.statementIndex >= learning.value!.statements.length) {
       statementIndex.value = 0;
     } else {
-      statementIndex.value = course.value!.statementIndex || 0;
+      statementIndex.value = learning.value!.statementIndex || 0;
     }
 
     const debouncedSaveProgress = debounce(() => {
@@ -59,8 +59,7 @@ export function useStatement() {
 
       if (statementIndex.value !== lastSavedIndex) {
         fetchUpdateCourseProgress({
-          coursePackId: course.value!.coursePackId,
-          courseId: course.value!.id,
+          coursePackId: learning.value!.coursePackId,
           statementIndex: statementIndex.value,
         });
       }

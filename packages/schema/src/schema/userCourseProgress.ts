@@ -8,8 +8,6 @@ export const userCourseProgress = pgTable(
       .primaryKey()
       .$defaultFn(() => createId()),
     coursePackId: text("course_pack_id").notNull(),
-    courseId: text("course_id").notNull(),
-
     /**
      * from Statement's order
      */

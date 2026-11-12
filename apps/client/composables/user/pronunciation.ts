@@ -63,6 +63,21 @@ export function usePronunciation() {
     return `${apiBase}/tts?accent=${pronunciation.value}&text=${encodeURIComponent(text)}`;
   }
 
+  /**
+   * 解析真实音频切片路径（statements.audioUrl，形如 /course-audio/xxx.mp3）为绝对地址。
+   * 为空返回 ""，由调用方回退 TTS。
+   */
+  function resolveAudioUrl(audioUrl: string | null | undefined): string {
+    const path = audioUrl?.trim();
+    if (!path) {
+      return "";
+    }
+    if (/^https?:\/\//i.test(path)) {
+      return path;
+    }
+    return `${apiBase}${path.startsWith("/") ? "" : "/"}${path}`;
+  }
+
   // 切换发音
   function togglePronunciation(type: PronunciationType) {
     if (type !== pronunciation.value) setStore(type);
@@ -72,6 +87,7 @@ export function usePronunciation() {
     pronunciation,
     getPronunciationOptions,
     getPronunciationUrl,
+    resolveAudioUrl,
     togglePronunciation,
   };
 }

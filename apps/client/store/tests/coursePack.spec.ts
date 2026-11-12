@@ -1,7 +1,7 @@
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { Course, CoursePack, CoursePacksItem } from "~/types";
+import type { CoursePack, CoursePacksItem } from "~/types";
 import { fetchCourseHistory } from "~/api/course-history";
 import { deleteCoursePack, fetchCoursePack, fetchCoursePacks } from "~/api/course-pack";
 import { useCoursePackStore } from "../coursePack";
@@ -14,82 +14,31 @@ describe("course pack store", () => {
     setActivePinia(createPinia());
   });
 
-  it("should ", async () => {
+  it("should update pack completion count from course history", async () => {
     const coursePack: CoursePack = {
       id: "coursePackId",
       title: "课程包1",
       description: "这是一个课程包",
-      courses: [],
       cover: "",
-    };
-
-    const firstCourse: Course = {
-      id: "1",
-      title: "第一课",
-      description: "",
-      video: "",
-      order: 1,
-      coursePackId: coursePack.id,
       completionCount: 0,
-      statementIndex: 0,
-      statements: [
-        { id: "1", order: 1, english: "I", chinese: "我", soundmark: "/aɪ/", isMastered: false },
-        {
-          id: "2",
-          order: 2,
-          english: "like",
-          chinese: "喜欢",
-          soundmark: "/laɪk/",
-          isMastered: false,
-        },
-      ],
     };
-
-    const secondCourse: Course = {
-      id: "2",
-      title: "第二课",
-      order: 2,
-      description: "",
-      video: "",
-      coursePackId: coursePack.id,
-      completionCount: 0,
-      statementIndex: 0,
-      statements: [
-        { id: "1", order: 1, english: "I", chinese: "我", soundmark: "/aɪ/", isMastered: false },
-        {
-          id: "2",
-          order: 2,
-          english: "like",
-          chinese: "喜欢",
-          soundmark: "/laɪk/",
-          isMastered: false,
-        },
-      ],
-    };
-
-    coursePack.courses = [firstCourse, secondCourse];
 
     vi.mocked(fetchCoursePack).mockImplementation(async () => coursePack);
 
     vi.mocked(fetchCourseHistory).mockImplementation(async () => {
-      return [
-        {
-          id: 1,
-          completionCount: 5,
-          courseId: firstCourse.id,
-          coursePackId: coursePack.id,
-        },
-      ];
+      return {
+        completionCount: 5,
+        coursePackId: coursePack.id,
+      };
     });
 
     const coursePackStore = useCoursePackStore();
 
     await coursePackStore.setupCoursePack(coursePack.id);
 
-    await coursePackStore.updateCoursesCompleteCount(coursePack.id);
+    await coursePackStore.updatePackCompletionCount(coursePack.id);
 
-    expect(coursePackStore.currentCoursePack?.courses[0].completionCount).toBe(5);
-    expect(coursePackStore.currentCoursePack?.courses[1].completionCount).toBe(0);
+    expect(coursePackStore.currentCoursePack?.completionCount).toBe(5);
   });
 
   it("removeCoursePack should delete the pack and refresh the list", async () => {

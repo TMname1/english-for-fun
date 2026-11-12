@@ -3,27 +3,24 @@ import { Test } from "@nestjs/testing";
 import { createId } from "@paralleldrive/cuid2";
 
 import type { DbType } from "../../global/providers/db.provider";
-import { insertCourse, insertCoursePack } from "../../../test/fixture/db";
+import { insertCoursePack, insertStatement } from "../../../test/fixture/db";
 import { cleanDB, testImportModules } from "../../../test/helper/utils";
 import { endDB } from "../../common/db";
 import { CourseHistoryService } from "../../course-history/course-history.service";
-import { CourseService } from "../../course/course.service";
 import { DB } from "../../global/providers/db.provider";
+import { UserCourseProgressService } from "../../user-course-progress/user-course-progress.service";
 import { CoursePackService } from "../course-pack.service";
 
 describe("CoursePackService", () => {
   let db: DbType;
   let coursePackService: CoursePackService;
-  let courseService: CourseService;
-
-  const fakeCoursePackId = createId();
-  const fakeCourseId = createId();
+  let courseHistoryService: CourseHistoryService;
 
   beforeAll(async () => {
     const testHelper = await setupTesting();
     db = testHelper.db;
     coursePackService = testHelper.coursePackService;
-    courseService = testHelper.courseService;
+    courseHistoryService = testHelper.courseHistoryService;
   });
 
   beforeEach(async () => {
@@ -61,73 +58,127 @@ describe("CoursePackService", () => {
     });
   });
 
-  describe("findOneWithCourses", () => {
-    it("should return a course pack with completion counts", async () => {
+  describe("findOneWithCompletion", () => {
+    it("should return a course pack with completion count", async () => {
       const coursePackEntity = await insertCoursePack(db);
-      await insertCourse(db, coursePackEntity.id);
 
-      const result = await coursePackService.findOneWithCourses(coursePackEntity.id);
+      const result = await coursePackService.findOneWithCompletion(coursePackEntity.id);
 
-      expect(result.courses.length).toBe(1);
-      expect(result.courses[0]).toHaveProperty("completionCount");
+      expect(result).toHaveProperty("completionCount");
+      expect(result).not.toHaveProperty("courses");
     });
 
     it("should throw NotFoundException when course pack ID does not exist", async () => {
-      await expect(coursePackService.findOneWithCourses("non-existent-id")).rejects.toThrow(
+      await expect(coursePackService.findOneWithCompletion("non-existent-id")).rejects.toThrow(
         NotFoundException,
       );
     });
   });
 
-  describe("findCourse", () => {
-    it("should call courseService.findWithProgress", async () => {
-      await coursePackService.findCourse(fakeCoursePackId, fakeCourseId);
+  describe("findLearning", () => {
+    it("should return statements ordered with saved progress", async () => {
+      const coursePackEntity = await insertCoursePack(db);
+      await insertStatement(db, coursePackEntity.id, 2);
+      await insertStatement(db, coursePackEntity.id, 1);
 
-      expect(courseService.findWithProgress).toHaveBeenCalledWith(fakeCoursePackId, fakeCourseId);
+      const result = await coursePackService.findLearning(coursePackEntity.id);
+
+      expect(result.statements).toHaveLength(2);
+      expect(result.statements[0].order).toBe(1);
+      expect(result).toHaveProperty("statementIndex");
+    });
+
+    it("should throw NotFoundException when course pack ID does not exist", async () => {
+      await expect(coursePackService.findLearning(createId())).rejects.toThrow(NotFoundException);
     });
   });
 
-  describe("findNextCourse", () => {
-    it("should call courseService.findNext", async () => {
-      await coursePackService.findNextCourse(fakeCoursePackId, fakeCourseId);
+  describe("findForEdit", () => {
+    it("should return pack meta and statements normalized (phonetic from soundmark, ordered)", async () => {
+      const coursePackEntity = await insertCoursePack(db, {
+        title: "编辑我",
+        description: "描述",
+        cover: "c.png",
+      });
+      await insertStatement(db, coursePackEntity.id, 2, {
+        english: "two",
+        chinese: "二",
+        soundmark: "/2/",
+      });
+      await insertStatement(db, coursePackEntity.id, 1, {
+        english: "one",
+        chinese: "一",
+        soundmark: "/1/",
+      });
 
-      expect(courseService.findNext).toHaveBeenCalled();
+      const result = await coursePackService.findForEdit(coursePackEntity.id);
+
+      expect(result).toEqual({
+        title: "编辑我",
+        description: "描述",
+        cover: "c.png",
+        statements: [
+          { english: "one", chinese: "一", phonetic: "/1/" },
+          { english: "two", chinese: "二", phonetic: "/2/" },
+        ],
+      });
+      expect(result).not.toHaveProperty("statementIndex");
+    });
+
+    it("should default empty description/cover to empty strings", async () => {
+      const coursePackEntity = await insertCoursePack(db, { description: null, cover: null });
+
+      const result = await coursePackService.findForEdit(coursePackEntity.id);
+
+      expect(result.description).toBe("");
+      expect(result.cover).toBe("");
+      expect(result.statements).toEqual([]);
+    });
+
+    it("should throw NotFoundException when course pack ID does not exist", async () => {
+      await expect(coursePackService.findForEdit(createId())).rejects.toThrow(NotFoundException);
     });
   });
 
-  describe("completeCourse", () => {
-    it("should call courseService.completeCourse", async () => {
-      await coursePackService.completeCourse(fakeCoursePackId, fakeCourseId);
+  describe("completeCoursePack", () => {
+    it("should call courseHistoryService.upsert with the pack id", async () => {
+      const coursePackEntity = await insertCoursePack(db);
 
-      expect(courseService.completeCourse).toHaveBeenCalledWith(fakeCoursePackId, fakeCourseId);
+      await coursePackService.completeCoursePack(coursePackEntity.id);
+
+      expect(courseHistoryService.upsert).toHaveBeenCalledWith(coursePackEntity.id);
+    });
+
+    it("should throw NotFoundException when course pack ID does not exist", async () => {
+      await expect(coursePackService.completeCoursePack(createId())).rejects.toThrow(
+        NotFoundException,
+      );
     });
   });
 });
 
 async function setupTesting() {
-  const MockCourseService = {
-    findWithProgress: jest.fn(),
-    find: jest.fn(),
-    findNext: jest.fn(),
-    completeCourse: jest.fn(),
+  const MockUserCourseProgressService = {
+    findStatement: jest.fn(() => 0),
   };
 
   const MockCourseHistoryService = {
     findCompletionCount: jest.fn(() => 1),
+    upsert: jest.fn(),
   };
 
   const moduleRef = await Test.createTestingModule({
     imports: testImportModules,
     providers: [
       CoursePackService,
-      { provide: CourseService, useValue: MockCourseService },
+      { provide: UserCourseProgressService, useValue: MockUserCourseProgressService },
       { provide: CourseHistoryService, useValue: MockCourseHistoryService },
     ],
   }).compile();
 
   return {
     moduleRef,
-    courseService: moduleRef.get<CourseService>(CourseService),
+    courseHistoryService: moduleRef.get<CourseHistoryService>(CourseHistoryService),
     coursePackService: moduleRef.get<CoursePackService>(CoursePackService),
     db: moduleRef.get<DbType>(DB),
   };

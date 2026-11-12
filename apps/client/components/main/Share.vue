@@ -85,14 +85,14 @@ const {
 } = useGenerateShareImage();
 
 watch(shareModalVisible, (newVal) => {
-  if (newVal && courseStore.currentCourse?.title) {
+  if (newVal && courseStore.currentLearning?.title) {
     const { year, month, day } = getToday();
     const coursePackTitle = coursePackStore.currentCoursePack?.title || "";
     const totalRecordNumber = courseTimer.totalRecordNumber();
     const totalTime = formatSecondsToTime(courseTimer.calculateTotalTime());
     generateGalleryImage(
       coursePackTitle,
-      courseStore.currentCourse.title,
+      courseStore.currentLearning.title,
       `${year}/${month}/${day}`,
       totalRecordNumber,
       totalTime,

@@ -74,12 +74,6 @@
           @click="handleGoToCourseList"
         >
           课程列表
-        </button>
-        <button
-          class="btn w-full sm:w-auto"
-          @click="goToNextCourse"
-        >
-          下一课
           <UKbd> ↵ </UKbd>
         </button>
       </div>
@@ -96,7 +90,6 @@
 import { computed, ref, watch } from "vue";
 import { toast } from "vue-sonner";
 
-import { useActiveCourseMap } from "~/composables/courses/activeCourse";
 import { courseTimer } from "~/composables/courses/courseTimer";
 import { useConfetti } from "~/composables/main/confetti/useConfetti";
 import { readOneSentencePerDayAloud } from "~/composables/main/englishSound";
@@ -114,15 +107,14 @@ import { cancelShortcut, registerShortcut } from "~/utils/keyboardShortcuts";
 
 const courseStore = useCourseStore();
 const coursePackStore = useCoursePackStore();
-const { gotoCourseList, gotoGame } = useNavigation();
+const { gotoCourseList } = useNavigation();
 const { showQuestion } = useGameMode();
-const { handleGoToCourseList, goToNextCourse, completeCourse } = useCourse();
+const { handleGoToCourseList, completeCoursePack } = useCourse();
 const { handleDoAgain } = useDoAgain();
 const { showModal, hideSummary } = useSummary();
 const { zhSentence, enSentence } = useDailySentence();
 const { confettiCanvasRef, playConfetti } = useConfetti();
 const { showShareModal } = useShareModal();
-const { updateActiveCourseMap } = useActiveCourseMap();
 const { totalMinutes, formattedMinutes } = useTotalLearningTime();
 
 const gameStore = useGameStore();
@@ -130,15 +122,15 @@ const gameStore = useGameStore();
 watch(showModal, (val) => {
   if (val) {
     preventSaveStatement();
-    registerShortcut("enter", goToNextCourse);
-    completeCourse();
+    registerShortcut("enter", handleGoToCourseList);
+    completeCoursePack();
     soundSentence();
     gameStore.completeLevel();
     setTimeout(async () => {
       playConfetti();
     }, 300);
   } else {
-    cancelShortcut("enter", goToNextCourse);
+    cancelShortcut("enter", handleGoToCourseList);
     permitSaveStatement();
   }
 });
@@ -186,55 +178,24 @@ function soundSentence() {
 }
 
 function useCourse() {
-  let nextCourseId = ref("");
-
-  const haveNextCourse = computed(() => {
-    return nextCourseId.value;
-  });
-
-  async function goToNextCourse() {
-    hideSummary();
-
-    if (!haveNextCourse.value) {
-      toast.info("已经是最后一课 自动帮你跳转到课程列表啦", {
-        duration: 1500,
-        onAutoClose: () => {
-          handleGoToCourseList();
-        },
-      });
-      return;
-    }
-
-    if (courseStore.currentCourse) {
-      gotoGame(courseStore.currentCourse.coursePackId, nextCourseId.value);
-    }
-  }
-
   function handleGoToCourseList() {
     hideSummary();
-    if (courseStore.currentCourse) {
-      gotoCourseList(courseStore.currentCourse.coursePackId);
+    if (courseStore.currentLearning) {
+      gotoCourseList(courseStore.currentLearning.coursePackId);
     }
   }
 
-  async function completeCourse() {
-    if (courseStore.currentCourse) {
-      const { coursePackId } = courseStore.currentCourse;
-      const { nextCourse } = await courseStore.completeCourse();
-      coursePackStore.updateCoursesCompleteCount(coursePackId);
-
-      if (nextCourse) {
-        nextCourseId.value = nextCourse.id;
-        updateActiveCourseMap(coursePackId, nextCourseId.value);
-      } else {
-        updateActiveCourseMap(coursePackId, "");
-      }
+  /** "分课程"功能已删除：完成即课程包级 completionCount +1 */
+  async function completeCoursePack() {
+    if (courseStore.currentLearning) {
+      const { coursePackId } = courseStore.currentLearning;
+      await courseStore.completeCoursePack();
+      coursePackStore.updatePackCompletionCount(coursePackId);
     }
   }
 
   return {
-    completeCourse,
-    goToNextCourse,
+    completeCoursePack,
     handleGoToCourseList,
   };
 }

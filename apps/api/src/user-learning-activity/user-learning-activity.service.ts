@@ -8,13 +8,7 @@ import { DB, DbType } from "../global/providers/db.provider";
 export class UserLearningActivityService {
   constructor(@Inject(DB) private db: DbType) {}
 
-  async upsertActivity(
-    date: Date,
-    activityType: string,
-    duration: number,
-    courseId?: string,
-    metadata?: any,
-  ) {
+  async upsertActivity(date: Date, activityType: string, duration: number, metadata?: any) {
     if (duration < 0) {
       throw new BadRequestException("Duration cannot be negative");
     }
@@ -26,7 +20,6 @@ export class UserLearningActivityService {
         date: dateStr,
         activityType,
         duration,
-        courseId,
         metadata,
       })
       .onConflictDoUpdate({

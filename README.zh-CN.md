@@ -1,14 +1,3 @@
-<div align="center">
-  <img alt="Earthworm" width="120" height="120" src="./assets/logo/logo-1000.png">
-  <h1>Earthworm</h1>
-  <span>中文 | <a href="./README.md">English</a></span>
-</div>
-
-<div align="center">
-  <br/>
-  <a href="https://hellogithub.com/repository/9433615761f548cf9648434c670cd85b" target="_blank"><img src="https://abroad.hellogithub.com/v1/widgets/recommend.svg?rid=9433615761f548cf9648434c670cd85b&claim_uid=249cPWvjfNmU7dp" alt="Featured｜HelloGitHub" style="width: 250px; height: 54px;" width="250" height="54" /></a>
-</div>
-
 ## ⚡ 介绍
 
 通过连词构句的方式让你更好的学习英语~ 😊
@@ -79,9 +68,7 @@ pnpm docker:start
 # 下面这些命令等你用的时候在执行，不要傻乎乎的刚启动就停止哈 😊
 # 停止
 pnpm docker:stop
-# 删除
-pnpm docker:delete
-# 完全删除（包括 Volume 数据）
+# 删除容器和网络（不会删除数据卷，数据保留在 db-data / testdb-data 卷里）
 pnpm docker:down
 ```
 
@@ -123,6 +110,38 @@ pnpm dev:serve
 ```bash
 pnpm dev:client
 ```
+
+## 🩺 排障：relation "xxx" does not exist
+
+后端启动和 `dev:serve` 都**不会自动建表**，所以看到下面这类报错时，基本都是数据库是空的（或者连到了别的库）：
+
+```
+ERROR [ExceptionsHandler] relation "user_course_progress" does not exist
+```
+
+修复顺序：
+
+```bash
+pnpm docker:start   # 起 db / testdb
+pnpm db:init        # 按 schema 建表（drizzle-kit push）
+pnpm db:upload      # 只有第一次建库需要：导入星荣课程数据
+pnpm dev:serve      # 重新启动后端
+```
+
+从本版本起，Postgres 数据持久化在 compose 声明的 `db-data` / `testdb-data` 命名卷里（挂载点为容器内真实的 PGDATA 路径 `/var/lib/postgresql/data`），容器重建不会再丢数据；早先的写法把卷挂到了 `/var/lib/postgres/main-data`，那个路径 Postgres 根本不读，数据其实一直写在匿名卷里，容器一重建就归零。
+
+排查用的只读命令：
+
+```bash
+docker compose ls
+docker inspect english-for-fun-db-1 --format "{{json .Mounts}}"   # 看真实挂载点
+docker volume ls                                                  # 看命名卷 / 匿名卷
+
+# 注意：不要执行 docker volume prune
+# 它会连带删掉所有未被引用的卷（包括历史遗留的数据库数据卷），数据不可恢复
+```
+
+若 API 启动时直接报 “数据库表缺失：...”，说明自检没通过，按提示跑上面几条命令即可；这类错误现在会在启动阶段一次性暴露，而不是每个请求都 500。
 
 ## 🛠️ 关于测试
 
@@ -177,82 +196,3 @@ pnpm test
 # 本地开发
 pnpm docs:dev
 ```
-
-## ❓ 常见问题解答
-
-### 数据库连接不上
-
-我的 Docker 和里面的数据库都正常跑起来了，但是跑 `db:init` 命令时还是报错，提示数据库连接失败。
-
-可以检查下 `.env` 文件中的数据库配置是否正确，甚至是这个文件有没有！😠
-
-### 如何正确的更新课程数据？
-
-当你发现有错误的课程数据并修改后，应当使用下面的命令将课程数据更新到数据库中。
-
-```bash
-pnpm db:update
-```
-
-### pnpm install 报错？
-
-某些依赖模块需要编译安装，因此需要相关编译环境。如果没有对应环境则会编译失败， 且不同模块所需编译环境不同，因此具体问题需要具体分析。
-以下列出已经碰到过的具体问题。
-
-先尝试使用下面的命令更新 `pnpm`。
-
-```shell
-pnpm i -g
-# or
-pnpm i -g pnpm
-# or
-npx pnpm i -g pnpm@latest
-```
-
-### WSL2 中 docker 无权访问?
-
-在 Windows 中使用 wsl2 做为开发环境时，通过 `docker compose up -d` 启动 docker 出现如下错误：
-
-```bash
-permission denied while trying to connect to the Docker daemon socket at unix:///var/run/docker.sock: Get "http://%2Fvar%2Frun%2Fdocker.sock/v1.24/containers/json": dial unix /var/run/docker.sock: connect: permission denied
-```
-
-> 解决方法
-
-将当前的用户添加到 docker 组中
-
-```bash
-# 添加 docker 用户组
-sudo groupadd docker
-# 将登录用户加入到 docker 用户组中
-sudo gpasswd -a $USER docker
-# 更新用户组
-newgrp docker
-# 测试 docker 命令是否正常使用
-docker images
-```
-
-## 🤝 前端开发规范
-
-1. 不要解构 pinia 的 store
-
-   - 解构会导致响应式丢失问题（ref 类型也会变成普通类型）
-     - 使用 storeToRefs 非常的麻烦
-   - 带上 store 代码可读性也会更好一点 一眼就能知道数据的来源是哪里
-
-2. composables 里面不要包含 UI 逻辑
-
-   - Such as `toast.info()`
-   - router 相关的也不要放进去（不便于测试 我们把 router 划分为 UI 逻辑）
-
-## 🚀 星路历程
-
-[![Stargazers over time](https://starchart.cc/cuixueshe/earthworm.svg?variant=adaptive)](https://starchart.cc/cuixueshe/earthworm)
-
-## 🌟 贡献者
-
-在此感谢所有为 Earthworm 做出过贡献的人！🎉
-
-<a href="https://github.com//cuixueshe/earthworm/graphs/contributors"><img src="https://contributors.nn.ci/api?repo=cuixueshe/earthworm" /></a>
-
-<a href="https://hellogithub.com/repository/9433615761f548cf9648434c670cd85b" target="_blank"><img src="https://abroad.hellogithub.com/v1/widgets/recommend.svg?rid=9433615761f548cf9648434c670cd85b&claim_uid=249cPWvjfNmU7dp" alt="Featured｜HelloGitHub" style="width: 250px; height: 54px;" width="250" height="54" /></a>

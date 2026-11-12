@@ -5,7 +5,7 @@
     <div class="flex items-center">
       <NuxtLink
         class="clickable-item flex items-center justify-center"
-        :href="`/course-pack/${courseStore.currentCourse?.coursePackId}`"
+        :href="`/course-pack/${courseStore.currentLearning?.coursePackId}`"
       >
         <UTooltip text="课程列表">
           <IconsExpand class="h-7 w-7" />
@@ -19,7 +19,7 @@
           {{ currentCourseInfo }}
         </UTooltip>
       </div>
-      <MainStudyVideoLink :video="courseStore.currentCourse?.video" />
+      <MainStudyVideoLink :video="courseStore.currentLearning?.video" />
     </div>
 
     <div class="flex items-center gap-4">
@@ -93,7 +93,7 @@ const { openGameSettingModal } = useGameSetting();
 const modal = useModal();
 
 const currentCourseInfo = computed(() => {
-  return `${courseStore.currentCourse?.title}（${currentSchedule.value}/${courseStore.visibleStatementsCount}）`;
+  return `${courseStore.currentLearning?.title}（${currentSchedule.value}/${courseStore.visibleStatementsCount}）`;
 });
 
 const currentSchedule = computed(() => {

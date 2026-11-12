@@ -13,27 +13,18 @@ jobs:
     env:
       DATABASE_URL: postgres://test:password@localhost:5480/earthworm_test
       SECRET: sjldk92#sd903mnc./xklsjdf9sdfj
-      REDIS_URL: redis://127.0.0.1:6379
-      LOGTO_ENDPOINT: https://g7aj5i.logto.app/
-      LOGTO_CLIENT_ID: uwl60tk769wtbs19i5zkx
-      LOGTO_CLIENT_SECRET: AIC9U5TYba73JxMETuj9JeFaLyXFVdWa
-      LOGTO_M2M_API: https://g7aj5i.logto.app/api
 
     services:
       pg:
         image: postgres:14-alpine
         volumes:
-          - data:/var/lib/postgres/test-data
+          - data:/var/lib/postgresql/data
         env:
           POSTGRES_USER: test
           POSTGRES_PASSWORD: password
           POSTGRES_DB: earthworm_test
         ports:
           - 5480:5432
-      redis:
-        image: redis:6.2.5
-        ports:
-          - 6379:6379
 
     steps:
       - uses: actions/checkout@v2

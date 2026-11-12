@@ -20,12 +20,21 @@ export class StatementDto {
   @IsString()
   @IsOptional()
   phonetic?: string;
+
+  /** 真实音频切片路径（如 /course-audio/xxx.mp3），可选；缺省时播放 TTS */
+  @IsString()
+  @IsOptional()
+  audioUrl?: string;
 }
 
 export class CourseDto {
+  /**
+   * 单一课程对象（原 courses 数组已随"分课程"功能删除）。
+   * title/description 仅为 course.json 校对文案，入库的只有 statements。
+   */
   @IsString()
-  @IsNotEmpty()
-  title: string;
+  @IsOptional()
+  title?: string;
 
   @IsString()
   @IsOptional()
@@ -51,9 +60,7 @@ export class CreateCoursePackDto {
   @IsOptional()
   cover?: string;
 
-  @IsArray()
-  @ArrayNotEmpty()
-  @ValidateNested({ each: true })
+  @ValidateNested()
   @Type(() => CourseDto)
-  courses: CourseDto[];
+  courses: CourseDto;
 }

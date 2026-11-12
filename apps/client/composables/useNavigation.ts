@@ -5,8 +5,8 @@ export function useNavigation() {
     navigateTo(`/course-pack/${coursePackId}`);
   }
 
-  function gotoGame(coursePackId: string, courseId: string) {
-    navigateTo(`/game/${coursePackId}/${courseId}`);
+  function gotoGame(coursePackId: string) {
+    navigateTo(`/game/${coursePackId}`);
   }
 
   return {

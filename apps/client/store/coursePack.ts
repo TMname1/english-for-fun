@@ -35,26 +35,22 @@ export const useCoursePackStore = defineStore("course-pack", () => {
     currentCoursePack.value = res;
   }
 
-  async function updateCoursesCompleteCount(coursePackId: string) {
-    const courseHistory = await fetchCourseHistory(coursePackId);
+  /**
+   * 刷新课程包级别的学习完成次数（"分课程"功能删除后不再逐课程统计）。
+   */
+  async function updatePackCompletionCount(coursePackId: string) {
+    const history = await fetchCourseHistory(coursePackId);
 
-    const find = (courseId: string) =>
-      courseHistory.find((history) => history.courseId === courseId);
-
-    currentCoursePack.value?.courses.forEach((course) => {
-      const matchCourseHistory = find(course.id);
-
-      if (matchCourseHistory) {
-        course.completionCount = matchCourseHistory.completionCount;
-      }
-    });
+    if (currentCoursePack.value?.id === coursePackId) {
+      currentCoursePack.value.completionCount = history?.completionCount ?? 0;
+    }
   }
 
   return {
     setupCoursePack,
     setupCoursePacks,
     removeCoursePack,
-    updateCoursesCompleteCount,
+    updatePackCompletionCount,
     currentCoursePack,
     coursePacks,
   };

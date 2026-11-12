@@ -2,7 +2,7 @@
  * 记录当前课程包每门课的学习次数
  */
 import { Inject, Injectable } from "@nestjs/common";
-import { and, eq, sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 
 import { courseHistory } from "@earthworm/schema";
 import { DB, DbType } from "../global/providers/db.provider";
@@ -15,39 +15,35 @@ export class CourseHistoryService {
     return await this.db.query.courseHistory.findMany();
   }
 
+  /** 课程包的学习记录（"分课程"功能删除后按课程包维度唯一一条） */
   async findByCoursePackId(coursePackId: string) {
-    return await this.db.query.courseHistory.findMany({
+    return await this.db.query.courseHistory.findFirst({
       columns: {
         id: true,
         coursePackId: true,
-        courseId: true,
         completionCount: true,
       },
       where: eq(courseHistory.coursePackId, coursePackId),
     });
   }
 
-  async findCompletionCount(coursePackId: string, courseId: string) {
+  async findCompletionCount(coursePackId: string) {
     const record = await this.db.query.courseHistory.findFirst({
-      where: and(
-        eq(courseHistory.coursePackId, coursePackId),
-        eq(courseHistory.courseId, courseId),
-      ),
+      where: eq(courseHistory.coursePackId, coursePackId),
     });
 
     return record ? record.completionCount : 0;
   }
 
-  async upsert(coursePackId: string, courseId: string) {
+  async upsert(coursePackId: string) {
     await this.db
       .insert(courseHistory)
       .values({
         coursePackId,
-        courseId,
         completionCount: 1,
       })
       .onConflictDoUpdate({
-        target: [courseHistory.courseId, courseHistory.coursePackId],
+        target: [courseHistory.coursePackId],
         set: { completionCount: sql`course_history.completion_count + 1` },
       });
   }

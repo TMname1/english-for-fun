@@ -2,14 +2,16 @@
   <div class="mx-auto flex w-full max-w-3xl flex-col gap-4 px-4 py-6">
     <div>
       <h2 class="text-2xl font-bold">管理课程</h2>
-      <p class="mt-1 text-sm opacity-70">
-        {{ isAddTab ? "创建一个新的课程包" : "删除已有的课程包" }}。
-        <template v-if="isAddTab">
-          每门课程的句子用 JSON 粘贴，格式：
-          <code class="rounded bg-base-200 px-1 dark:bg-gray-700"
-            >[{ "english": "...", "chinese": "...", "phonetic": "..." }]</code
-          >
-        </template>
+      <p class="mt-1 text-sm opacity-70">{{ tabDescription }}</p>
+      <p
+        v-if="activeTab !== 1"
+        class="text-sm opacity-70"
+      >
+        句子以列表形式编辑，每条含 english / chinese / phonetic；也可用「粘贴 JSON」批量导入。
+        <span v-if="activeTab === 0">
+          顶部还可用「导入完整 JSON」/「导入课程 JSON」读取本地课程包文件。</span
+        >
+        <span v-else> 保存时会用这里的句子整体替换该课程包原有句子。</span>
       </p>
     </div>
 
@@ -37,48 +39,51 @@
           </div>
 
           <div class="flex items-center justify-between">
-            <h3 class="text-lg font-semibold">课程列表</h3>
-            <UButton
-              icon="i-ph-plus"
-              color="gray"
-              variant="soft"
-              @click="addCourse"
-            >
-              添加课程
-            </UButton>
+            <h3 class="text-lg font-semibold">课程内容</h3>
+            <div class="flex items-center gap-2">
+              <UButton
+                icon="i-ph-file-import"
+                color="gray"
+                variant="soft"
+                size="sm"
+                @click="openPackJsonPicker('full')"
+              >
+                导入完整 JSON
+              </UButton>
+              <UButton
+                icon="i-ph-article"
+                color="gray"
+                variant="soft"
+                size="sm"
+                @click="openPackJsonPicker('course')"
+              >
+                导入课程 JSON
+              </UButton>
+            </div>
           </div>
 
-          <div
-            v-for="(course, index) in courseForms"
-            :key="index"
-            class="flex flex-col gap-3 rounded-lg border p-4 dark:border-gray-700"
-          >
+          <div class="flex flex-col gap-3 rounded-lg border p-4 dark:border-gray-700">
             <div class="flex items-center justify-between">
-              <span class="font-medium">第 {{ index + 1 }} 门</span>
+              <span class="font-medium">唯一课程</span>
               <UButton
-                icon="i-ph-trash"
-                color="red"
-                variant="ghost"
-                :disabled="courseForms.length === 1"
-                @click="removeCourse(index)"
-              />
+                icon="i-ph-upload-simple"
+                color="gray"
+                variant="soft"
+                size="xs"
+                @click="openCourseJsonPicker"
+              >
+                导入句子 JSON
+              </UButton>
             </div>
             <UInput
-              v-model="course.title"
-              placeholder="课程标题（必填）"
+              v-model="courseForm.title"
+              placeholder="课程标题（可选，仅用于校对）"
             />
             <UInput
-              v-model="course.description"
-              placeholder="课程描述"
+              v-model="courseForm.description"
+              placeholder="课程描述（可选）"
             />
-            <UTextarea
-              v-model="course.statementsText"
-              :rows="6"
-              placeholder='[
-  { "english": "How are you?", "chinese": "你好吗？", "phonetic": "/haʊ ɑːr ju/" }
-]'
-              class="font-mono text-sm"
-            />
+            <StatementListEditor v-model="courseForm.statements" />
           </div>
 
           <UButton
@@ -90,6 +95,22 @@
           >
             创建课程包
           </UButton>
+
+          <input
+            ref="courseJsonInput"
+            type="file"
+            accept="application/json,.json"
+            class="hidden"
+            @change="handleCourseJsonFile"
+          />
+
+          <input
+            ref="packJsonInput"
+            type="file"
+            accept="application/json,.json"
+            class="hidden"
+            @change="handlePackJsonFile"
+          />
         </div>
       </template>
 
@@ -121,15 +142,90 @@
           </template>
         </div>
       </template>
+
+      <template #edit>
+        <div class="flex flex-col gap-3 pt-4">
+          <template v-if="isLoadingPacks">
+            <p class="text-sm opacity-70">加载中……</p>
+          </template>
+          <template v-else-if="coursePackStore.coursePacks.length === 0">
+            <p class="text-sm opacity-70">暂无课程包，可在「添加课程」中创建。</p>
+          </template>
+          <template v-else>
+            <div
+              v-for="pack in coursePackStore.coursePacks"
+              :key="pack.id"
+              class="flex flex-col gap-3 rounded-lg border p-4 dark:border-gray-700"
+            >
+              <div class="flex items-center justify-between gap-3">
+                <div class="min-w-0">
+                  <p class="truncate font-medium">{{ pack.title }}</p>
+                  <p class="truncate text-sm opacity-70">{{ pack.description }}</p>
+                </div>
+                <UButton
+                  :icon="editingPackId === pack.id ? 'i-ph-x' : 'i-ph-pencil'"
+                  :color="editingPackId === pack.id ? 'gray' : 'primary'"
+                  variant="ghost"
+                  @click="toggleEdit(pack)"
+                />
+              </div>
+
+              <div
+                v-if="editingPackId === pack.id"
+                class="flex flex-col gap-3 border-t pt-4 dark:border-gray-700"
+              >
+                <template v-if="isLoadingEdit">
+                  <p class="text-sm opacity-70">正在载入课程数据……</p>
+                </template>
+                <template v-else>
+                  <div class="flex flex-col gap-3">
+                    <UInput
+                      v-model="editPackForm.title"
+                      placeholder="课程包标题（必填）"
+                      :ui="{ base: 'font-medium' }"
+                    />
+                    <UInput
+                      v-model="editPackForm.description"
+                      placeholder="课程包描述"
+                    />
+                    <UInput
+                      v-model="editPackForm.cover"
+                      placeholder="封面图片 URL（可选）"
+                    />
+                  </div>
+                  <StatementListEditor v-model="editStatements" />
+                  <div class="flex justify-end gap-3">
+                    <UButton
+                      color="gray"
+                      variant="ghost"
+                      :disabled="isEditSubmitting"
+                      @click="cancelEdit"
+                    >
+                      取消
+                    </UButton>
+                    <UButton
+                      color="primary"
+                      :loading="isEditSubmitting"
+                      @click="saveEdit"
+                    >
+                      保存修改
+                    </UButton>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </template>
+        </div>
+      </template>
     </UTabs>
 
     <UModal v-model="showDeleteModal">
       <div class="p-6 text-gray-900 dark:text-white">
-        <h3 class="text-xl font-bold">删除课程</h3>
+        <h3 class="text-xl font-bold">删除课程包</h3>
         <p class="mt-4 text-sm">
           确定删除「{{
             pendingDeletePack?.title
-          }}」吗？该课程包下的所有课程、句子和学习进度都会被删除，且无法恢复。
+          }}」吗？该课程包下的所有句子和学习进度都会被删除，且无法恢复。
         </p>
         <div class="mt-6 flex justify-end gap-3">
           <UButton
@@ -165,23 +261,35 @@ import { navigateTo } from "#imports";
 import { computed, onMounted, ref } from "vue";
 import { toast } from "vue-sonner";
 
+import type { CreateCoursePackStatement } from "~/api/course-pack";
 import type { CoursePacksItem } from "~/types";
-import type { CourseForm } from "~/utils/coursePackManage";
-import { createCoursePack } from "~/api/course-pack";
+import { createCoursePack, fetchCoursePackForEdit, updateCoursePack } from "~/api/course-pack";
+import StatementListEditor from "~/components/course-pack/StatementListEditor.vue";
 import { useCoursePackStore } from "~/store/coursePack";
-import { buildCreateCoursePackPayload } from "~/utils/coursePackManage";
+import {
+  buildCreateCoursePackPayload,
+  createEmptyCourse,
+  parseCourseJsonImport,
+  parseCourseOnlyJsonImport,
+  parseCoursePackJsonImport,
+} from "~/utils/coursePackManage";
 
 const coursePackStore = useCoursePackStore();
 
 const tabItems = [
   { label: "添加课程", slot: "add" },
   { label: "删除课程", slot: "remove" },
+  { label: "修改课程", slot: "edit" },
 ];
 const activeTab = ref(0);
-const isAddTab = computed(() => activeTab.value === 0);
+const tabDescription = computed(() => {
+  if (activeTab.value === 0) return "创建一个新的课程包。";
+  if (activeTab.value === 1) return "删除已有的课程包。";
+  return "修改已有课程包的标题、描述、封面与句子。";
+});
 
 const packForm = ref({ title: "", description: "", cover: "" });
-const courseForms = ref<CourseForm[]>([createEmptyCourse()]);
+const courseForm = ref(createEmptyCourse());
 const isSubmitting = ref(false);
 const errorMessage = ref("");
 
@@ -190,16 +298,95 @@ const showDeleteModal = ref(false);
 const pendingDeletePack = ref<CoursePacksItem | null>(null);
 const isDeleting = ref(false);
 
-function createEmptyCourse(): CourseForm {
-  return { title: "", description: "", statementsText: "" };
+// 「修改课程」：列表内展开编辑，一次只编辑一个课程包
+const editingPackId = ref<string | null>(null);
+const editPackForm = ref({ title: "", description: "", cover: "" });
+const editStatements = ref<CreateCoursePackStatement[]>([]);
+const isLoadingEdit = ref(false);
+const isEditSubmitting = ref(false);
+
+const courseJsonInput = ref<HTMLInputElement | null>(null);
+
+function openCourseJsonPicker() {
+  courseJsonInput.value?.click();
 }
 
-function addCourse() {
-  courseForms.value.push(createEmptyCourse());
+async function handleCourseJsonFile(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  // 清空选择，保证重复导入同一个文件也能再次触发 change
+  input.value = "";
+  if (!file) return;
+
+  const course = courseForm.value;
+
+  errorMessage.value = "";
+
+  let text = "";
+  try {
+    text = await file.text();
+  } catch {
+    errorMessage.value = `读取文件「${file.name}」失败`;
+    return;
+  }
+
+  const result = parseCourseJsonImport(text);
+  if (!result.ok) {
+    errorMessage.value = `导入「${file.name}」失败：${result.error}`;
+    return;
+  }
+
+  course.statements = result.statements;
+  if (!course.title.trim()) {
+    course.title = file.name.replace(/\.json$/i, "");
+  }
+  toast.success(`已导入「${file.name}」，共 ${result.statements.length} 个句子`);
 }
 
-function removeCourse(index: number) {
-  courseForms.value.splice(index, 1);
+const packJsonInput = ref<HTMLInputElement | null>(null);
+const packImportMode = ref<"full" | "course">("full");
+
+function openPackJsonPicker(mode: "full" | "course") {
+  packImportMode.value = mode;
+  packJsonInput.value?.click();
+}
+
+async function handlePackJsonFile(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  // 清空选择，保证重复导入同一个文件也能再次触发 change
+  input.value = "";
+  if (!file) return;
+
+  errorMessage.value = "";
+
+  let text = "";
+  try {
+    text = await file.text();
+  } catch {
+    errorMessage.value = `读取文件「${file.name}」失败`;
+    return;
+  }
+
+  if (packImportMode.value === "full") {
+    const result = parseCoursePackJsonImport(text);
+    if (!result.ok) {
+      errorMessage.value = `导入「${file.name}」失败：${result.error}`;
+      return;
+    }
+    packForm.value = { ...result.pack };
+    courseForm.value = result.course;
+    toast.success(`已导入课程包「${result.pack.title}」，确认无误后点击创建`);
+    return;
+  }
+
+  const result = parseCourseOnlyJsonImport(text);
+  if (!result.ok) {
+    errorMessage.value = `导入「${file.name}」失败：${result.error}`;
+    return;
+  }
+  courseForm.value = result.course;
+  toast.success(`已导入课程「${result.course.title || file.name}」，确认无误后点击创建`);
 }
 
 onMounted(async () => {
@@ -239,10 +426,75 @@ async function confirmDelete() {
   }
 }
 
+/** 展开某个课程包的编辑表单并预填数据；再次点击同一行则收起 */
+async function toggleEdit(pack: CoursePacksItem) {
+  errorMessage.value = "";
+
+  if (editingPackId.value === pack.id) {
+    editingPackId.value = null;
+    return;
+  }
+
+  editingPackId.value = pack.id;
+  isLoadingEdit.value = true;
+  try {
+    const data = await fetchCoursePackForEdit(pack.id);
+    editPackForm.value = {
+      title: data.title,
+      description: data.description,
+      cover: data.cover,
+    };
+    editStatements.value = data.statements;
+  } catch (error: unknown) {
+    const message = (error as { message?: string })?.message;
+    errorMessage.value = message ? `载入失败：${message}` : "载入课程数据失败，请稍后重试";
+    editingPackId.value = null;
+  } finally {
+    isLoadingEdit.value = false;
+  }
+}
+
+function cancelEdit() {
+  editingPackId.value = null;
+  errorMessage.value = "";
+}
+
+async function saveEdit() {
+  const coursePackId = editingPackId.value;
+  if (!coursePackId) return;
+
+  errorMessage.value = "";
+
+  // 复用创建的校验与 payload 构建：课程标题/描述不入库，编辑时留空即可
+  const result = buildCreateCoursePackPayload(editPackForm.value, {
+    title: "",
+    description: "",
+    statements: editStatements.value,
+  });
+  if (!result.ok) {
+    errorMessage.value = result.error;
+    return;
+  }
+
+  isEditSubmitting.value = true;
+  try {
+    await updateCoursePack(coursePackId, result.payload);
+    toast.success("课程包已更新");
+    editingPackId.value = null;
+    await coursePackStore.setupCoursePacks();
+  } catch (error: unknown) {
+    // HTTP 错误提示已由 HttpErrorProvider 统一处理，这里补充表单上下文
+    const message = (error as { message?: string })?.message;
+    errorMessage.value = message ? `更新失败：${message}` : "更新失败，请检查表单内容或服务端状态";
+  } finally {
+    isEditSubmitting.value = false;
+  }
+}
+
 async function handleSubmit() {
   errorMessage.value = "";
 
-  const result = buildCreateCoursePackPayload(packForm.value, courseForms.value);
+  const result = buildCreateCoursePackPayload(packForm.value, courseForm.value);
   if (!result.ok) {
     errorMessage.value = result.error;
     return;
@@ -250,8 +502,8 @@ async function handleSubmit() {
 
   isSubmitting.value = true;
   try {
-    const response = await createCoursePack(result.payload);
-    toast.success(`课程包创建成功，共 ${response.courseIds.length} 门课程`);
+    await createCoursePack(result.payload);
+    toast.success("课程包创建成功");
 
     await coursePackStore.setupCoursePacks();
     navigateTo("/course-pack");
