@@ -34,29 +34,28 @@ services:
   asr:
     # 固定 0.8.3：latest-cpu 是 2025-09 的旧构建（speaches 0.1.0），缺少启动装模型等新机制且带的
     # ctranslate2 过旧，读不了新版 large-v3 权重仓库的 vocabulary.json
-    image: ghcr.io/speaches-ai/speaches:0.8.3-cpu
+    image: ghcr.io/speaches-ai/speaches:0.8.3-cuda
     restart: unless-stopped
     profiles: ["asr"]
     environment:
       # 启动时自动下载并安装模型（whisper-1 是 speaches 内置别名，映射到它；约 3GB）
       PRELOAD_MODELS: '["Systran/faster-whisper-large-v3"]'
-      # CPU int8 量化（双下划线是 speaches 嵌套配置的环境变量写法），几分钟音频约为 2~4 倍实时速度
-      WHISPER__COMPUTE_TYPE: int8
+      # GPU float16 量化（双下划线是 speaches 嵌套配置的环境变量写法）；显存紧张时可回退 int8（GPU int8 仍远快于 CPU）
+      WHISPER__COMPUTE_TYPE: float16
       # 禁用 HuggingFace Xet 加速通道（cas-server.xethub.hf.co 在部分网络会 TLS 中途断连），
       # 回退普通 HTTP 下载，模型下载更稳
       HF_HUB_DISABLE_XET: "1"
     # 注意：不要用 HF_ENDPOINT 指向 hf-mirror——它的 /api 会 308 重定向回官网，反而让
     # huggingface_hub 校验失败；容器默认能直连 huggingface.co，连不上时给 Docker 配代理。
-    # 如需 GPU 加速（需装 NVIDIA Container Toolkit）：把上面的 image 标签
-    # 换成同项目的 CUDA 版 `ghcr.io/speaches-ai/speaches:0.8.3-cuda`，
-    # 可把 WHISPER__COMPUTE_TYPE 改为 float16，并取消注释下面的 deploy 段：
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: 1
-    #           capabilities: [gpu]
+    # 已启用 GPU 加速（需 NVIDIA Container Toolkit）：image 用 CUDA 版、WHISPER__COMPUTE_TYPE 为 float16，
+    # 下面的 deploy 段把 GPU 分配给容器。回退 CPU：image 换回 :0.8.3-cpu、compute type 改 int8、注释掉 deploy 段。
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     ports:
       - 9000:8000
     volumes:
