@@ -20,7 +20,6 @@ export interface MakeOptions {
 export const paths = {
   meta: (outDir: string) => resolve(outDir, "meta.json"),
   transcript: (outDir: string) => resolve(outDir, "transcript.json"),
-  draft: (outDir: string) => resolve(outDir, "draft.json"),
   course: (outDir: string) => resolve(outDir, "course.json"),
   work: (outDir: string) => resolve(outDir, ".work"),
 };
@@ -71,12 +70,11 @@ export async function forgeMake(opts: MakeOptions): Promise<string> {
     await preflightLlm();
   }
   const draft = await generateDraft(transcript, opts.type, opts.title);
-  await writeJson(paths.draft(outDir), draft);
   console.log(
     `[forge] 结构化完成：1 课（单一课程，长音频分块已合并）/ ${draft.statements.length} 条 statement`,
   );
 
-  // Step 3 产物：直接由 draft + meta 合成 course.json（不再对齐/切片，不产出 audioUrl）
+  // Step 3 产物：直接由内存中的 draft + meta 合成 course.json（不再落 draft.json，不产出 audioUrl）
   const payload: ForgePayload = {
     title: meta.title,
     description: meta.description,
