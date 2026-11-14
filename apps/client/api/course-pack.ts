@@ -8,6 +8,12 @@ export type CoursePacksItemApiResponse = {
   cover: string;
 };
 
+export interface StatementWordApiResponse {
+  word: string;
+  start: number;
+  end: number;
+}
+
 export interface StatementApiResponse {
   order: number;
   chinese: string;
@@ -15,6 +21,11 @@ export interface StatementApiResponse {
   soundmark: string;
   /** 真实音频切片路径（如 /course-audio/xxx.mp3）；为空时回退 TTS */
   audioUrl?: string | null;
+  /** 配套视频中的起点/终点（秒）；有值且课程包带 video 时走视频 seek 播放 */
+  startTime?: number | null;
+  endTime?: number | null;
+  /** 逐词时间戳；为空时单词播放回退 TTS */
+  words?: StatementWordApiResponse[] | null;
   /** 客户端依据已掌握元素标记，非服务端字段 */
   isMastered?: boolean;
 }

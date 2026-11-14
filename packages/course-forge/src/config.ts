@@ -83,6 +83,11 @@ export const config = {
 
   /** 导入目标：earthworm API */
   apiBaseUrl: env("FORGE_API_URL", "http://localhost:3001"),
+  /** API 的课程视频静态目录（挂到 /course-video）；导入时把视频复制到这里 */
+  courseVideoDir: env(
+    "FORGE_COURSE_VIDEO_DIR",
+    join(repoRoot, "apps", "api", "storage", "course-video"),
+  ),
 } as const;
 
 export function createRunId(date = new Date()): string {

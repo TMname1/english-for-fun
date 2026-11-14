@@ -107,6 +107,99 @@ describe("course-pack e2e", () => {
       .expect(400);
   });
 
+  it("post: /course-pack persists video and statement timings", async () => {
+    const words = [
+      { word: "How", start: 1, end: 1.3 },
+      { word: "are", start: 1.3, end: 1.6 },
+      { word: "you", start: 1.6, end: 2 },
+    ];
+    const { body } = await request(app.getHttpServer())
+      .post("/course-pack")
+      .send({
+        title: "视频课程",
+        video: "/course-video/20261113-120000.mp4",
+        courses: {
+          statements: [
+            { english: "How are you", chinese: "你好吗", startTime: 1, endTime: 2, words },
+            { english: "I am fine", chinese: "我很好" },
+          ],
+        },
+      })
+      .expect(201);
+
+    const pack = await db.query.coursePack.findFirst({
+      where: eq(coursePack.id, body.coursePackId),
+    });
+    expect(pack?.video).toBe("/course-video/20261113-120000.mp4");
+
+    const statements = await db.query.statement.findMany({
+      where: eq(statement.coursePackId, body.coursePackId),
+      orderBy: (table, { asc }) => [asc(table.order)],
+    });
+    expect(statements[0]!.startTime).toBe(1);
+    expect(statements[0]!.endTime).toBe(2);
+    expect(statements[0]!.words).toEqual(words);
+    expect(statements[1]!.startTime).toBeNull();
+    expect(statements[1]!.words).toBeNull();
+
+    // learning 接口原样带出新字段
+    await request(app.getHttpServer())
+      .get(`/course-pack/${body.coursePackId}/learning`)
+      .expect(200)
+      .expect(({ body: learning }) => {
+        expect(learning.video).toBe("/course-video/20261113-120000.mp4");
+        expect(learning.statements[0].startTime).toBe(1);
+        expect(learning.statements[0].words).toEqual(words);
+      });
+  });
+
+  it("patch: /course-pack/:coursePackId keeps timings only for unchanged english", async () => {
+    const words = [{ word: "old", start: 0, end: 0.5 }];
+    const { id: coursePackId } = await insertCoursePack(db, { video: "/course-video/v.mp4" });
+    await insertStatement(db, coursePackId, 1, {
+      english: "keep",
+      startTime: 1,
+      endTime: 2,
+      words,
+    });
+    await insertStatement(db, coursePackId, 2, {
+      english: "change",
+      startTime: 3,
+      endTime: 4,
+      words,
+    });
+
+    await request(app.getHttpServer())
+      .patch(`/course-pack/${coursePackId}`)
+      .send({
+        title: "编辑后",
+        courses: {
+          statements: [
+            { english: "keep", chinese: "保留", phonetic: "" },
+            { english: "changed", chinese: "改了", phonetic: "" },
+          ],
+        },
+      })
+      .expect(200);
+
+    const statements = await db.query.statement.findMany({
+      where: eq(statement.coursePackId, coursePackId),
+      orderBy: (table, { asc }) => [asc(table.order)],
+    });
+    expect(statements[0]!.startTime).toBe(1);
+    expect(statements[0]!.endTime).toBe(2);
+    expect(statements[0]!.words).toEqual(words);
+    expect(statements[1]!.startTime).toBeNull();
+    expect(statements[1]!.endTime).toBeNull();
+    expect(statements[1]!.words).toBeNull();
+
+    // 编辑表单不传 video 时保留原值
+    const pack = await db.query.coursePack.findFirst({
+      where: eq(coursePack.id, coursePackId),
+    });
+    expect(pack?.video).toBe("/course-video/v.mp4");
+  });
+
   it("get: /course-audio/:file serves stored audio clips", async () => {
     const clipBytes = Buffer.from("fake-mp3-bytes-for-e2e");
     const fileName = "e2e-clip.mp3";

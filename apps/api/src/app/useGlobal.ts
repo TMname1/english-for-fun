@@ -18,4 +18,15 @@ export const appGlobalMiddleware = (app: INestApplication) => {
     immutable: true,
     index: false,
   });
+
+  // 课程配套视频（如 /course-video/xxx.mp4），forge 导入脚本会把视频写入该目录；
+  // 前端 <video> seek 依赖 HTTP Range，serve-static 原生支持
+  const courseVideoDir =
+    process.env.COURSE_VIDEO_DIR || join(process.cwd(), "storage", "course-video");
+  (app as NestExpressApplication).useStaticAssets(courseVideoDir, {
+    prefix: "/course-video",
+    maxAge: "365d",
+    immutable: true,
+    index: false,
+  });
 };

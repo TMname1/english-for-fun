@@ -21,11 +21,17 @@ export interface Transcript {
   segments: TranscriptSegment[];
 }
 
-/** LLM 结构化产物里的句子 */
+/** LLM 结构化产物里的句子（时间戳由 align 步骤回填） */
 export interface DraftStatement {
   english: string;
   chinese: string;
   phonetic?: string;
+  /** 配套视频中的起点（秒）；对齐失败时缺省 */
+  startTime?: number | null;
+  /** 配套视频中的终点（秒）；对齐失败时缺省 */
+  endTime?: number | null;
+  /** 逐词时间戳；ASR 段级降级时为 null */
+  words?: { word: string; start: number; end: number }[] | null;
 }
 
 /**
@@ -60,5 +66,7 @@ export interface ForgeMeta {
   description: string;
   type: "dialogue" | "music";
   audioPath: string;
+  /** 输入为视频时记录原始视频路径（audioPath 与其相同） */
+  videoPath?: string;
   createdAt: string;
 }

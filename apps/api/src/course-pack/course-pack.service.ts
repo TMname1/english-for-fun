@@ -121,6 +121,7 @@ export class CoursePackService {
       title: coursePackInfo.title,
       description: coursePackInfo.description ?? "",
       cover: coursePackInfo.cover ?? "",
+      video: coursePackInfo.video ?? "",
       courses: {
         title: coursePackInfo.courses.title,
         description: coursePackInfo.courses.description ?? "",
@@ -129,6 +130,9 @@ export class CoursePackService {
           chinese: statement.chinese,
           phonetic: statement.phonetic ?? "",
           audioUrl: statement.audioUrl ?? null,
+          startTime: statement.startTime ?? null,
+          endTime: statement.endTime ?? null,
+          words: statement.words ?? null,
         })),
       },
     };
@@ -163,6 +167,7 @@ export class CoursePackService {
       title: updateCoursePackDto.title,
       description: updateCoursePackDto.description ?? "",
       cover: updateCoursePackDto.cover ?? "",
+      video: updateCoursePackDto.video,
       courses: {
         title: updateCoursePackDto.courses.title,
         description: updateCoursePackDto.courses.description ?? "",
@@ -171,6 +176,9 @@ export class CoursePackService {
           chinese: statement.chinese,
           phonetic: statement.phonetic ?? "",
           audioUrl: statement.audioUrl ?? null,
+          startTime: statement.startTime ?? null,
+          endTime: statement.endTime ?? null,
+          words: statement.words ?? null,
         })),
       },
     };

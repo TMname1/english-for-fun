@@ -5,6 +5,7 @@
     </template>
     <template v-else>
       <MainTool />
+      <MainVideoPlayer />
       <MainGame />
     </template>
   </div>
