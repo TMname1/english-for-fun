@@ -8,8 +8,6 @@ export interface Statement {
   english: string;
   phonetic: string;
   chinese: string;
-  /** 真实音频切片路径（如 /course-audio/xxx.mp3），可选；缺省时播放 TTS */
-  audioUrl?: string | null;
   /** 配套视频中的起点（秒），可选；与 endTime 一起用于视频 seek 播放 */
   startTime?: number | null;
   /** 配套视频中的终点（秒），可选 */

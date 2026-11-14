@@ -36,7 +36,7 @@ async function publishVideo(meta: ForgeMeta): Promise<string | null> {
 /**
  * 导入产物：course.json -> POST /course-pack。
  * statement 携带视频时间戳（startTime/endTime/words，由 forge 的对齐步骤产出）；
- * 视频输入时复制视频文件并写入 course_packs.video。audioUrl 仍不产出（播放走视频 seek 或 TTS）。
+ * 视频输入时复制视频文件并写入 course_packs.video（播放走视频 seek 或 TTS）。
  * 前提：API 已启动，且与本机共享 storage 目录（默认 apps/api/storage/course-video）。
  */
 export async function forgeImport(outDir: string): Promise<CreateCoursePackResponse> {

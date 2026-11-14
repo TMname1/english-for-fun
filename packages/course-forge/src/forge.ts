@@ -102,7 +102,7 @@ export async function forgeMake(opts: MakeOptions): Promise<string> {
     console.log(`[forge] 提示：输入不是视频文件，时间戳仅供音频同步，导入后前端仍走 TTS/音频回退`);
   }
 
-  // Step 3 产物：直接由内存中的 draft + meta 合成 course.json（不再落 draft.json，不产出 audioUrl）
+  // Step 3 产物：直接由内存中的 draft + meta 合成 course.json（不再落 draft.json，不产出音频切片）
   const payload: ForgePayload = {
     title: meta.title,
     description: meta.description,
