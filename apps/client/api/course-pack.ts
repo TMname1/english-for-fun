@@ -19,8 +19,6 @@ export interface StatementApiResponse {
   chinese: string;
   english: string;
   soundmark: string;
-  /** 真实音频切片路径（如 /course-audio/xxx.mp3）；为空时回退 TTS */
-  audioUrl?: string | null;
   /** 配套视频中的起点/终点（秒）；有值且课程包带 video 时走视频 seek 播放 */
   startTime?: number | null;
   endTime?: number | null;

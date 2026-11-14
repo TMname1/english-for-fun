@@ -73,7 +73,6 @@ describe("course-pack e2e", () => {
               english: "How are you?",
               chinese: "你好吗？",
               phonetic: "",
-              audioUrl: "/course-audio/how-are-you.mp3",
             },
             { english: "I am fine.", chinese: "我很好。" },
           ],
@@ -91,12 +90,6 @@ describe("course-pack e2e", () => {
         expect(statements).toHaveLength(2);
         expect(new Set(statements.map((s) => s.coursePackId)).size).toBe(1);
         expect(statements[0]!.coursePackId).toBe(body.coursePackId);
-
-        const withAudio = statements.find((s) => s.english === "How are you?");
-        expect(withAudio?.audioUrl).toBe("/course-audio/how-are-you.mp3");
-
-        const withoutAudio = statements.find((s) => s.english === "I am fine.");
-        expect(withoutAudio?.audioUrl).toBeNull();
       });
   });
 
@@ -281,7 +274,6 @@ describe("course-pack e2e", () => {
     const { id: coursePackId } = await insertCoursePack(db, { title: "旧标题" });
     await insertStatement(db, coursePackId, 1, {
       english: "old",
-      audioUrl: "/course-audio/old.mp3",
     });
     await insertStatement(db, coursePackId, 2, { english: "to-delete" });
 
@@ -316,7 +308,6 @@ describe("course-pack e2e", () => {
         expect(statements).toHaveLength(2);
         expect(statements[0]!.english).toBe("alpha");
         expect(statements[0]!.soundmark).toBe("/a/");
-        expect(statements[0]!.audioUrl).toBeNull();
         expect(statements[1]!.english).toBe("beta");
         expect(statements.map((s) => s.english)).not.toContain("old");
         expect(statements.map((s) => s.english)).not.toContain("to-delete");

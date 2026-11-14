@@ -34,11 +34,6 @@ export class StatementDto {
   @IsOptional()
   phonetic?: string;
 
-  /** 真实音频切片路径（如 /course-audio/xxx.mp3），可选；缺省时播放 TTS */
-  @IsString()
-  @IsOptional()
-  audioUrl?: string;
-
   /** 配套视频中的起点（秒），可选；与 endTime 一起用于视频 seek 播放 */
   @IsNumber()
   @IsOptional()

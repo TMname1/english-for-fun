@@ -12,22 +12,17 @@ const { getPronunciationUrl, resolveAudioUrl } = usePronunciation();
 
 export interface StatementSoundSource {
   english?: string;
-  audioUrl?: string | null;
   startTime?: number | null;
   endTime?: number | null;
 }
 
 /**
- * 句级发音地址：有真实音频切片（audioUrl）用原声，否则回退服务端 TTS。
+ * 句级发音地址：回退服务端 TTS（原声切片能力已移除，播放走视频 seek 或 TTS）。
  * 碎片单词点击播放不走这里，见 usePlayWordSound。
  */
 export function getStatementSoundUrl(statement: StatementSoundSource | undefined): string {
   if (!statement) {
     return "";
-  }
-  const clipUrl = resolveAudioUrl(statement.audioUrl);
-  if (clipUrl) {
-    return clipUrl;
   }
   return getPronunciationUrl(statement.english);
 }

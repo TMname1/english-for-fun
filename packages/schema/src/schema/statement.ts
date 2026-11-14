@@ -12,9 +12,7 @@ export const statement = pgTable("statements", {
   chinese: text("chinese").notNull(),
   english: text("english").notNull(),
   soundmark: text("soundmark").notNull(),
-  /** 真实音频切片的可访问路径（如 /course-audio/xxx.mp3）；为空时回退 TTS */
-  audioUrl: text("audio_url"),
-  /** 配套视频中的起点（秒）；与 endTime 一起用于视频 seek 播放，为空时回退音频/TTS */
+  /** 配套视频中的起点（秒）；与 endTime 一起用于视频 seek 播放，为空时回退 TTS */
   startTime: doublePrecision("start_time"),
   /** 配套视频中的终点（秒） */
   endTime: doublePrecision("end_time"),

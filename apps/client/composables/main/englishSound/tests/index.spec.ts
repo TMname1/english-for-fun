@@ -24,16 +24,8 @@ vi.mock("../video.ts", () => {
 setupPronunciation({ apiBase: "http://api.test" });
 
 describe("getStatementSoundUrl", () => {
-  it("prefers the real audio clip when the statement has one", () => {
-    expect(getStatementSoundUrl({ english: "I like it", audioUrl: "/course-audio/1.mp3" })).toBe(
-      "http://api.test/course-audio/1.mp3",
-    );
-  });
-
-  it("falls back to tts when no clip is attached", () => {
-    expect(getStatementSoundUrl({ english: "I like", audioUrl: null })).toContain(
-      "http://api.test/tts?",
-    );
+  it("returns the tts url for a statement", () => {
+    expect(getStatementSoundUrl({ english: "I like" })).toContain("http://api.test/tts?");
     expect(getStatementSoundUrl({ english: "I like" })).toContain("text=I%20like");
   });
 

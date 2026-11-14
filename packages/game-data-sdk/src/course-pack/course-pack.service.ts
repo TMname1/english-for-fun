@@ -25,12 +25,11 @@ export async function createCoursePack(coursePackInfo: CreateCoursePack) {
       .returning();
 
     const createStatementTasks = coursePackInfo.courses.statements.map(
-      ({ chinese, english, phonetic, audioUrl, startTime, endTime, words }, sIndex) => {
+      ({ chinese, english, phonetic, startTime, endTime, words }, sIndex) => {
         return tx.insert(statementSchema).values({
           chinese,
           english,
           soundmark: phonetic,
-          audioUrl: audioUrl ?? null,
           startTime: startTime ?? null,
           endTime: endTime ?? null,
           words: words ?? null,
@@ -120,14 +119,13 @@ export async function updateCoursePack(coursePackId: string, coursePackInfo: Cre
     await tx.delete(statementSchema).where(eq(statementSchema.coursePackId, coursePackId));
 
     const createStatementTasks = coursePackInfo.courses.statements.map(
-      ({ chinese, english, phonetic, audioUrl, startTime, endTime, words }, sIndex) => {
+      ({ chinese, english, phonetic, startTime, endTime, words }, sIndex) => {
         const prev = previousStatements[sIndex];
         const unchanged = prev !== undefined && prev.english === english;
         return tx.insert(statementSchema).values({
           chinese,
           english,
           soundmark: phonetic,
-          audioUrl: audioUrl ?? null,
           startTime: startTime ?? (unchanged ? prev.startTime : null),
           endTime: endTime ?? (unchanged ? prev.endTime : null),
           words: words ?? (unchanged ? (prev.words as WordTiming[] | null) : null),

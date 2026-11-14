@@ -115,10 +115,7 @@ function jumpTo(index: number, item: any) {
   coursesStore.toSpecificStatement(index);
 }
 
-function handlePlayEnglishSound(
-  event: Event,
-  statement: { english?: string; audioUrl?: string | null },
-) {
+function handlePlayEnglishSound(event: Event, statement: { english?: string }) {
   event.stopPropagation();
   playEnglish(statement);
 }
