@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 
-import type { Transcript, TranscriptSegment, TranscriptWord } from "./types";
+import type { ClipRange, Transcript, TranscriptSegment, TranscriptWord } from "./types";
 import { config, repoRoot } from "./config";
 import { runFfmpeg } from "./util";
 
@@ -123,11 +123,20 @@ export function stopAsrService(): void {
   console.log(`[asr] 已停止 ASR 容器，显存让给 LLM`);
 }
 
-/** 转码为 ASR 友好格式：16kHz 单声道 16-bit PCM wav */
-export async function transcodeToWav(audioPath: string, wavPath: string): Promise<void> {
-  console.log(`[asr] 转码 16k 单声道 wav -> ${wavPath}`);
+/** 转码为 ASR 友好格式：16kHz 单声道 16-bit PCM wav；range 存在时只提取该时间区间 */
+export async function transcodeToWav(
+  audioPath: string,
+  wavPath: string,
+  range?: ClipRange,
+): Promise<void> {
+  console.log(
+    `[asr] 转码 16k 单声道 wav -> ${wavPath}${range ? `（区间 ${range.start.toFixed(2)}s–${range.end.toFixed(2)}s）` : ""}`,
+  );
+  // 输入侧 seek + 重编码：对音频是采样级精确的
+  const seekArgs = range ? ["-ss", String(range.start), "-t", String(range.end - range.start)] : [];
   await runFfmpeg([
     "-y",
+    ...seekArgs,
     "-i",
     audioPath,
     "-vn",

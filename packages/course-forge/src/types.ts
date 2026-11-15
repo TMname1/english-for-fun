@@ -5,6 +5,12 @@ export interface TranscriptWord {
   end: number;
 }
 
+/** 用户选中的视频时间区间（秒，相对原视频绝对时间） */
+export interface ClipRange {
+  start: number;
+  end: number;
+}
+
 /** ASR 段（utterance） */
 export interface TranscriptSegment {
   id: number;
@@ -12,6 +18,8 @@ export interface TranscriptSegment {
   end: number;
   text: string;
   words?: TranscriptWord[];
+  /** 所属 clip 序号；仅切片转写流程存在，用于禁止跨 clip 拼句 */
+  clipIndex?: number;
 }
 
 export interface Transcript {

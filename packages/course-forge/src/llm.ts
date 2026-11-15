@@ -429,6 +429,8 @@ export function mergeSegments(segments: TranscriptSegment[]): TranscriptSegment[
   let pending = "";
   let pendingId = 0;
   let pendingStart = 0;
+  let pendingEnd = 0;
+  let pendingClip: number | undefined;
 
   const push = (text: string, end: number): void => {
     const trimmed = text.replace(/\s+/g, " ").trim();
@@ -439,11 +441,18 @@ export function mergeSegments(segments: TranscriptSegment[]): TranscriptSegment[
   for (const seg of segments) {
     const text = seg.text.trim();
     if (!text) continue;
+    // clip 边界强制断句：跨 clip 拼句会产出跨越未选区间的 statement，播放时漏出未选内容
+    if (pending && seg.clipIndex !== pendingClip) {
+      push(pending, pendingEnd);
+      pending = "";
+    }
     if (!pending) {
       pendingId = seg.id;
       pendingStart = seg.start;
+      pendingClip = seg.clipIndex;
     }
     pending = pending ? `${pending} ${text}` : text;
+    pendingEnd = seg.end;
 
     if (SENTENCE_END.test(pending)) {
       push(pending, seg.end);
@@ -452,7 +461,7 @@ export function mergeSegments(segments: TranscriptSegment[]): TranscriptSegment[
     }
   }
   if (pending) {
-    push(pending, segments.length > 0 ? segments[segments.length - 1].end : 0);
+    push(pending, pendingEnd);
   }
   return sentences;
 }
