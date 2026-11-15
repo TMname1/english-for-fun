@@ -202,22 +202,23 @@ pnpm forge -- --audio "D:/media/podcast.mp3" --title "某播客" --type dialogue
 流水线侧（`course-forge`，全部有合理默认，通常不用设；也可集中写进 `packages/course-forge/.env`，
 复制 `.env.example` 即可，进程环境变量优先于该文件）：
 
-| 变量                         | 默认                             | 说明                                                                                         |
-| ---------------------------- | -------------------------------- | -------------------------------------------------------------------------------------------- |
-| `FORGE_ASR_URL`              | `http://localhost:9000`          | ASR 服务地址（compose `asr` 的宿主端口）。指到外部服务即绕过自动拉容器                       |
-| `FORGE_ASR_WAIT_MS`          | 900000（15 分）                  | 拉起 asr 容器后等待健康检查的上限；首次下模型慢可调大                                        |
-| `FORGE_ASR_STOP_AFTER`       | `1`（自动停止）                  | 转写结束后是否停止 ASR 容器释放显存；设为 `0` 保持常驻可加快下次转写                         |
-| `FORGE_LLM_BASE_URL`         | `http://localhost:11434/v1`      | OpenAI 兼容 chat 端点（ollama / DeepSeek / OpenAI…）                                         |
-| `FORGE_LLM_MODEL`            | `qwen3:4b`                       | 结构化模型；4B 本地模型已证实做不动本课程组装任务，推荐换云端 qwen-plus（见 `.env.example`） |
-| `FORGE_LLM_API_KEY`          | `ollama`                         | 云端服务填真实 key                                                                           |
-| `FORGE_LLM_MAX_TOKENS`       | 16000                            | 单次 LLM 输出上限                                                                            |
-| `FORGE_LLM_REASONING_EFFORT` | `none`                           | ollama 专用参数；非 ollama（如 DashScope）**必须置空**，留空串即不发送该字段                 |
-| `FORGE_LLM_MAX_WORDS`        | 250                              | 单次调用携带的最大词数；转写先预拼成完整句再分块，**一个分块生成一门课**                     |
-| `FORGE_LLM_PREFLIGHT`        | `1`                              | LLM 调用前是否预检（服务连通/模型存在/显存余量）；设为 `0` 跳过                              |
-| `FORGE_LLM_VRAM_STRICT`      | `1`                              | 显存估算不足时是否直接拦停；设为 `0` 仅警告（接受 CPU 卸载慢跑）                             |
-| `FORGE_LLM_VRAM_MARGIN_MB`   | 512                              | 显存估算余量（KV cache + CUDA 上下文开销，MB）                                               |
-| `FORGE_API_URL`              | `http://localhost:3001`          | 导入目标 API                                                                                 |
-| `FORGE_COURSE_VIDEO_DIR`     | `apps/api/storage/course-video/` | 导入时视频复制目标目录（API 静态挂载到 `/course-video` 前缀）                                |
+| 变量                         | 默认                             | 说明                                                                                                                 |
+| ---------------------------- | -------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `FORGE_ASR_URL`              | `http://localhost:9000`          | ASR 服务地址（compose `asr` 的宿主端口）。指到外部服务即绕过自动拉容器                                               |
+| `FORGE_ASR_WAIT_MS`          | 900000（15 分）                  | 拉起 asr 容器后等待健康检查的上限；首次下模型慢可调大                                                                |
+| `FORGE_ASR_STOP_AFTER`       | `1`（自动停止）                  | 转写结束后是否停止 ASR 容器释放显存；设为 `0` 保持常驻可加快下次转写                                                 |
+| `FORGE_LLM_BASE_URL`         | `http://localhost:11434/v1`      | OpenAI 兼容 chat 端点（ollama / DeepSeek / OpenAI…）                                                                 |
+| `FORGE_LLM_MODEL`            | `qwen3:4b`                       | 结构化模型；4B 本地模型已证实做不动本课程组装任务，推荐换云端 qwen-plus（见 `.env.example`）                         |
+| `FORGE_LLM_API_KEY`          | `ollama`                         | 云端服务填真实 key                                                                                                   |
+| `FORGE_LLM_MAX_TOKENS`       | 16000                            | 单次 LLM 输出上限                                                                                                    |
+| `FORGE_LLM_REASONING_EFFORT` | `none`                           | ollama 专用参数；非 ollama（如 DashScope）**必须置空**，留空串即不发送该字段                                         |
+| `FORGE_LLM_ENABLE_THINKING`  | 空（不发送）                     | 思考开关（`enable_thinking`）；qwen3.8-flash 等默认开思考的云端模型设 `false`，否则思考吃光 max_tokens、生成看似卡死 |
+| `FORGE_LLM_MAX_WORDS`        | 250                              | 单次调用携带的最大词数；转写先预拼成完整句再分块，**一个分块生成一门课**                                             |
+| `FORGE_LLM_PREFLIGHT`        | `1`                              | LLM 调用前是否预检（服务连通/模型存在/显存余量）；设为 `0` 跳过                                                      |
+| `FORGE_LLM_VRAM_STRICT`      | `1`                              | 显存估算不足时是否直接拦停；设为 `0` 仅警告（接受 CPU 卸载慢跑）                                                     |
+| `FORGE_LLM_VRAM_MARGIN_MB`   | 512                              | 显存估算余量（KV cache + CUDA 上下文开销，MB）                                                                       |
+| `FORGE_API_URL`              | `http://localhost:3001`          | 导入目标 API                                                                                                         |
+| `FORGE_COURSE_VIDEO_DIR`     | `apps/api/storage/course-video/` | 导入时视频复制目标目录（API 静态挂载到 `/course-video` 前缀）                                                        |
 
 ASR 容器侧（改 `docker-compose.yml` 的 `asr` 服务）：
 
