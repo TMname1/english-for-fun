@@ -1,9 +1,10 @@
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
 
 import type { CreateForgeJobDto } from "./dto/create-forge-job.dto";
+import type { ResumeForgeJobDto } from "./dto/resume-forge-job.dto";
 import type { ForgeJobRecord, ForgeJobStage } from "./job-store";
 import type { ForgeRunnerHandle } from "./runner-client";
 import { JobStore } from "./job-store";
@@ -25,6 +26,8 @@ export interface ForgeJobView {
   type: "dialogue" | "music";
   language?: string;
   description?: string;
+  /** status=awaiting_review 时附带：ASR 转录结果（word 级），供前端校对编辑 */
+  transcriptJson?: unknown;
   /** 仅在 status=done 时附带，结构同 course.json（ForgePayload） */
   courseJson?: unknown;
 }
@@ -55,11 +58,13 @@ export class ForgeService {
       type: dto.type,
       language: dto.language ?? "en",
       description: dto.desc,
+      phase: "transcribe",
     };
     this.store.create(record);
 
     const handle = spawnForgeRunner(
       {
+        phase: "transcribe",
         mediaPath: videoFsPath,
         title: dto.title,
         type: dto.type,
@@ -101,6 +106,15 @@ export class ForgeService {
       description: record.description,
     };
 
+    if (record.status === "awaiting_review") {
+      try {
+        const text = await readFile(join(record.outDir, "transcript.json"), "utf-8");
+        view.transcriptJson = JSON.parse(text);
+      } catch {
+        // transcript 缺失时不阻断轮询，前端保持 awaiting_review 状态即可
+      }
+    }
+
     if (record.status === "done") {
       try {
         const text = await readFile(join(record.outDir, "course.json"), "utf-8");
@@ -112,10 +126,62 @@ export class ForgeService {
     return view;
   }
 
+  /**
+   * 校对后续跑：校验状态、落 transcript.edited.json、起 structure 阶段子进程。
+   * word 级编辑（改文字/删整段，不增删词、不改时间）由 course-forge 在子进程内规整为 Transcript。
+   */
+  async resumeJob(id: string, dto: ResumeForgeJobDto): Promise<{ jobId: string }> {
+    const record = this.store.get(id);
+    if (!record) throw new NotFoundException(`未找到任务 ${id}`);
+    if (record.status !== "awaiting_review") {
+      throw new BadRequestException(`任务 ${id} 当前状态 ${record.status}，无法继续`);
+    }
+    if (!Array.isArray(dto?.segments) || dto.segments.length === 0) {
+      throw new BadRequestException("校对的转录分段不能为空");
+    }
+
+    await writeFile(
+      join(record.outDir, "transcript.edited.json"),
+      `${JSON.stringify({ segments: dto.segments }, null, 2)}\n`,
+      "utf-8",
+    );
+
+    this.store.update(id, {
+      status: "running",
+      stage: "structuring",
+      message: "按校对结果继续：LLM 结构化中…",
+      phase: "structure",
+    });
+
+    const handle = spawnForgeRunner(
+      {
+        phase: "structure",
+        language: record.language,
+        outDir: record.outDir,
+      },
+      {
+        onStage: (stage) => this.handleStage(id, stage),
+        onDone: () => this.handleDone(id),
+        onError: (msg) => this.handleError(id, msg),
+      },
+    );
+    this.handles.set(id, handle);
+    this.timeouts.set(
+      id,
+      setTimeout(() => this.handleTimeout(id), JOB_TIMEOUT_MS),
+    );
+
+    return { jobId: id };
+  }
+
   cancelJob(id: string): { cancelled: boolean } {
     const record = this.store.get(id);
     if (!record) throw new NotFoundException(`未找到任务 ${id}`);
-    if (record.status !== "running" && record.status !== "pending") {
+    if (
+      record.status !== "running" &&
+      record.status !== "pending" &&
+      record.status !== "awaiting_review"
+    ) {
       return { cancelled: false };
     }
     this.handles.get(id)?.kill();
@@ -138,6 +204,19 @@ export class ForgeService {
   private handleDone(id: string): void {
     const record = this.store.get(id);
     if (!record || record.status !== "running") return;
+
+    // 第一段（转录）完成 → 暂停等待人工校对，不进 done
+    if (record.phase === "transcribe") {
+      this.clearTimers(id);
+      this.handles.delete(id);
+      this.store.update(id, {
+        status: "awaiting_review",
+        stage: "transcribed",
+        message: "转录完成，等待校对",
+      });
+      return;
+    }
+
     this.clearTimers(id);
     this.store.update(id, {
       status: "done",
@@ -186,6 +265,8 @@ function stageMessage(stage: ForgeJobStage): string {
       return "音频提取中…";
     case "transcribing":
       return "ASR 转写中…";
+    case "transcribed":
+      return "转录完成，等待校对";
     case "structuring":
       return "LLM 结构化中…";
     case "aligning":

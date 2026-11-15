@@ -17,6 +17,7 @@ import { FileInterceptor } from "@nestjs/platform-express";
 import { diskStorage } from "multer";
 
 import { CreateForgeJobDto } from "./dto/create-forge-job.dto";
+import { ResumeForgeJobDto } from "./dto/resume-forge-job.dto";
 import { ForgeService } from "./forge.service";
 import { COURSE_VIDEO_DIR } from "./runner-client";
 
@@ -72,5 +73,11 @@ export class ForgeController {
   @Delete("jobs/:id")
   cancelJob(@Param("id") id: string) {
     return this.forgeService.cancelJob(id);
+  }
+
+  /** 转录后人工校对完成，续跑结构化 + 对齐；body 为 word 级编辑后的分段 */
+  @Post("jobs/:id/resume")
+  resumeJob(@Param("id") id: string, @Body() dto: ResumeForgeJobDto) {
+    return this.forgeService.resumeJob(id, dto);
   }
 }

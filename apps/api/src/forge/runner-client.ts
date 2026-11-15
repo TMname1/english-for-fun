@@ -28,9 +28,12 @@ export const COURSE_VIDEO_DIR =
   process.env.COURSE_VIDEO_DIR || join(REPO_ROOT, "apps", "api", "storage", "course-video");
 
 export interface ForgeRunnerParams {
-  mediaPath: string;
-  title: string;
-  type: "dialogue" | "music";
+  /** transcribe：跑「提取音轨 + ASR 转写」后暂停；structure：读 outDir 下编辑过的 transcript 续跑 */
+  phase: "transcribe" | "structure";
+  /** transcribe 阶段必填；structure 阶段不需要 */
+  mediaPath?: string;
+  title?: string;
+  type?: "dialogue" | "music";
   description?: string;
   language?: string;
   outDir: string;
@@ -65,13 +68,16 @@ export function spawnForgeRunner(
 ): ForgeRunnerHandle {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
-    FORGE_MEDIA_PATH: params.mediaPath,
-    FORGE_TITLE: params.title,
-    FORGE_TYPE: params.type,
+    FORGE_PHASE: params.phase,
     FORGE_OUT_DIR: params.outDir,
   };
-  if (params.description) env.FORGE_DESC = params.description;
-  if (params.language) env.FORGE_LANGUAGE = params.language;
+  if (params.phase === "transcribe") {
+    env.FORGE_MEDIA_PATH = params.mediaPath;
+    env.FORGE_TITLE = params.title;
+    env.FORGE_TYPE = params.type;
+    if (params.description) env.FORGE_DESC = params.description;
+    if (params.language) env.FORGE_LANGUAGE = params.language;
+  }
 
   const child = spawn("pnpm", ["exec", "tsx", "src/pipeline-runner.ts"], {
     cwd: FORGE_PKG_DIR,

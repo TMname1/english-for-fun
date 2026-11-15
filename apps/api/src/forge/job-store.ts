@@ -1,14 +1,23 @@
 import { Injectable, OnModuleDestroy } from "@nestjs/common";
 
-export type ForgeJobStatus = "pending" | "running" | "done" | "failed" | "cancelled";
+export type ForgeJobStatus =
+  | "pending"
+  | "running"
+  | "awaiting_review"
+  | "done"
+  | "failed"
+  | "cancelled";
 
 export type ForgeJobStage =
   | "pending"
   | "transcoding"
   | "transcribing"
+  | "transcribed"
   | "structuring"
   | "aligning"
   | "done";
+
+export type ForgePhase = "transcribe" | "structure";
 
 export interface ForgeJobRecord {
   id: string;
@@ -29,6 +38,8 @@ export interface ForgeJobRecord {
   type: "dialogue" | "music";
   language?: string;
   description?: string;
+  /** 两段式流程当前所处阶段：transcribe（转录后暂停）/ structure（校对后续跑） */
+  phase: ForgePhase;
 }
 
 const STALE_AFTER_MS = 4 * 60 * 60 * 1000;
