@@ -1,4 +1,6 @@
 import { usePronunciation } from "~/composables/user/pronunciation";
+import { useCourseStore } from "~/store/course";
+import { playRange, setVideoSource } from "./video";
 
 // 便于测试
 // 后面不使用 audio 后也可以不破坏业务逻辑
@@ -15,8 +17,31 @@ export function updateSource(src: string) {
   audio.load();
 }
 
-const { getPronunciationUrl } = usePronunciation();
+const { getPronunciationUrl, resolveAudioUrl } = usePronunciation();
+
+/** 与 course-forge align.ts 相同的归一化：小写、只留字母数字 */
+function normalizeWord(word: string): string {
+  return word.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+/**
+ * 在当前 statement 的逐词时间戳里找 word 的区间（同词重复出现时取首个匹配）。
+ * 课程包无视频或无 words 数据时返回 null，回退 TTS。
+ */
+function findWordVideoTiming(word: string): { start: number; end: number } | null {
+  const courseStore = useCourseStore();
+  const pack = courseStore.currentLearning;
+  const words = courseStore.currentStatement?.words;
+  if (!pack?.video || !words?.length) {
+    return null;
+  }
+  const target = normalizeWord(word);
+  const found = words.find((w) => normalizeWord(w.word) === target);
+  return found ? { start: found.start, end: found.end } : null;
+}
+
 export function usePlayWordSound() {
+  const courseStore = useCourseStore();
   const wordAudio = new Audio();
   let lastWord = "";
   let isPlaying = false;
@@ -30,6 +55,13 @@ export function usePlayWordSound() {
   };
 
   function handlePlayWordSound(word: string) {
+    const timing = findWordVideoTiming(word);
+    if (timing) {
+      setVideoSource(resolveAudioUrl(courseStore.currentLearning?.video));
+      // 词尾加一点余量，避免截断感
+      playRange(timing.start, timing.end + 0.05);
+      return;
+    }
     if (isPlaying && lastWord === word) {
       // skip
       return;

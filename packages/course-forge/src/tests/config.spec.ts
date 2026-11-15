@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseDotEnv } from "../config";
+import { parseDotEnv, parseEnableThinking } from "../config";
 
 describe("parseDotEnv", () => {
   it("解析 KEY=VALUE / 引号 / 注释 / 显式空值", () => {
@@ -34,5 +34,17 @@ describe("parseDotEnv", () => {
       URL: "https://x/y?a=b",
       Q: "keep",
     });
+  });
+});
+
+describe("parseEnableThinking", () => {
+  it("false/0 -> false，true/1 -> true，其余不发送", () => {
+    expect(parseEnableThinking("false")).toBe(false);
+    expect(parseEnableThinking("0")).toBe(false);
+    expect(parseEnableThinking("true")).toBe(true);
+    expect(parseEnableThinking("1")).toBe(true);
+    expect(parseEnableThinking("")).toBeUndefined();
+    expect(parseEnableThinking("  ")).toBeUndefined();
+    expect(parseEnableThinking("none")).toBeUndefined();
   });
 });

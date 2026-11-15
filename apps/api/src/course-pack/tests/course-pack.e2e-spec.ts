@@ -73,7 +73,6 @@ describe("course-pack e2e", () => {
               english: "How are you?",
               chinese: "你好吗？",
               phonetic: "",
-              audioUrl: "/course-audio/how-are-you.mp3",
             },
             { english: "I am fine.", chinese: "我很好。" },
           ],
@@ -91,12 +90,6 @@ describe("course-pack e2e", () => {
         expect(statements).toHaveLength(2);
         expect(new Set(statements.map((s) => s.coursePackId)).size).toBe(1);
         expect(statements[0]!.coursePackId).toBe(body.coursePackId);
-
-        const withAudio = statements.find((s) => s.english === "How are you?");
-        expect(withAudio?.audioUrl).toBe("/course-audio/how-are-you.mp3");
-
-        const withoutAudio = statements.find((s) => s.english === "I am fine.");
-        expect(withoutAudio?.audioUrl).toBeNull();
       });
   });
 
@@ -105,6 +98,99 @@ describe("course-pack e2e", () => {
       .post("/course-pack")
       .send({ title: "", courses: { statements: [] } })
       .expect(400);
+  });
+
+  it("post: /course-pack persists video and statement timings", async () => {
+    const words = [
+      { word: "How", start: 1, end: 1.3 },
+      { word: "are", start: 1.3, end: 1.6 },
+      { word: "you", start: 1.6, end: 2 },
+    ];
+    const { body } = await request(app.getHttpServer())
+      .post("/course-pack")
+      .send({
+        title: "视频课程",
+        video: "/course-video/20261113-120000.mp4",
+        courses: {
+          statements: [
+            { english: "How are you", chinese: "你好吗", startTime: 1, endTime: 2, words },
+            { english: "I am fine", chinese: "我很好" },
+          ],
+        },
+      })
+      .expect(201);
+
+    const pack = await db.query.coursePack.findFirst({
+      where: eq(coursePack.id, body.coursePackId),
+    });
+    expect(pack?.video).toBe("/course-video/20261113-120000.mp4");
+
+    const statements = await db.query.statement.findMany({
+      where: eq(statement.coursePackId, body.coursePackId),
+      orderBy: (table, { asc }) => [asc(table.order)],
+    });
+    expect(statements[0]!.startTime).toBe(1);
+    expect(statements[0]!.endTime).toBe(2);
+    expect(statements[0]!.words).toEqual(words);
+    expect(statements[1]!.startTime).toBeNull();
+    expect(statements[1]!.words).toBeNull();
+
+    // learning 接口原样带出新字段
+    await request(app.getHttpServer())
+      .get(`/course-pack/${body.coursePackId}/learning`)
+      .expect(200)
+      .expect(({ body: learning }) => {
+        expect(learning.video).toBe("/course-video/20261113-120000.mp4");
+        expect(learning.statements[0].startTime).toBe(1);
+        expect(learning.statements[0].words).toEqual(words);
+      });
+  });
+
+  it("patch: /course-pack/:coursePackId keeps timings only for unchanged english", async () => {
+    const words = [{ word: "old", start: 0, end: 0.5 }];
+    const { id: coursePackId } = await insertCoursePack(db, { video: "/course-video/v.mp4" });
+    await insertStatement(db, coursePackId, 1, {
+      english: "keep",
+      startTime: 1,
+      endTime: 2,
+      words,
+    });
+    await insertStatement(db, coursePackId, 2, {
+      english: "change",
+      startTime: 3,
+      endTime: 4,
+      words,
+    });
+
+    await request(app.getHttpServer())
+      .patch(`/course-pack/${coursePackId}`)
+      .send({
+        title: "编辑后",
+        courses: {
+          statements: [
+            { english: "keep", chinese: "保留", phonetic: "" },
+            { english: "changed", chinese: "改了", phonetic: "" },
+          ],
+        },
+      })
+      .expect(200);
+
+    const statements = await db.query.statement.findMany({
+      where: eq(statement.coursePackId, coursePackId),
+      orderBy: (table, { asc }) => [asc(table.order)],
+    });
+    expect(statements[0]!.startTime).toBe(1);
+    expect(statements[0]!.endTime).toBe(2);
+    expect(statements[0]!.words).toEqual(words);
+    expect(statements[1]!.startTime).toBeNull();
+    expect(statements[1]!.endTime).toBeNull();
+    expect(statements[1]!.words).toBeNull();
+
+    // 编辑表单不传 video 时保留原值
+    const pack = await db.query.coursePack.findFirst({
+      where: eq(coursePack.id, coursePackId),
+    });
+    expect(pack?.video).toBe("/course-video/v.mp4");
   });
 
   it("get: /course-audio/:file serves stored audio clips", async () => {
@@ -158,13 +244,20 @@ describe("course-pack e2e", () => {
     return request(app.getHttpServer()).delete(`/course-pack/${createId()}`).expect(404);
   });
 
-  it("get: /course-pack/:coursePackId/edit returns pack meta and statements (no progress)", async () => {
+  it("get: /course-pack/:coursePackId/edit returns video, statements and timings (no progress)", async () => {
     const { id: coursePackId } = await insertCoursePack(db, {
       title: "待编辑",
       description: "原描述",
       cover: "cover.png",
+      video: "/course-video/e2e.mp4",
     });
-    await insertStatement(db, coursePackId, 2, { english: "two", chinese: "二", soundmark: "/2/" });
+    await insertStatement(db, coursePackId, 2, {
+      english: "two",
+      chinese: "二",
+      soundmark: "/2/",
+      startTime: 3,
+      endTime: 4,
+    });
     await insertStatement(db, coursePackId, 1, { english: "one", chinese: "一", soundmark: "/1/" });
 
     return request(app.getHttpServer())
@@ -175,20 +268,31 @@ describe("course-pack e2e", () => {
           title: "待编辑",
           description: "原描述",
           cover: "cover.png",
+          video: "/course-video/e2e.mp4",
           statements: [
             { english: "one", chinese: "一", phonetic: "/1/" },
-            { english: "two", chinese: "二", phonetic: "/2/" },
+            { english: "two", chinese: "二", phonetic: "/2/", startTime: 3, endTime: 4 },
           ],
         });
         expect(body).not.toHaveProperty("statementIndex");
       });
   });
 
+  it("post: /course-pack/video without a file returns 400", async () => {
+    return request(app.getHttpServer()).post("/course-pack/video").expect(400);
+  });
+
+  it("post: /course-pack/video with unsupported extension returns 400", async () => {
+    return request(app.getHttpServer())
+      .post("/course-pack/video")
+      .attach("videoFile", Buffer.from("not-a-video"), "notes.txt")
+      .expect(400);
+  });
+
   it("patch: /course-pack/:coursePackId updates meta and rebuilds statements", async () => {
     const { id: coursePackId } = await insertCoursePack(db, { title: "旧标题" });
     await insertStatement(db, coursePackId, 1, {
       english: "old",
-      audioUrl: "/course-audio/old.mp3",
     });
     await insertStatement(db, coursePackId, 2, { english: "to-delete" });
 
@@ -223,7 +327,6 @@ describe("course-pack e2e", () => {
         expect(statements).toHaveLength(2);
         expect(statements[0]!.english).toBe("alpha");
         expect(statements[0]!.soundmark).toBe("/a/");
-        expect(statements[0]!.audioUrl).toBeNull();
         expect(statements[1]!.english).toBe("beta");
         expect(statements.map((s) => s.english)).not.toContain("old");
         expect(statements.map((s) => s.english)).not.toContain("to-delete");

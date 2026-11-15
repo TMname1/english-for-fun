@@ -64,8 +64,8 @@ export function usePronunciation() {
   }
 
   /**
-   * 解析真实音频切片路径（statements.audioUrl，形如 /course-audio/xxx.mp3）为绝对地址。
-   * 为空返回 ""，由调用方回退 TTS。
+   * 把站内相对路径（如 /course-video/xxx.mp4、/course-audio/xxx.mp3）解析为绝对地址。
+   * 为空返回 ""。当前主要用于配套视频的资源地址解析。
    */
   function resolveAudioUrl(audioUrl: string | null | undefined): string {
     const path = audioUrl?.trim();

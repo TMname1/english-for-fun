@@ -12,6 +12,8 @@ export interface PackForm {
   title: string;
   description: string;
   cover: string;
+  /** 配套视频：站内路径（/course-video/xxx.mp4）或外部 URL，可为空串 */
+  video: string;
 }
 
 export type ParseResult =
@@ -44,6 +46,21 @@ export function createEmptyCourse(): CourseForm {
 
 const FAIL = (error: string): { ok: false; error: string } => ({ ok: false, error });
 
+/** 规范逐词时间戳：接受 { word, start, end }[]，非法条目跳过；空或全非法返回 undefined（不下发） */
+function normalizeWords(raw: unknown): CreateCoursePackStatement["words"] {
+  if (!Array.isArray(raw) || raw.length === 0) return undefined;
+  const words: { word: string; start: number; end: number }[] = [];
+  for (const item of raw) {
+    if (typeof item !== "object" || item === null) continue;
+    const { word, start, end } = item as Record<string, unknown>;
+    const s = toTimingNumber(start);
+    const e = toTimingNumber(end);
+    if (typeof word !== "string" || !word.trim() || s === undefined || e === undefined) continue;
+    words.push({ word: word.trim(), start: s, end: e });
+  }
+  return words.length > 0 ? words : undefined;
+}
+
 /** 把句子数组规范为 CreateCoursePackStatement[]，错误信息带 prefix 前缀 */
 function normalizeStatements(rawList: unknown[], prefix = ""): ParseResult {
   const statements: CreateCoursePackStatement[] = [];
@@ -51,7 +68,10 @@ function normalizeStatements(rawList: unknown[], prefix = ""): ParseResult {
     if (typeof item !== "object" || item === null) {
       return FAIL(`${prefix}第 ${index + 1} 条句子必须是对象`);
     }
-    const { english, chinese, phonetic, soundmark } = item as Record<string, unknown>;
+    const { english, chinese, phonetic, soundmark, startTime, endTime, words } = item as Record<
+      string,
+      unknown
+    >;
     if (typeof english !== "string" || !english.trim()) {
       return FAIL(`${prefix}第 ${index + 1} 条句子缺少 english 字段`);
     }
@@ -62,7 +82,14 @@ function normalizeStatements(rawList: unknown[], prefix = ""): ParseResult {
     if (typeof normalizedPhonetic !== "string") {
       return FAIL(`${prefix}第 ${index + 1} 条句子的音标字段必须是字符串`);
     }
-    statements.push({ english, chinese, phonetic: normalizedPhonetic });
+    const statement: CreateCoursePackStatement = { english, chinese, phonetic: normalizedPhonetic };
+    const start = toTimingNumber(startTime);
+    const end = toTimingNumber(endTime);
+    if (start !== undefined) statement.startTime = start;
+    if (end !== undefined) statement.endTime = end;
+    const normalizedWords = normalizeWords(words);
+    if (normalizedWords) statement.words = normalizedWords;
+    statements.push(statement);
   }
 
   return { ok: true, statements };
@@ -122,36 +149,6 @@ export function parseCourseJsonImport(fileText: string): CourseJsonImportResult 
 }
 
 /**
- * 解析"仅课程"的导入文件：单一课程对象 { title?, description?, statements }。
- * "分课程"功能已删除：不再接受课程数组。
- */
-export function parseCourseOnlyJsonImport(fileText: string): CourseImportResult {
-  const trimmed = fileText.trim();
-  if (!trimmed) return FAIL("文件内容为空");
-
-  let data: unknown;
-  try {
-    data = JSON.parse(trimmed);
-  } catch {
-    return FAIL("文件内容不是合法的 JSON");
-  }
-
-  if (Array.isArray(data)) {
-    return FAIL("课程文件顶层必须是单一课程对象（含 statements），不再支持课程数组");
-  }
-  if (typeof data !== "object" || data === null) {
-    return FAIL("课程文件必须是一个对象");
-  }
-  const { courses } = data as Record<string, unknown>;
-  if (Array.isArray(courses)) {
-    return FAIL("检测到旧的分课程格式（courses 数组），请先合并为单一课程对象");
-  }
-
-  const source = (courses && typeof courses === "object" ? courses : data) as unknown;
-  return normalizeImportedCourse(source, "课程");
-}
-
-/**
  * 解析完整课程包 JSON（Course Forge 产物格式）：
  * { title, description?, cover?, courses: { title?, description?, statements } }
  */
@@ -170,13 +167,16 @@ export function parseCoursePackJsonImport(fileText: string): PackImportResult {
     return FAIL("完整课程包 JSON 顶层必须是对象（含 title 与 courses）");
   }
 
-  const { title, description, cover, courses: rawCourses } = data as Record<string, unknown>;
+  const { title, description, cover, video, courses: rawCourses } = data as Record<string, unknown>;
   if (typeof title !== "string" || !title.trim()) return FAIL("课程包 JSON 缺少 title");
   if (description !== undefined && typeof description !== "string") {
     return FAIL("课程包 JSON 的 description 必须是字符串");
   }
   if (cover !== undefined && typeof cover !== "string") {
     return FAIL("课程包 JSON 的 cover 必须是字符串");
+  }
+  if (video !== undefined && typeof video !== "string") {
+    return FAIL("课程包 JSON 的 video 必须是字符串");
   }
   if (Array.isArray(rawCourses)) {
     return FAIL("课程包 JSON 的 courses 必须是单一课程对象，不再支持课程数组");
@@ -190,47 +190,24 @@ export function parseCoursePackJsonImport(fileText: string): PackImportResult {
 
   return {
     ok: true,
-    pack: { title: title.trim(), description: description ?? "", cover: cover ?? "" },
+    pack: {
+      title: title.trim(),
+      description: description ?? "",
+      cover: cover ?? "",
+      video: video ?? "",
+    },
     course: courseResult.course,
   };
 }
 
-export function parseStatementsJson(text: string): ParseResult {
-  const trimmed = text.trim();
-  if (!trimmed) return FAIL("句子内容不能为空");
-
-  let data: unknown;
-  try {
-    data = JSON.parse(trimmed);
-  } catch {
-    return FAIL("句子内容不是合法的 JSON");
-  }
-
-  if (!Array.isArray(data)) return FAIL("句子内容必须是数组");
-  if (data.length === 0) return FAIL("句子内容至少要有 1 条");
-
-  const statements: CreateCoursePackStatement[] = [];
-  for (const [index, item] of data.entries()) {
-    if (typeof item !== "object" || item === null) {
-      return FAIL(`第 ${index + 1} 条句子必须是对象`);
-    }
-    const { english, chinese, phonetic } = item as Record<string, unknown>;
-    if (typeof english !== "string" || !english.trim()) {
-      return FAIL(`第 ${index + 1} 条句子缺少 english 字段`);
-    }
-    if (typeof chinese !== "string" || !chinese.trim()) {
-      return FAIL(`第 ${index + 1} 条句子缺少 chinese 字段`);
-    }
-    if (phonetic !== undefined && typeof phonetic !== "string") {
-      return FAIL(`第 ${index + 1} 条句子的 phonetic 必须是字符串`);
-    }
-    statements.push({ english, chinese, phonetic: phonetic ?? "" });
-  }
-
-  return { ok: true, statements };
+/** 把视频时间戳字段规范成 number|undefined：接受 number 或可解析字符串，空/NaN 视为未填 */
+function toTimingNumber(value: unknown): number | undefined {
+  if (value === null || value === undefined || value === "") return undefined;
+  const num = typeof value === "number" ? value : Number(String(value).trim());
+  return Number.isFinite(num) ? num : undefined;
 }
 
-/** 校验列表编辑器输出的句子数组：非空 + 必填字段齐备；顺带 trim 与默认 phonetic */
+/** 校验列表编辑器输出的句子数组：非空 + 必填字段齐备；顺带 trim、默认 phonetic 与保留视频时间戳 */
 export function validateStatements(list: CreateCoursePackStatement[]): ParseResult {
   if (list.length === 0) return FAIL("句子列表不能为空");
 
@@ -244,7 +221,13 @@ export function validateStatements(list: CreateCoursePackStatement[]): ParseResu
     if (typeof phonetic !== "string") {
       return FAIL(`第 ${index + 1} 条句子的 phonetic 必须是字符串`);
     }
-    statements.push({ english, chinese, phonetic });
+    const statement: CreateCoursePackStatement = { english, chinese, phonetic };
+    const startTime = toTimingNumber(item.startTime);
+    const endTime = toTimingNumber(item.endTime);
+    if (startTime !== undefined) statement.startTime = startTime;
+    if (endTime !== undefined) statement.endTime = endTime;
+    if (item.words && item.words.length > 0) statement.words = item.words;
+    statements.push(statement);
   }
 
   return { ok: true, statements };
@@ -256,12 +239,15 @@ export function buildCreateCoursePackPayload(pack: PackForm, course: CourseForm)
   const validated = validateStatements(course.statements);
   if (!validated.ok) return FAIL(`课程：${validated.error}`);
 
+  const video = pack.video?.trim() ?? "";
+
   return {
     ok: true,
     payload: {
       title: pack.title.trim(),
       description: pack.description,
       cover: pack.cover,
+      video,
       courses: {
         title: course.title.trim() || undefined,
         description: course.description,

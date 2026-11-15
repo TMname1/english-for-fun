@@ -66,15 +66,17 @@ function resolveOutDir(flags: Record<string, string>): string {
   return resolve(config.defaultOutRoot, last);
 }
 
-const HELP = `Course Forge：音频 -> 课程包流水线
+const HELP = `Course Forge：视频/音频 -> 课程包流水线
 
 用法：
-  pnpm forge         -- --audio <文件> --title <课程包名> [--type dialogue|music] [--desc 描述] [--language en] [--out 目录]
-  pnpm forge:import  -- --out <目录>    # POST /course-pack 导入课程包
+  pnpm forge         -- --video <视频文件> --title <课程包名> [--type dialogue|music] [--desc 描述] [--language en] [--out 目录]
+  pnpm forge         -- --audio <音频文件> ...    # 无视频来源时用音频（statement 不产出可播放的视频时间戳）
+  pnpm forge:import  -- --out <目录>    # POST /course-pack 导入课程包（视频输入时会复制视频到 API 静态目录）
 
 环境变量：
   FORGE_LLM_BASE_URL (默认 http://localhost:11434/v1)  FORGE_LLM_MODEL (默认 qwen3:4b)  FORGE_LLM_API_KEY
   FORGE_ASR_URL (默认 http://localhost:9000)           FORGE_API_URL (默认 http://localhost:3001)
+  FORGE_COURSE_VIDEO_DIR (默认 apps/api/storage/course-video)  导入时视频复制目标目录
   FORGE_ASR_STOP_AFTER=0 转写后不自动停 ASR 容器       FORGE_LLM_PREFLIGHT=0 关闭 LLM 调用前预检
   FORGE_LLM_VRAM_STRICT=0 显存不足仅警告（CPU 卸载慢跑）  FORGE_LLM_VRAM_MARGIN_MB 显存估算余量（默认 512）
   FORGE_LLM_REASONING_EFFORT (默认 none，关闭 ollama 思考模式；非 ollama 服务如 DashScope 必须置空串)
@@ -92,8 +94,13 @@ async function main(): Promise<void> {
   switch (command) {
     case "forge": {
       const type = flags.type === "music" ? "music" : "dialogue";
+      const hasVideo = Boolean(flags.video) && flags.video !== "true";
+      const hasAudio = Boolean(flags.audio) && flags.audio !== "true";
+      if (!hasVideo && !hasAudio) {
+        throw new Error(`缺少必填参数 --video 或 --audio\n${HELP}`);
+      }
       await forgeMake({
-        audioPath: requireFlag(flags, "audio", HELP),
+        mediaPath: hasVideo ? flags.video : flags.audio,
         title: requireFlag(flags, "title", HELP),
         description: flags.desc,
         type,

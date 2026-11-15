@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 
 import {
   courseHistory as courseHistorySchema,
@@ -6,7 +6,7 @@ import {
   statement as statementSchema,
   userCourseProgress as userCourseProgressSchema,
 } from "@earthworm/schema";
-import type { CreateCoursePack } from "./course-pack.model";
+import type { CreateCoursePack, WordTiming } from "./course-pack.model";
 import { db } from "../db";
 
 export async function createCoursePack(coursePackInfo: CreateCoursePack) {
@@ -20,16 +20,19 @@ export async function createCoursePack(coursePackInfo: CreateCoursePack) {
         title: coursePackInfo.title,
         description: coursePackInfo.description,
         cover: coursePackInfo.cover,
+        video: coursePackInfo.video ?? "",
       })
       .returning();
 
     const createStatementTasks = coursePackInfo.courses.statements.map(
-      ({ chinese, english, phonetic, audioUrl }, sIndex) => {
+      ({ chinese, english, phonetic, startTime, endTime, words }, sIndex) => {
         return tx.insert(statementSchema).values({
           chinese,
           english,
           soundmark: phonetic,
-          audioUrl: audioUrl ?? null,
+          startTime: startTime ?? null,
+          endTime: endTime ?? null,
+          words: words ?? null,
           order: sIndex + 1,
           coursePackId: coursePackEntity.id,
         });
@@ -86,9 +89,10 @@ export async function deleteCoursePack(coursePackId: string) {
 }
 
 /**
- * 更新课程包：在同一事务内改元信息（title/description/cover），
+ * 更新课程包：在同一事务内改元信息（title/description/cover/video），
  * 删除原有句子并按新列表顺序重建。
- * audioUrl 目前是占位字段，不参与编辑逻辑（重建时走默认 null）。
+ * 编辑表单不回传视频时间戳，重建时按位置比对 english：
+ * 未变的行保留原 startTime/endTime/words，变了的行置 null（视频同步失效，回退音频/TTS）。
  */
 export async function updateCoursePack(coursePackId: string, coursePackInfo: CreateCoursePack) {
   const result = await db.transaction(async (tx) => {
@@ -98,6 +102,7 @@ export async function updateCoursePack(coursePackId: string, coursePackInfo: Cre
         title: coursePackInfo.title,
         description: coursePackInfo.description,
         cover: coursePackInfo.cover,
+        ...(coursePackInfo.video !== undefined ? { video: coursePackInfo.video } : {}),
       })
       .where(eq(coursePackSchema.id, coursePackId))
       .returning();
@@ -106,15 +111,30 @@ export async function updateCoursePack(coursePackId: string, coursePackInfo: Cre
       throw new Error("not found course pack");
     }
 
+    const previousStatements = await tx.query.statement.findMany({
+      where: eq(statementSchema.coursePackId, coursePackId),
+      orderBy: asc(statementSchema.order),
+    });
+
     await tx.delete(statementSchema).where(eq(statementSchema.coursePackId, coursePackId));
 
+    const prevByEnglish = new Map<string, typeof previousStatements>();
+    for (const prev of previousStatements) {
+      const list = prevByEnglish.get(prev.english) ?? [];
+      list.push(prev);
+      prevByEnglish.set(prev.english, list);
+    }
+
     const createStatementTasks = coursePackInfo.courses.statements.map(
-      ({ chinese, english, phonetic, audioUrl }, sIndex) => {
+      ({ chinese, english, phonetic, startTime, endTime, words }, sIndex) => {
+        const prev = prevByEnglish.get(english)?.shift();
         return tx.insert(statementSchema).values({
           chinese,
           english,
           soundmark: phonetic,
-          audioUrl: audioUrl ?? null,
+          startTime: startTime ?? prev?.startTime ?? null,
+          endTime: endTime ?? prev?.endTime ?? null,
+          words: words ?? (prev?.words as WordTiming[] | null) ?? null,
           order: sIndex + 1,
           coursePackId,
         });

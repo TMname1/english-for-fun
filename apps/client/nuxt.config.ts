@@ -34,6 +34,11 @@ export default defineNuxtConfig({
     },
   },
   css: ["~/assets/css/globals.css"],
+  ui: {
+    // gray 被 Nuxt UI 默认排除在 safelist 外，导致 color="gray" 按钮的
+    // dark:bg-gray-950 等深色类不会被生成（深色模式下按钮仍是白底）
+    safelistColors: ["primary", "gray"],
+  },
   modules: [
     "@nuxt/ui",
     "@vueuse/nuxt",
@@ -46,6 +51,8 @@ export default defineNuxtConfig({
     public: {
       apiBase: process.env.API_BASE || "",
       helpDocsURL: process.env.HELP_DOCS_URL || "",
+      // 仅本地 dev 暴露"导入视频"按钮；生产 .env 设 ALLOW_FORGE=0 关闭
+      allowForge: process.env.ALLOW_FORGE !== "0",
     },
   },
   build: {

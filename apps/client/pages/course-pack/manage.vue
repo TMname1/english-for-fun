@@ -7,10 +7,9 @@
         v-if="activeTab !== 1"
         class="text-sm opacity-70"
       >
-        句子以列表形式编辑，每条含 english / chinese / phonetic；也可用「粘贴 JSON」批量导入。
-        <span v-if="activeTab === 0">
-          顶部还可用「导入完整 JSON」/「导入课程 JSON」读取本地课程包文件。</span
-        >
+        句子以列表形式编辑，每条含 english / chinese / phonetic（上传配套视频后可再加 startTime /
+        endTime）；也可用「导入句子 JSON」读取本地句子文件批量导入。
+        <span v-if="activeTab === 0"> 顶部还可用「导入完整 JSON」读取本地课程包文件。</span>
         <span v-else> 保存时会用这里的句子整体替换该课程包原有句子。</span>
       </p>
     </div>
@@ -38,33 +37,57 @@
             />
           </div>
 
-          <div class="flex items-center justify-between">
-            <h3 class="text-lg font-semibold">课程内容</h3>
+          <div class="flex flex-col gap-2 rounded-lg border p-3 dark:border-gray-700">
+            <div class="flex items-center justify-between gap-3">
+              <span class="text-sm font-medium">配套视频（本地文件）</span>
+              <span class="truncate text-xs opacity-70">{{
+                currentVideoLabel(packForm.video)
+              }}</span>
+            </div>
             <div class="flex items-center gap-2">
               <UButton
-                icon="i-ph-file-import"
+                icon="i-ph-film-strip"
                 color="gray"
                 variant="soft"
                 size="sm"
-                @click="openPackJsonPicker('full')"
+                :loading="isUploadingVideo"
+                @click="openVideoPicker('add')"
               >
-                导入完整 JSON
+                {{ packForm.video ? "替换视频" : "上传本地视频" }}
               </UButton>
               <UButton
-                icon="i-ph-article"
-                color="gray"
-                variant="soft"
+                v-if="packForm.video"
+                icon="i-ph-x"
+                color="red"
+                variant="ghost"
                 size="sm"
-                @click="openPackJsonPicker('course')"
+                @click="clearVideo('add')"
               >
-                导入课程 JSON
+                移除
               </UButton>
             </div>
+            <UInput
+              v-model="packForm.video"
+              placeholder="或填写站内路径 /course-video/xxx.mp4 / 外部 URL（可选）"
+            />
+          </div>
+
+          <div class="flex items-center justify-between">
+            <h3 class="text-lg font-semibold">课程内容</h3>
+            <UButton
+              icon="i-ph-file-import"
+              color="gray"
+              variant="soft"
+              size="sm"
+              @click="openPackJsonPicker"
+            >
+              导入完整 JSON
+            </UButton>
           </div>
 
           <div class="flex flex-col gap-3 rounded-lg border p-4 dark:border-gray-700">
             <div class="flex items-center justify-between">
-              <span class="font-medium">唯一课程</span>
+              <span class="font-medium">句子列表</span>
               <UButton
                 icon="i-ph-upload-simple"
                 color="gray"
@@ -75,15 +98,10 @@
                 导入句子 JSON
               </UButton>
             </div>
-            <UInput
-              v-model="courseForm.title"
-              placeholder="课程标题（可选，仅用于校对）"
+            <StatementListEditor
+              v-model="courseForm.statements"
+              :show-timings="!!packForm.video"
             />
-            <UInput
-              v-model="courseForm.description"
-              placeholder="课程描述（可选）"
-            />
-            <StatementListEditor v-model="courseForm.statements" />
           </div>
 
           <UButton
@@ -193,7 +211,66 @@
                       placeholder="封面图片 URL（可选）"
                     />
                   </div>
-                  <StatementListEditor v-model="editStatements" />
+                  <div class="flex flex-col gap-2 rounded-lg border p-3 dark:border-gray-700">
+                    <div class="flex items-center justify-between gap-3">
+                      <span class="text-sm font-medium">配套视频（本地文件）</span>
+                      <span class="truncate text-xs opacity-70">
+                        {{ currentVideoLabel(editPackForm.video) }}
+                      </span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                      <UButton
+                        icon="i-ph-film-strip"
+                        color="gray"
+                        variant="soft"
+                        size="sm"
+                        :loading="isUploadingVideo"
+                        @click="openVideoPicker('edit')"
+                      >
+                        {{ editPackForm.video ? "替换视频" : "上传本地视频" }}
+                      </UButton>
+                      <UButton
+                        v-if="editPackForm.video"
+                        icon="i-ph-x"
+                        color="red"
+                        variant="ghost"
+                        size="sm"
+                        @click="clearVideo('edit')"
+                      >
+                        移除
+                      </UButton>
+                    </div>
+                    <UInput
+                      v-model="editPackForm.video"
+                      placeholder="或填写站内路径 /course-video/xxx.mp4 / 外部 URL（可选）"
+                    />
+                  </div>
+                  <div class="flex flex-col gap-3 rounded-lg border p-4 dark:border-gray-700">
+                    <div class="flex items-center justify-between">
+                      <span class="font-medium">句子列表</span>
+                      <UButton
+                        icon="i-ph-upload-simple"
+                        color="gray"
+                        variant="soft"
+                        size="xs"
+                        @click="openEditCourseJsonPicker"
+                      >
+                        导入句子 JSON
+                      </UButton>
+                    </div>
+                    <StatementListEditor
+                      v-model="editStatements"
+                      :show-timings="!!editPackForm.video"
+                    />
+                  </div>
+
+                  <input
+                    ref="editCourseJsonInput"
+                    type="file"
+                    accept="application/json,.json"
+                    class="hidden"
+                    @change="handleEditCourseJsonFile"
+                  />
                   <div class="flex justify-end gap-3">
                     <UButton
                       color="gray"
@@ -218,6 +295,20 @@
         </div>
       </template>
     </UTabs>
+
+    <div
+      v-if="activeTab === 0 || (activeTab === 2 && editingPackId)"
+      class="fixed bottom-6 right-6 z-50"
+    >
+      <UButton
+        icon="i-ph-arrow-down"
+        color="primary"
+        variant="solid"
+        aria-label="滚动到页面底部"
+        class="aspect-square rounded-full shadow-lg"
+        @click="scrollToBottom"
+      />
+    </div>
 
     <UModal v-model="showDeleteModal">
       <div class="p-6 text-gray-900 dark:text-white">
@@ -247,6 +338,14 @@
       </div>
     </UModal>
 
+    <input
+      ref="videoInput"
+      type="file"
+      accept="video/*,.mp4,.m4v,.mkv,.webm,.mov,.avi"
+      class="hidden"
+      @change="handleVideoFile"
+    />
+
     <p
       v-if="errorMessage"
       class="text-sm text-red-500"
@@ -263,14 +362,18 @@ import { toast } from "vue-sonner";
 
 import type { CreateCoursePackStatement } from "~/api/course-pack";
 import type { CoursePacksItem } from "~/types";
-import { createCoursePack, fetchCoursePackForEdit, updateCoursePack } from "~/api/course-pack";
+import {
+  createCoursePack,
+  fetchCoursePackForEdit,
+  updateCoursePack,
+  uploadCoursePackVideo,
+} from "~/api/course-pack";
 import StatementListEditor from "~/components/course-pack/StatementListEditor.vue";
 import { useCoursePackStore } from "~/store/coursePack";
 import {
   buildCreateCoursePackPayload,
   createEmptyCourse,
   parseCourseJsonImport,
-  parseCourseOnlyJsonImport,
   parseCoursePackJsonImport,
 } from "~/utils/coursePackManage";
 
@@ -288,7 +391,7 @@ const tabDescription = computed(() => {
   return "修改已有课程包的标题、描述、封面与句子。";
 });
 
-const packForm = ref({ title: "", description: "", cover: "" });
+const packForm = ref({ title: "", description: "", cover: "", video: "" });
 const courseForm = ref(createEmptyCourse());
 const isSubmitting = ref(false);
 const errorMessage = ref("");
@@ -300,10 +403,54 @@ const isDeleting = ref(false);
 
 // 「修改课程」：列表内展开编辑，一次只编辑一个课程包
 const editingPackId = ref<string | null>(null);
-const editPackForm = ref({ title: "", description: "", cover: "" });
+const editPackForm = ref({ title: "", description: "", cover: "", video: "" });
 const editStatements = ref<CreateCoursePackStatement[]>([]);
 const isLoadingEdit = ref(false);
 const isEditSubmitting = ref(false);
+
+// 本地视频上传：一次只服务一个表单（添加 / 修改）
+const videoInput = ref<HTMLInputElement | null>(null);
+const videoTarget = ref<"add" | "edit">("add");
+const isUploadingVideo = ref(false);
+
+function openVideoPicker(target: "add" | "edit") {
+  videoTarget.value = target;
+  videoInput.value?.click();
+}
+
+function currentVideoLabel(video: string): string {
+  const value = video?.trim();
+  if (!value) return "未选择视频";
+  if (value.startsWith("/")) return `已上传：${value.split("/").pop()}`;
+  return `外部链接：${value}`;
+}
+
+function clearVideo(target: "add" | "edit") {
+  if (target === "add") packForm.value.video = "";
+  else editPackForm.value.video = "";
+}
+
+async function handleVideoFile(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  // 清空选择，保证重复选择同一文件也能再次触发 change
+  input.value = "";
+  if (!file) return;
+
+  errorMessage.value = "";
+  isUploadingVideo.value = true;
+  try {
+    const { video } = await uploadCoursePackVideo(file);
+    if (videoTarget.value === "add") packForm.value.video = video;
+    else editPackForm.value.video = video;
+    toast.success("视频上传成功");
+  } catch (error: unknown) {
+    const message = (error as { message?: string })?.message;
+    errorMessage.value = message ? `视频上传失败：${message}` : "视频上传失败，请稍后重试";
+  } finally {
+    isUploadingVideo.value = false;
+  }
+}
 
 const courseJsonInput = ref<HTMLInputElement | null>(null);
 
@@ -337,17 +484,12 @@ async function handleCourseJsonFile(event: Event) {
   }
 
   course.statements = result.statements;
-  if (!course.title.trim()) {
-    course.title = file.name.replace(/\.json$/i, "");
-  }
   toast.success(`已导入「${file.name}」，共 ${result.statements.length} 个句子`);
 }
 
 const packJsonInput = ref<HTMLInputElement | null>(null);
-const packImportMode = ref<"full" | "course">("full");
 
-function openPackJsonPicker(mode: "full" | "course") {
-  packImportMode.value = mode;
+function openPackJsonPicker() {
   packJsonInput.value?.click();
 }
 
@@ -368,25 +510,47 @@ async function handlePackJsonFile(event: Event) {
     return;
   }
 
-  if (packImportMode.value === "full") {
-    const result = parseCoursePackJsonImport(text);
-    if (!result.ok) {
-      errorMessage.value = `导入「${file.name}」失败：${result.error}`;
-      return;
-    }
-    packForm.value = { ...result.pack };
-    courseForm.value = result.course;
-    toast.success(`已导入课程包「${result.pack.title}」，确认无误后点击创建`);
-    return;
-  }
-
-  const result = parseCourseOnlyJsonImport(text);
+  const result = parseCoursePackJsonImport(text);
   if (!result.ok) {
     errorMessage.value = `导入「${file.name}」失败：${result.error}`;
     return;
   }
+  packForm.value = { ...result.pack };
   courseForm.value = result.course;
-  toast.success(`已导入课程「${result.course.title || file.name}」，确认无误后点击创建`);
+  toast.success(`已导入课程包「${result.pack.title}」，确认无误后点击创建`);
+}
+
+const editCourseJsonInput = ref<HTMLInputElement | null>(null);
+
+function openEditCourseJsonPicker() {
+  editCourseJsonInput.value?.click();
+}
+
+async function handleEditCourseJsonFile(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  // 清空选择，保证重复导入同一个文件也能再次触发 change
+  input.value = "";
+  if (!file) return;
+
+  errorMessage.value = "";
+
+  let text = "";
+  try {
+    text = await file.text();
+  } catch {
+    errorMessage.value = `读取文件「${file.name}」失败`;
+    return;
+  }
+
+  const result = parseCourseJsonImport(text);
+  if (!result.ok) {
+    errorMessage.value = `导入「${file.name}」失败：${result.error}`;
+    return;
+  }
+
+  editStatements.value = result.statements;
+  toast.success(`已导入「${file.name}」，共 ${result.statements.length} 个句子`);
 }
 
 onMounted(async () => {
@@ -443,6 +607,7 @@ async function toggleEdit(pack: CoursePacksItem) {
       title: data.title,
       description: data.description,
       cover: data.cover,
+      video: data.video ?? "",
     };
     editStatements.value = data.statements;
   } catch (error: unknown) {
@@ -457,6 +622,13 @@ async function toggleEdit(pack: CoursePacksItem) {
 function cancelEdit() {
   editingPackId.value = null;
   errorMessage.value = "";
+}
+
+function scrollToBottom() {
+  window.scrollTo({
+    top: document.documentElement.scrollHeight,
+    behavior: "smooth",
+  });
 }
 
 async function saveEdit() {

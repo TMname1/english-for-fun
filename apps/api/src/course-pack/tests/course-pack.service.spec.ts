@@ -94,16 +94,19 @@ describe("CoursePackService", () => {
   });
 
   describe("findForEdit", () => {
-    it("should return pack meta and statements normalized (phonetic from soundmark, ordered)", async () => {
+    it("should return pack meta, video and statements normalized (phonetic from soundmark, ordered)", async () => {
       const coursePackEntity = await insertCoursePack(db, {
         title: "编辑我",
         description: "描述",
         cover: "c.png",
+        video: "/course-video/e2e.mp4",
       });
       await insertStatement(db, coursePackEntity.id, 2, {
         english: "two",
         chinese: "二",
         soundmark: "/2/",
+        startTime: 3,
+        endTime: 4,
       });
       await insertStatement(db, coursePackEntity.id, 1, {
         english: "one",
@@ -117,21 +120,27 @@ describe("CoursePackService", () => {
         title: "编辑我",
         description: "描述",
         cover: "c.png",
+        video: "/course-video/e2e.mp4",
         statements: [
           { english: "one", chinese: "一", phonetic: "/1/" },
-          { english: "two", chinese: "二", phonetic: "/2/" },
+          { english: "two", chinese: "二", phonetic: "/2/", startTime: 3, endTime: 4 },
         ],
       });
       expect(result).not.toHaveProperty("statementIndex");
     });
 
-    it("should default empty description/cover to empty strings", async () => {
-      const coursePackEntity = await insertCoursePack(db, { description: null, cover: null });
+    it("should default empty description/cover/video to empty strings", async () => {
+      const coursePackEntity = await insertCoursePack(db, {
+        description: null,
+        cover: null,
+        video: null,
+      });
 
       const result = await coursePackService.findForEdit(coursePackEntity.id);
 
       expect(result.description).toBe("");
       expect(result.cover).toBe("");
+      expect(result.video).toBe("");
       expect(result.statements).toEqual([]);
     });
 
