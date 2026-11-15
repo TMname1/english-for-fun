@@ -175,10 +175,10 @@
 import { computed, reactive, ref, watch } from "vue";
 import { toast } from "vue-sonner";
 
-import type { CreateCoursePackPayload } from "~/api/course-pack";
 import type { ForgeJobView, ResumeTranscriptSegment } from "~/api/forge";
 import { createCoursePack } from "~/api/course-pack";
 import { cancelForgeJob, resumeForgeJob, uploadForgeJob } from "~/api/forge";
+import { buildCoursePackPayload } from "~/composables/forge/buildCoursePackPayload";
 import { useForgeJob } from "~/composables/forge/useForgeJob";
 import ForgeTranscriptReview from "./ForgeTranscriptReview.vue";
 
@@ -323,27 +323,7 @@ async function finalizeImport() {
   if (importing.value) return;
   importing.value = true;
   try {
-    const data = j.courseJson;
-    const payload: CreateCoursePackPayload = {
-      title: (data.title || j.title || "").trim(),
-      description: (data.description || j.description || "").trim(),
-      cover: data.cover ?? "",
-      video: j.videoPath || undefined,
-      courses: {
-        title: data.courses?.title ?? data.title ?? j.title,
-        description: data.courses?.description ?? "",
-        statements: (data.courses?.statements ?? []).map((s) => ({
-          english: (s.english ?? "").trim(),
-          chinese: (s.chinese ?? "").trim(),
-          phonetic: (s.phonetic ?? "").trim(),
-          startTime: s.startTime ?? undefined,
-          endTime: s.endTime ?? undefined,
-          words: s.words && s.words.length > 0 ? s.words : undefined,
-        })),
-      },
-    };
-    if (!payload.title) throw new Error("缺少课程包标题");
-    if (payload.courses.statements.length === 0) throw new Error("句子列表为空，无法导入");
+    const payload = buildCoursePackPayload(j);
     const result = await createCoursePack(payload);
     toast.success("已导入到课程库");
     handleConfirmed(result.coursePackId);

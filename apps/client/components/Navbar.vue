@@ -63,6 +63,19 @@
 
           <button
             v-if="allowForge"
+            aria-label="视频切片"
+            class="btn btn-ghost btn-sm gap-1.5 text-base"
+            @click="navigateTo('/video-clip')"
+          >
+            <UIcon
+              name="i-ph-scissors"
+              class="h-6 w-6"
+            />
+            <span class="hidden sm:inline">视频切片</span>
+          </button>
+
+          <button
+            v-if="allowForge"
             aria-label="导入视频"
             class="btn btn-ghost btn-sm gap-1.5 text-base"
             @click="showForgeModal = true"

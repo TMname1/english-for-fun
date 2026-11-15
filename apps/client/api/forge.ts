@@ -88,6 +88,8 @@ export interface ForgeJobView {
   /** status=awaiting_review 时附带：ASR 转录结果，供 word 级校对 */
   transcriptJson?: ForgeTranscript;
   courseJson?: ForgeJobCourseJson;
+  /** 视频切片流程：选中的时间区间（秒） */
+  clips?: { start: number; end: number }[];
 }
 
 export interface UploadForgeJobParams {
@@ -96,6 +98,8 @@ export interface UploadForgeJobParams {
   type: "dialogue" | "music";
   desc?: string;
   language?: string;
+  /** true 时只上传不启动流水线，之后用 startForgeJob 提交切点 */
+  defer?: boolean;
 }
 
 /**
@@ -115,8 +119,22 @@ export async function uploadForgeJob(params: UploadForgeJobParams): Promise<{ jo
   formData.append("type", params.type);
   if (params.desc) formData.append("desc", params.desc);
   if (params.language) formData.append("language", params.language);
+  if (params.defer) formData.append("defer", "true");
   const $fetch = forgeFetch();
   return await $fetch<{ jobId: string }>("/forge/jobs", { method: "post", body: formData });
+}
+
+/** 视频切片流程：defer 上传后提交选中区间并启动转写；clips 缺省转写整段 */
+export async function startForgeJob(
+  jobId: string,
+  clips?: { start: number; end: number }[],
+): Promise<{ jobId: string }> {
+  const $fetch = forgeFetch();
+  return await $fetch<{ jobId: string }>(`/forge/jobs/${jobId}/start`, {
+    method: "post",
+    body: { clips },
+    retry: 0,
+  });
 }
 
 export async function fetchForgeJob(jobId: string): Promise<ForgeJobView> {
