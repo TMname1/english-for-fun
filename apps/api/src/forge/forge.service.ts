@@ -5,6 +5,7 @@ import { BadRequestException, Injectable, NotFoundException } from "@nestjs/comm
 
 import type { CreateForgeJobDto } from "./dto/create-forge-job.dto";
 import type { ResumeForgeJobDto } from "./dto/resume-forge-job.dto";
+import type { StartForgeJobDto } from "./dto/start-forge-job.dto";
 import type { ForgeJobRecord, ForgeJobStage } from "./job-store";
 import type { ForgeRunnerHandle } from "./runner-client";
 import { JobStore } from "./job-store";
@@ -28,8 +29,10 @@ export interface ForgeJobView {
   description?: string;
   /** status=awaiting_review 时附带：ASR 转录结果（word 级），供前端校对编辑 */
   transcriptJson?: unknown;
-  /** 仅在 status=done 时附带，结构同 course.json（ForgePayload） */
+  /** status=done 时附带，结构同 course.json（ForgePayload） */
   courseJson?: unknown;
+  /** 视频切片流程：选中的时间区间（秒） */
+  clips?: { start: number; end: number }[];
 }
 
 @Injectable()
@@ -40,6 +43,8 @@ export class ForgeService {
   constructor(private readonly store: JobStore) {}
 
   createJob(file: Express.Multer.File, dto: CreateForgeJobDto): { jobId: string } {
+    // 全局 ValidationPipe 未开 transform，multipart 布尔字段到达时仍是字符串
+    const defer = String(dto.defer) === "true";
     const jobId = file.filename.replace(/\.[^.]+$/, "");
     const videoFsPath = join(COURSE_VIDEO_DIR, file.filename);
     const videoUrlPath = `/course-video/${file.filename}`;
@@ -47,9 +52,9 @@ export class ForgeService {
 
     const record: ForgeJobRecord = {
       id: jobId,
-      status: "running",
+      status: defer ? "pending" : "running",
       stage: "pending",
-      message: "流水线启动中…",
+      message: defer ? "已上传，等待选择切点" : "流水线启动中…",
       startedAt: Date.now(),
       outDir,
       videoFsPath,
@@ -62,29 +67,72 @@ export class ForgeService {
     };
     this.store.create(record);
 
+    if (!defer) {
+      this.launchTranscribe(record);
+    }
+
+    return { jobId };
+  }
+
+  /** defer 上传后提交切点并启动转写；clips 缺省转写整段 */
+  startTranscription(id: string, dto: StartForgeJobDto): { jobId: string } {
+    const record = this.store.get(id);
+    if (!record) throw new NotFoundException(`未找到任务 ${id}`);
+    if (record.status !== "pending") {
+      throw new BadRequestException(`任务 ${id} 当前状态 ${record.status}，无法启动转写`);
+    }
+
+    const clips = dto.clips;
+    if (clips) {
+      if (clips.length === 0) {
+        throw new BadRequestException("clips 不能为空数组；转写整段请省略该字段");
+      }
+      for (let i = 0; i < clips.length; i++) {
+        const c = clips[i];
+        if (c.end - c.start < 0.1) {
+          throw new BadRequestException(`第 ${i + 1} 个 clip 时长不足 0.1 秒`);
+        }
+        if (i > 0 && c.start < clips[i - 1].end) {
+          throw new BadRequestException("clips 必须按时间升序且互不重叠");
+        }
+      }
+    }
+
+    const updated = this.store.update(id, {
+      status: "running",
+      message: "流水线启动中…",
+      startedAt: Date.now(),
+      clips,
+    })!;
+    this.launchTranscribe(updated);
+    return { jobId: id };
+  }
+
+  private launchTranscribe(record: ForgeJobRecord): void {
     const handle = spawnForgeRunner(
       {
         phase: "transcribe",
-        mediaPath: videoFsPath,
-        title: dto.title,
-        type: dto.type,
-        description: dto.desc,
-        language: dto.language,
-        outDir,
+        mediaPath: record.videoFsPath,
+        title: record.title,
+        type: record.type,
+        description: record.description,
+        language: record.language,
+        outDir: record.outDir,
+        clips: record.clips,
       },
       {
-        onStage: (stage) => this.handleStage(jobId, stage),
-        onDone: () => this.handleDone(jobId),
-        onError: (msg) => this.handleError(jobId, msg),
+        onStage: (stage) => this.handleStage(record.id, stage),
+        onDone: () => this.handleDone(record.id),
+        onError: (msg) => this.handleError(record.id, msg),
       },
     );
-    this.handles.set(jobId, handle);
+    this.handles.set(record.id, handle);
+    // 多 clip 长视频：在 30 分钟基础上按选中总时长放宽（约允许 1x 实时转写余量）
+    const selectedMs = (record.clips ?? []).reduce((sum, c) => sum + (c.end - c.start) * 1000, 0);
     this.timeouts.set(
-      jobId,
-      setTimeout(() => this.handleTimeout(jobId), JOB_TIMEOUT_MS),
+      record.id,
+      setTimeout(() => this.handleTimeout(record.id), JOB_TIMEOUT_MS + selectedMs),
     );
-
-    return { jobId };
   }
 
   async getJob(id: string): Promise<ForgeJobView> {
@@ -104,6 +152,7 @@ export class ForgeService {
       type: record.type,
       language: record.language,
       description: record.description,
+      clips: record.clips,
     };
 
     if (record.status === "awaiting_review") {

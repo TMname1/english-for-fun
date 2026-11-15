@@ -1,4 +1,5 @@
-import { IsIn, IsNotEmpty, IsOptional, IsString } from "class-validator";
+import { Transform } from "class-transformer";
+import { IsBoolean, IsIn, IsNotEmpty, IsOptional, IsString } from "class-validator";
 
 export class CreateForgeJobDto {
   /** 课程包标题 */
@@ -19,4 +20,10 @@ export class CreateForgeJobDto {
   @IsIn(["en", "zh", "ja"])
   @IsOptional()
   language?: string;
+
+  /** true 时只上传不启动流水线（视频切片流程：先打切点，再 POST jobs/:id/start） */
+  @Transform(({ value }) => value === true || value === "true")
+  @IsBoolean()
+  @IsOptional()
+  defer?: boolean;
 }

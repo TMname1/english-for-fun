@@ -18,6 +18,7 @@ import { diskStorage } from "multer";
 
 import { CreateForgeJobDto } from "./dto/create-forge-job.dto";
 import { ResumeForgeJobDto } from "./dto/resume-forge-job.dto";
+import { StartForgeJobDto } from "./dto/start-forge-job.dto";
 import { ForgeService } from "./forge.service";
 import { COURSE_VIDEO_DIR } from "./runner-client";
 
@@ -61,6 +62,12 @@ export class ForgeController {
       throw new BadRequestException("缺少视频文件 videoFile");
     }
     return this.forgeService.createJob(file, dto);
+  }
+
+  /** 视频切片流程：defer 上传后提交选中区间并启动转写 */
+  @Post("jobs/:id/start")
+  startJob(@Param("id") id: string, @Body() dto: StartForgeJobDto) {
+    return this.forgeService.startTranscription(id, dto);
   }
 
   /** 前端轮询：状态 + 完成后附带 course.json + 视频站内 URL */
