@@ -19,11 +19,13 @@
  *   FORGE_DESC        描述（可选）
  *   FORGE_LANGUAGE    ASR 语言提示（可选，默认 en）
  *   FORGE_OUT_DIR     产物目录绝对路径（必填，由调用方分配，避免与 CLI 模式 runId 冲突）
+ *   FORGE_CLIPS       选中时间区间 JSON（可选，[{start,end}]，秒）；缺省转写整段
  */
 
 import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
+import type { ClipRange } from "./types";
 import { forgeFromTranscript, forgeTranscribe } from "./forge";
 import { normalizeEditedTranscript } from "./transcript-edit";
 
@@ -77,6 +79,17 @@ async function main(): Promise<void> {
       if (type !== "dialogue" && type !== "music") {
         throw new Error(`FORGE_TYPE 必须是 dialogue 或 music，收到 ${type}`);
       }
+      let clips: ClipRange[] | undefined;
+      if (process.env.FORGE_CLIPS?.trim()) {
+        const parsed = JSON.parse(process.env.FORGE_CLIPS) as ClipRange[];
+        if (
+          !Array.isArray(parsed) ||
+          parsed.some((c) => !Number.isFinite(c?.start) || !Number.isFinite(c?.end))
+        ) {
+          throw new Error("FORGE_CLIPS 必须是 [{start,end}] 形式的 JSON 数组");
+        }
+        clips = parsed;
+      }
       finalDir = await forgeTranscribe({
         mediaPath: requireEnv("FORGE_MEDIA_PATH"),
         title: requireEnv("FORGE_TITLE"),
@@ -84,6 +97,7 @@ async function main(): Promise<void> {
         description: process.env.FORGE_DESC?.trim() || undefined,
         language: process.env.FORGE_LANGUAGE?.trim() || "en",
         outDir,
+        clips,
         onStage: (stage) => emit({ event: "stage", stage }),
       });
     }

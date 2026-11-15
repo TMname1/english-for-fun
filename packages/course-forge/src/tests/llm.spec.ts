@@ -191,6 +191,25 @@ describe("mergeSegments", () => {
     expect(mergeSegments([seg(0, "trailing words without end punctuation")])).toHaveLength(1);
     expect(mergeSegments([seg(0, "   "), seg(1, "Hi.")])).toHaveLength(1);
   });
+
+  it("clipIndex 变化时强制断句，禁止跨 clip 拼句", () => {
+    const out = mergeSegments([
+      { ...seg(0, "the first clip ends without"), clipIndex: 0 },
+      { ...seg(1, "punctuation"), clipIndex: 0 },
+      { ...seg(2, "and the second clip starts here."), clipIndex: 1 },
+    ]);
+    expect(out.map((s) => s.text)).toEqual([
+      "the first clip ends without punctuation",
+      "and the second clip starts here.",
+    ]);
+    expect(out[0].end).toBeCloseTo(1.9);
+    expect(out[1].start).toBe(2);
+  });
+
+  it("无 clipIndex 时行为不变（同一 undefined 不触发断句）", () => {
+    const out = mergeSegments([seg(0, "hello there"), seg(1, "general kenobi.")]);
+    expect(out).toHaveLength(1);
+  });
 });
 
 describe("evaluateCourseQuality", () => {

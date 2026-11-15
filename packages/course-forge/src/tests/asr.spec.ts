@@ -1,6 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { asrComposeStopArgs, parseTranscription } from "../asr";
+import { asrComposeStopArgs, parseTranscription, transcodeToWav } from "../asr";
+
+vi.mock("../util", () => ({ runFfmpeg: vi.fn().mockResolvedValue(undefined) }));
 
 describe("parseTranscription", () => {
   it("keeps word-level timestamps when present", () => {
@@ -68,5 +70,49 @@ describe("parseTranscription", () => {
 describe("asrComposeStopArgs", () => {
   it("stops only the asr service of the asr profile (symmetric with startup)", () => {
     expect(asrComposeStopArgs()).toEqual(["compose", "--profile", "asr", "stop", "asr"]);
+  });
+});
+
+describe("transcodeToWav", () => {
+  it("无 range 时不插入 seek 参数", async () => {
+    const { runFfmpeg } = await import("../util");
+    vi.mocked(runFfmpeg).mockClear();
+    await transcodeToWav("in.mp4", "out.wav");
+    expect(vi.mocked(runFfmpeg).mock.calls[0][0]).toEqual([
+      "-y",
+      "-i",
+      "in.mp4",
+      "-vn",
+      "-ac",
+      "1",
+      "-ar",
+      "16000",
+      "-c:a",
+      "pcm_s16le",
+      "out.wav",
+    ]);
+  });
+
+  it("有 range 时在 -i 前插入 -ss/-t（输入侧 seek）", async () => {
+    const { runFfmpeg } = await import("../util");
+    vi.mocked(runFfmpeg).mockClear();
+    await transcodeToWav("in.mp4", "out.wav", { start: 12.5, end: 20 });
+    expect(vi.mocked(runFfmpeg).mock.calls[0][0]).toEqual([
+      "-y",
+      "-ss",
+      "12.5",
+      "-t",
+      "7.5",
+      "-i",
+      "in.mp4",
+      "-vn",
+      "-ac",
+      "1",
+      "-ar",
+      "16000",
+      "-c:a",
+      "pcm_s16le",
+      "out.wav",
+    ]);
   });
 });
