@@ -11,15 +11,21 @@
  *   forgeMake 内部的 console.log/warn/error 一律劫持到 stderr，避免污染事件流。
  *
  * 环境变量：
- *   FORGE_MEDIA_PATH  视频/音频绝对路径（必填）
- *   FORGE_TITLE       课程包标题（必填）
- *   FORGE_TYPE        dialogue | music（必填）
+ *   FORGE_PHASE       transcribe | structure（必填）：transcribe 跑「提取音轨 + ASR 转写」后暂停；
+ *                     structure 读 outDir 下（人工编辑过的）transcript.json 续跑「结构化 + 对齐」
+ *   FORGE_MEDIA_PATH  视频/音频绝对路径（transcribe 阶段必填）
+ *   FORGE_TITLE       课程包标题（transcribe 阶段必填）
+ *   FORGE_TYPE        dialogue | music（transcribe 阶段必填）
  *   FORGE_DESC        描述（可选）
  *   FORGE_LANGUAGE    ASR 语言提示（可选，默认 en）
  *   FORGE_OUT_DIR     产物目录绝对路径（必填，由调用方分配，避免与 CLI 模式 runId 冲突）
  */
 
-import { forgeMake } from "./forge";
+import { readFile, writeFile } from "node:fs/promises";
+import { resolve } from "node:path";
+
+import { forgeFromTranscript, forgeTranscribe } from "./forge";
+import { normalizeEditedTranscript } from "./transcript-edit";
 
 console.log = (...args: unknown[]) => {
   process.stderr.write(args.map(String).join(" ") + "\n");
@@ -42,22 +48,46 @@ function requireEnv(key: string): string {
 }
 
 async function main(): Promise<void> {
-  const type = requireEnv("FORGE_TYPE");
-  if (type !== "dialogue" && type !== "music") {
-    throw new Error(`FORGE_TYPE 必须是 dialogue 或 music，收到 ${type}`);
-  }
+  const phase = process.env.FORGE_PHASE === "structure" ? "structure" : "transcribe";
+  const outDir = requireEnv("FORGE_OUT_DIR");
 
   try {
-    const outDir = await forgeMake({
-      mediaPath: requireEnv("FORGE_MEDIA_PATH"),
-      title: requireEnv("FORGE_TITLE"),
-      type,
-      description: process.env.FORGE_DESC?.trim() || undefined,
-      language: process.env.FORGE_LANGUAGE?.trim() || "en",
-      outDir: requireEnv("FORGE_OUT_DIR"),
-      onStage: (stage) => emit({ event: "stage", stage }),
-    });
-    emit({ event: "done", outDir });
+    let finalDir: string;
+    if (phase === "structure") {
+      // 读取前端回传的 word 级编辑结果，规整回 Transcript（重算 text/wordLevel、移除被删段），
+      // 覆盖 transcript.json 后续跑结构化 + 对齐。
+      const editsRaw = JSON.parse(
+        await readFile(resolve(outDir, "transcript.edited.json"), "utf-8"),
+      );
+      const transcript = normalizeEditedTranscript(
+        editsRaw,
+        process.env.FORGE_LANGUAGE?.trim() || "en",
+      );
+      await writeFile(
+        resolve(outDir, "transcript.json"),
+        `${JSON.stringify(transcript, null, 2)}\n`,
+        "utf-8",
+      );
+      finalDir = await forgeFromTranscript({
+        outDir,
+        onStage: (stage) => emit({ event: "stage", stage }),
+      });
+    } else {
+      const type = requireEnv("FORGE_TYPE");
+      if (type !== "dialogue" && type !== "music") {
+        throw new Error(`FORGE_TYPE 必须是 dialogue 或 music，收到 ${type}`);
+      }
+      finalDir = await forgeTranscribe({
+        mediaPath: requireEnv("FORGE_MEDIA_PATH"),
+        title: requireEnv("FORGE_TITLE"),
+        type,
+        description: process.env.FORGE_DESC?.trim() || undefined,
+        language: process.env.FORGE_LANGUAGE?.trim() || "en",
+        outDir,
+        onStage: (stage) => emit({ event: "stage", stage }),
+      });
+    }
+    emit({ event: "done", outDir: finalDir });
     process.exit(0);
   } catch (error) {
     emit({ event: "error", message: error instanceof Error ? error.message : String(error) });

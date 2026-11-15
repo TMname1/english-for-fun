@@ -266,6 +266,20 @@ describe("buildChatBody", () => {
     expect(body.reasoning_effort).toBeUndefined();
     expect(body.response_format).toEqual({ type: "json_object" });
   });
+
+  it("includes enable_thinking when explicitly set (false or true)", () => {
+    expect(
+      buildChatBody({ ...base, reasoningEffort: "", enableThinking: false }).enable_thinking,
+    ).toBe(false);
+    expect(
+      buildChatBody({ ...base, reasoningEffort: "", enableThinking: true }).enable_thinking,
+    ).toBe(true);
+  });
+
+  it("omits enable_thinking when not configured", () => {
+    const body = buildChatBody({ ...base, reasoningEffort: "" });
+    expect("enable_thinking" in body).toBe(false);
+  });
 });
 
 describe("collectSseContent", () => {

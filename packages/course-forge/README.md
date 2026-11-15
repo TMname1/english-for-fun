@@ -39,22 +39,23 @@ pnpm forge:import -- --out output/<runId>
 
 ## 环境变量
 
-| 变量                         | 默认                             | 说明                                                                                   |
-| ---------------------------- | -------------------------------- | -------------------------------------------------------------------------------------- |
-| `FORGE_ASR_URL`              | `http://localhost:9000`          | ASR 服务地址（compose asr 服务的宿主端口）                                             |
-| `FORGE_ASR_WAIT_MS`          | 15 分钟                          | 等待 ASR 容器健康的超时                                                                |
-| `FORGE_ASR_STOP_AFTER`       | `1`                              | 转写后自动停止 ASR 容器释放显存；设为 `0` 保持常驻                                     |
-| `FORGE_LLM_BASE_URL`         | `http://localhost:11434/v1`      | OpenAI 兼容端点（ollama / DeepSeek / OpenAI 均可）                                     |
-| `FORGE_LLM_MODEL`            | `qwen3:4b`                       | 结构化模型；权重约 2.5GB，小显存友好，质量不够可试 `qwen3:8b` / `qwen3:14b` 或云端模型 |
-| `FORGE_LLM_API_KEY`          | `ollama`                         | 云端服务时填真实 key                                                                   |
-| `FORGE_LLM_REASONING_EFFORT` | `none`                           | ollama 专用参数；非 ollama（如 DashScope）**必须置空**，请求里留空串即不发送该字段     |
-| `FORGE_LLM_MAX_TOKENS`       | 16000                            | 单次 LLM 输出上限（qwen-plus 支持 32768；本地开思考模式时可调大）                      |
-| `FORGE_LLM_MAX_WORDS`        | 250                              | 单次 LLM 调用携带的最大词数；一个分块生成一门课，调大=课程更长                         |
-| `FORGE_LLM_PREFLIGHT`        | `1`                              | LLM 调用前预检（服务连通/模型/显存）；`0` 关闭                                         |
-| `FORGE_LLM_VRAM_STRICT`      | `1`                              | 显存不足时拦停；`0` 仅警告                                                             |
-| `FORGE_LLM_VRAM_MARGIN_MB`   | 512                              | 显存估算余量（MB）                                                                     |
-| `FORGE_API_URL`              | `http://localhost:3001`          | 导入目标 API                                                                           |
-| `FORGE_COURSE_VIDEO_DIR`     | `apps/api/storage/course-video/` | 导入时视频复制目标目录                                                                 |
+| 变量                         | 默认                             | 说明                                                                                                                 |
+| ---------------------------- | -------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `FORGE_ASR_URL`              | `http://localhost:9000`          | ASR 服务地址（compose asr 服务的宿主端口）                                                                           |
+| `FORGE_ASR_WAIT_MS`          | 15 分钟                          | 等待 ASR 容器健康的超时                                                                                              |
+| `FORGE_ASR_STOP_AFTER`       | `1`                              | 转写后自动停止 ASR 容器释放显存；设为 `0` 保持常驻                                                                   |
+| `FORGE_LLM_BASE_URL`         | `http://localhost:11434/v1`      | OpenAI 兼容端点（ollama / DeepSeek / OpenAI 均可）                                                                   |
+| `FORGE_LLM_MODEL`            | `qwen3:4b`                       | 结构化模型；权重约 2.5GB，小显存友好，质量不够可试 `qwen3:8b` / `qwen3:14b` 或云端模型                               |
+| `FORGE_LLM_API_KEY`          | `ollama`                         | 云端服务时填真实 key                                                                                                 |
+| `FORGE_LLM_REASONING_EFFORT` | `none`                           | ollama 专用参数；非 ollama（如 DashScope）**必须置空**，请求里留空串即不发送该字段                                   |
+| `FORGE_LLM_ENABLE_THINKING`  | 空（不发送）                     | 思考开关（`enable_thinking`）；qwen3.8-flash 等默认开思考的云端模型设 `false`，否则思考吃光 max_tokens、生成看似卡死 |
+| `FORGE_LLM_MAX_TOKENS`       | 16000                            | 单次 LLM 输出上限（qwen-plus 支持 32768；本地开思考模式时可调大）                                                    |
+| `FORGE_LLM_MAX_WORDS`        | 250                              | 单次 LLM 调用携带的最大词数；一个分块生成一门课，调大=课程更长                                                       |
+| `FORGE_LLM_PREFLIGHT`        | `1`                              | LLM 调用前预检（服务连通/模型/显存）；`0` 关闭                                                                       |
+| `FORGE_LLM_VRAM_STRICT`      | `1`                              | 显存不足时拦停；`0` 仅警告                                                                                           |
+| `FORGE_LLM_VRAM_MARGIN_MB`   | 512                              | 显存估算余量（MB）                                                                                                   |
+| `FORGE_API_URL`              | `http://localhost:3001`          | 导入目标 API                                                                                                         |
+| `FORGE_COURSE_VIDEO_DIR`     | `apps/api/storage/course-video/` | 导入时视频复制目标目录                                                                                               |
 
 以上变量也可以集中写进 `packages/course-forge/.env`（复制 `.env.example` 修改即可；
 已存在的进程环境变量优先于 `.env` 文件；`.env` 已进包内 `.gitignore` 防泄漏 key）。

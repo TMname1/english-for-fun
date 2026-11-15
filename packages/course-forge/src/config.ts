@@ -47,6 +47,14 @@ function env(key: string, fallback: string): string {
   return raw.trim();
 }
 
+/** 解析思考开关：空串/未设置 -> undefined（不发送字段）；false/0 -> false；true/1 -> true */
+export function parseEnableThinking(raw: string): boolean | undefined {
+  const v = raw.trim().toLowerCase();
+  if (v === "false" || v === "0") return false;
+  if (v === "true" || v === "1") return true;
+  return undefined;
+}
+
 function envInt(key: string, fallback: number): number {
   const raw = process.env[key]?.trim();
   if (!raw) return fallback;
@@ -70,6 +78,8 @@ export const config = {
   llmMaxTokens: envInt("FORGE_LLM_MAX_TOKENS", 16000),
   /** OpenAI 兼容端点的 reasoning_effort；ollama 上 "none" 可关闭 qwen3 思考（思考会吃光 max_tokens 并把生成拖过 undici 300s 超时）。设为空串（如 .env 里 `FORGE_LLM_REASONING_EFFORT=`）则不发送该字段——DashScope 等非 ollama 服务必须置空 */
   llmReasoningEffort: env("FORGE_LLM_REASONING_EFFORT", "none"),
+  /** DashScope 等端点的思考开关（enable_thinking）：qwen3.8-flash 等新模型默认开思考，思考文本不计入正文却吃 max_tokens，会把结构化拖成"假卡死"。未设置/空串 = 不发送该字段（ollama 等不认识它的服务保持兼容） */
+  llmEnableThinking: parseEnableThinking(env("FORGE_LLM_ENABLE_THINKING", "")),
   /** 单次 LLM 调用携带的最大转写词数：一个分块恰好生成一门课，分块大小≈课程规模（约 5~15 个目标句） */
   llmMaxWordsPerCall: envInt("FORGE_LLM_MAX_WORDS", 250),
   /** 转写结束后自动停止 asr 容器，把显存让给 LLM（0 = 保持常驻，可加快下次转写） */

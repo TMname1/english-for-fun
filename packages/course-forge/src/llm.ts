@@ -101,11 +101,12 @@ export const courseJsonSchema = {
 
 type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
 
-/** 构建 chat completions 请求体（纯函数）：始终 stream，reasoning_effort 为空则省略 */
+/** 构建 chat completions 请求体（纯函数）：始终 stream，reasoning_effort 为空则省略，enable_thinking 未设置则省略 */
 export function buildChatBody(input: {
   model: string;
   maxTokens: number;
   reasoningEffort: string;
+  enableThinking?: boolean;
   messages: ChatMessage[];
   responseFormat?: Record<string, unknown>;
 }): Record<string, unknown> {
@@ -118,6 +119,9 @@ export function buildChatBody(input: {
   };
   if (input.reasoningEffort) {
     body.reasoning_effort = input.reasoningEffort;
+  }
+  if (input.enableThinking !== undefined) {
+    body.enable_thinking = input.enableThinking;
   }
   if (input.responseFormat) {
     body.response_format = input.responseFormat;
@@ -249,6 +253,7 @@ async function chatCompletion(
     model: config.llmModel,
     maxTokens: config.llmMaxTokens,
     reasoningEffort: config.llmReasoningEffort,
+    enableThinking: config.llmEnableThinking,
     messages,
     responseFormat,
   });
