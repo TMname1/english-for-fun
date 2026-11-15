@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   buildCreateCoursePackPayload,
   parseCourseJsonImport,
-  parseCourseOnlyJsonImport,
   parseCoursePackJsonImport,
   parseStatementsJson,
   validateStatements,
@@ -19,6 +18,35 @@ describe("parseStatementsJson", () => {
     if (result.ok) {
       expect(result.statements).toEqual([
         { english: "I am fine.", chinese: "我很好。", phonetic: "" },
+      ]);
+    }
+  });
+
+  it("carries startTime, endTime and words when present", () => {
+    const result = parseStatementsJson(
+      JSON.stringify([
+        {
+          english: "Hello",
+          chinese: "你好",
+          phonetic: "/həˈloʊ/",
+          startTime: 0,
+          endTime: 0.12,
+          words: [{ word: "Hello", start: 0, end: 0.12 }],
+        },
+      ]),
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.statements).toEqual([
+        {
+          english: "Hello",
+          chinese: "你好",
+          phonetic: "/həˈloʊ/",
+          startTime: 0,
+          endTime: 0.12,
+          words: [{ word: "Hello", start: 0, end: 0.12 }],
+        },
       ]);
     }
   });
@@ -85,7 +113,7 @@ describe("validateStatements", () => {
 });
 
 describe("buildCreateCoursePackPayload", () => {
-  const pack = { title: "新课程包", description: "desc", cover: "" };
+  const pack = { title: "新课程包", description: "desc", cover: "", video: "" };
   const statements = [{ english: "Hello.", chinese: "你好。", phonetic: "/həˈloʊ/" }];
 
   it("builds a full payload with a single course object", () => {
@@ -254,6 +282,7 @@ describe("parseCoursePackJsonImport", () => {
         title: "neuro-1",
         description: "由本地 Course Forge 流水线生成（dialogue）",
         cover: "",
+        video: "",
       });
       expect(result.course.title).toBe("唯一课程");
       expect(result.course.description).toBe("开场");
@@ -277,6 +306,44 @@ describe("parseCoursePackJsonImport", () => {
         english: "I",
         chinese: "我",
         phonetic: "/aɪ/",
+      });
+    }
+  });
+
+  it("carries startTime/endTime/words through import into the built payload", () => {
+    const withTimings = JSON.stringify({
+      title: "forge-2",
+      cover: "",
+      video: "/course-video/x.mp4",
+      courses: {
+        statements: [
+          {
+            english: "Hello",
+            chinese: "你好",
+            phonetic: "/həˈloʊ/",
+            startTime: 0,
+            endTime: 0.12,
+            words: [{ word: "Hello", start: 0, end: 0.12 }],
+          },
+        ],
+      },
+    });
+
+    const result = parseCoursePackJsonImport(withTimings);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const built = buildCreateCoursePackPayload(result.pack, result.course);
+    expect(built.ok).toBe(true);
+    if (built.ok) {
+      expect(built.payload.video).toBe("/course-video/x.mp4");
+      expect(built.payload.courses.statements[0]).toEqual({
+        english: "Hello",
+        chinese: "你好",
+        phonetic: "/həˈloʊ/",
+        startTime: 0,
+        endTime: 0.12,
+        words: [{ word: "Hello", start: 0, end: 0.12 }],
       });
     }
   });
@@ -313,56 +380,5 @@ describe("parseCoursePackJsonImport", () => {
     );
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toContain("courses：第 2 条句子缺少 english");
-  });
-});
-
-describe("parseCourseOnlyJsonImport", () => {
-  it("imports a single course object", () => {
-    const result = parseCourseOnlyJsonImport(
-      '{ "title": "第一课", "statements": [{ "english": "hi", "chinese": "嗨" }] }',
-    );
-
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.course.title).toBe("第一课");
-      expect(result.course.statements).toEqual([{ english: "hi", chinese: "嗨", phonetic: "" }]);
-    }
-  });
-
-  it("accepts the { courses: {...} } single-object wrapper", () => {
-    const result = parseCourseOnlyJsonImport(
-      '{"courses": { "title": "第一课", "statements": [{ "english": "hi", "chinese": "嗨" }] }}',
-    );
-    expect(result.ok).toBe(true);
-  });
-
-  it("course title is optional", () => {
-    const result = parseCourseOnlyJsonImport(
-      '{ "statements": [{ "english": "hi", "chinese": "嗨" }] }',
-    );
-    expect(result.ok).toBe(true);
-    if (result.ok) expect(result.course.title).toBe("");
-  });
-
-  it("rejects legacy bare array (分课程格式)", () => {
-    const result = parseCourseOnlyJsonImport(
-      '[{ "title": "第一课", "statements": [{ "english": "hi", "chinese": "嗨" }] }]',
-    );
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toContain("单一课程对象");
-  });
-
-  it("rejects legacy courses array wrapper", () => {
-    const result = parseCourseOnlyJsonImport(
-      '{"courses": [{ "title": "第一课", "statements": [{ "english": "hi", "chinese": "嗨" }] }]}',
-    );
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toContain("旧的分课程格式");
-  });
-
-  it("rejects statements-less object", () => {
-    const result = parseCourseOnlyJsonImport('{"title": "pack"}');
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toContain("statements 必须是句子数组");
   });
 });

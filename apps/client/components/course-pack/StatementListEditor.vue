@@ -17,13 +17,15 @@
       v-if="showPasteArea"
       class="flex flex-col gap-2 rounded-lg border border-dashed p-3 dark:border-gray-600"
     >
-      <p class="text-xs opacity-70">粘贴句子数组 JSON，「应用」后会替换当前列表。</p>
+      <p class="text-xs opacity-70">
+        粘贴句子数组 JSON，「应用」后会替换当前列表。支持可选字段 startTime / endTime / words。
+      </p>
       <UTextarea
         v-model="pasteText"
         :rows="5"
         class="font-mono text-sm"
         placeholder='[
-  { "english": "How are you?", "chinese": "你好吗？", "phonetic": "/haʊ ɑːr ju/" }
+  { "english": "How are you?", "chinese": "你好吗？", "phonetic": "/haʊ ɑːr ju/", "startTime": 0, "endTime": 1.2 }
 ]'
       />
       <div class="flex items-center gap-3">
@@ -103,6 +105,31 @@
           placeholder="phonetic（可选）"
           @update:model-value="(v: string | number) => patch(index, 'phonetic', String(v ?? ''))"
         />
+        <div
+          v-if="showTimings"
+          class="grid grid-cols-2 gap-2"
+        >
+          <UInput
+            type="number"
+            step="0.01"
+            :min="0"
+            :model-value="item.startTime ?? ''"
+            placeholder="开始时间(秒，可选)"
+            @update:model-value="
+              (v: string | number) => patchNumber(index, 'startTime', v as string | number)
+            "
+          />
+          <UInput
+            type="number"
+            step="0.01"
+            :min="0"
+            :model-value="item.endTime ?? ''"
+            placeholder="结束时间(秒，可选)"
+            @update:model-value="
+              (v: string | number) => patchNumber(index, 'endTime', v as string | number)
+            "
+          />
+        </div>
       </div>
     </div>
 
@@ -126,9 +153,13 @@ import { parseStatementsJson } from "~/utils/coursePackManage";
 
 interface Props {
   modelValue: CreateCoursePackStatement[];
+  /** 仅当课程包带配套视频时，展示每条句子的 startTime/endTime 输入框 */
+  showTimings?: boolean;
 }
 
-const props = defineProps<Props>();
+const props = withDefaults(defineProps<Props>(), {
+  showTimings: false,
+});
 
 const emit = defineEmits<{
   (e: "update:modelValue", value: CreateCoursePackStatement[]): void;
@@ -162,6 +193,13 @@ function move(index: number, delta: -1 | 1) {
 }
 
 function patch(index: number, key: keyof CreateCoursePackStatement, value: string) {
+  commit(list.value.map((s, i) => (i === index ? { ...s, [key]: value } : s)));
+}
+
+function patchNumber(index: number, key: "startTime" | "endTime", raw: string | number) {
+  const text = String(raw ?? "").trim();
+  const parsed = text === "" ? Number.NaN : Number(text);
+  const value = Number.isFinite(parsed) ? parsed : undefined;
   commit(list.value.map((s, i) => (i === index ? { ...s, [key]: value } : s)));
 }
 

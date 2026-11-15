@@ -3,13 +3,15 @@
     v-if="isInternalVideo"
     ref="container"
     class="mx-auto w-full max-w-3xl px-2 pt-2"
+    @mouseenter="setVideoControls(true)"
+    @mouseleave="setVideoControls(false)"
   ></div>
 </template>
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 
-import { attachVideoContainer } from "~/composables/main/englishSound/video";
+import { attachVideoContainer, setVideoControls } from "~/composables/main/englishSound/video";
 import { useCourseStore } from "~/store/course";
 
 /**
@@ -24,6 +26,8 @@ const isInternalVideo = computed(() => (courseStore.currentLearning?.video ?? ""
 
 function attach() {
   attachVideoContainer(container.value ?? null);
+  // 单例元素可能在别处悬停过，挂载时复位为隐藏
+  setVideoControls(false);
 }
 
 watch(isInternalVideo, (visible) => {

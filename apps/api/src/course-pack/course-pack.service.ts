@@ -74,7 +74,7 @@ export class CoursePackService {
   }
 
   /**
-   * 编辑用详情：课程包元信息 + 句子（按 order 排序，规范成 { english, chinese, phonetic }）。
+   * 编辑用详情：课程包元信息（含 video）+ 句子（含 startTime/endTime，规范成 { english, chinese, phonetic }）。
    * 不含用户进度，供「修改课程」表单预填。
    */
   async findForEdit(coursePackId: string) {
@@ -86,6 +86,8 @@ export class CoursePackService {
         english: true,
         chinese: true,
         soundmark: true,
+        startTime: true,
+        endTime: true,
       },
       orderBy: [asc(statement.order)],
     });
@@ -94,10 +96,13 @@ export class CoursePackService {
       title: pack.title,
       description: pack.description ?? "",
       cover: pack.cover ?? "",
+      video: pack.video ?? "",
       statements: rows.map((row) => ({
         english: row.english,
         chinese: row.chinese,
         phonetic: row.soundmark,
+        startTime: row.startTime ?? undefined,
+        endTime: row.endTime ?? undefined,
       })),
     };
   }

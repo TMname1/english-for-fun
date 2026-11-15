@@ -118,17 +118,23 @@ export async function updateCoursePack(coursePackId: string, coursePackInfo: Cre
 
     await tx.delete(statementSchema).where(eq(statementSchema.coursePackId, coursePackId));
 
+    const prevByEnglish = new Map<string, typeof previousStatements>();
+    for (const prev of previousStatements) {
+      const list = prevByEnglish.get(prev.english) ?? [];
+      list.push(prev);
+      prevByEnglish.set(prev.english, list);
+    }
+
     const createStatementTasks = coursePackInfo.courses.statements.map(
       ({ chinese, english, phonetic, startTime, endTime, words }, sIndex) => {
-        const prev = previousStatements[sIndex];
-        const unchanged = prev !== undefined && prev.english === english;
+        const prev = prevByEnglish.get(english)?.shift();
         return tx.insert(statementSchema).values({
           chinese,
           english,
           soundmark: phonetic,
-          startTime: startTime ?? (unchanged ? prev.startTime : null),
-          endTime: endTime ?? (unchanged ? prev.endTime : null),
-          words: words ?? (unchanged ? (prev.words as WordTiming[] | null) : null),
+          startTime: startTime ?? prev?.startTime ?? null,
+          endTime: endTime ?? prev?.endTime ?? null,
+          words: words ?? (prev?.words as WordTiming[] | null) ?? null,
           order: sIndex + 1,
           coursePackId,
         });

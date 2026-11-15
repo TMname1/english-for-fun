@@ -9,6 +9,8 @@ import { config, createRunId } from "./config";
 import { generateDraft } from "./llm";
 import { preflightLlm } from "./preflight";
 
+export type ForgeStage = "transcoding" | "transcribing" | "structuring" | "aligning" | "done";
+
 export interface MakeOptions {
   /** 视频或音频文件路径；视频会用 ffmpeg 提取音频转写，并保留视频做时间戳同步 */
   mediaPath: string;
@@ -17,6 +19,8 @@ export interface MakeOptions {
   type: "dialogue" | "music";
   language?: string;
   outDir?: string;
+  /** 阶段回调；GUI 调用方据此渲染进度，CLI 调用方忽略 */
+  onStage?: (stage: ForgeStage) => void;
 }
 
 const VIDEO_EXT = /\.(mp4|m4v|mkv|webm|mov|avi)$/i;
@@ -56,10 +60,12 @@ export async function forgeMake(opts: MakeOptions): Promise<string> {
   await writeJson(paths.meta(outDir), meta);
 
   // Step 1 转写（视频输入时 ffmpeg -vn 直接提取音轨；时间戳相对同一时间轴，天然与视频同步）
+  opts.onStage?.("transcoding");
   await ensureAsrReady();
   const wav = resolve(paths.work(outDir), "audio-16k.wav");
   await mkdir(paths.work(outDir), { recursive: true });
   await transcodeToWav(mediaPath, wav);
+  opts.onStage?.("transcribing");
   const transcript = await transcribe(wav, opts.language ?? "en");
   await writeJson(paths.transcript(outDir), transcript);
   await rm(paths.work(outDir), { recursive: true, force: true });
@@ -73,6 +79,7 @@ export async function forgeMake(opts: MakeOptions): Promise<string> {
   }
 
   // Step 2 LLM 结构化
+  opts.onStage?.("structuring");
   if (config.llmPreflight) {
     await preflightLlm();
   }
@@ -82,6 +89,7 @@ export async function forgeMake(opts: MakeOptions): Promise<string> {
   );
 
   // Step 2.5 时间戳对齐：把转写的词级时间映射回每条 statement（视频同步播放的数据来源）
+  opts.onStage?.("aligning");
   const { timings, report } = alignStatements(transcript, draft.statements);
   draft.statements.forEach((statement, i) => {
     const timing = timings[i];
@@ -114,6 +122,7 @@ export async function forgeMake(opts: MakeOptions): Promise<string> {
     },
   };
   await writeJson(paths.course(outDir), payload);
+  opts.onStage?.("done");
   console.log(`[forge] 产物目录：${outDir}`);
   console.log(`[forge] 下一步：校对 course.json，然后运行 pnpm forge:import -- --out "${outDir}"`);
   return outDir;

@@ -1,3 +1,8 @@
+import type { $Fetch } from "ofetch";
+
+import { useRuntimeConfig } from "#imports";
+import { ofetch } from "ofetch";
+
 import type { CoursePack, CoursePackLearning, CoursePacksItem } from "~/types";
 import { getHttp } from "./http";
 
@@ -89,6 +94,12 @@ export interface CreateCoursePackStatement {
   english: string;
   chinese: string;
   phonetic: string;
+  /** 配套视频起点（秒），与 endTime 一起决定视频 seek 播放 */
+  startTime?: number;
+  /** 配套视频终点（秒） */
+  endTime?: number;
+  /** 逐词时间戳；缺失时单词播放回退 TTS */
+  words?: { word: string; start: number; end: number }[];
 }
 
 /** 单一课程对象（原 courses 数组已随"分课程"功能删除）；title/description 可选 */
@@ -102,6 +113,8 @@ export interface CreateCoursePackPayload {
   title: string;
   description: string;
   cover: string;
+  /** 配套视频站内路径（/course-video/xxx.mp4）或外部 URL */
+  video?: string;
   courses: CreateCoursePackCourse;
 }
 
@@ -129,11 +142,12 @@ export async function deleteCoursePack(coursePackId: string) {
   });
 }
 
-/** 「修改课程」表单预填数据：课程包元信息 + 句子（规范成 english/chinese/phonetic） */
+/** 「修改课程」表单预填数据：课程包元信息（含 video）+ 句子（含 startTime/endTime） */
 export interface CoursePackEditData {
   title: string;
   description: string;
   cover: string;
+  video: string;
   statements: CreateCoursePackStatement[];
 }
 
@@ -154,5 +168,25 @@ export async function updateCoursePack(coursePackId: string, payload: CreateCour
   return await http<UpdateCoursePackResponse>(`/course-pack/${coursePackId}`, {
     method: "patch",
     body: payload,
+  });
+}
+
+/**
+ * 上传本地视频文件到 /course-video 静态目录，返回站内路径。
+ * 单独走 ofetch：让浏览器自设 multipart boundary（共享 http 实例默认 application/json 会破坏上传）。
+ */
+function coursePackFetch(): $Fetch {
+  const config = useRuntimeConfig();
+  return ofetch.create({ baseURL: config.public.apiBase as string });
+}
+
+export async function uploadCoursePackVideo(file: File): Promise<{ video: string }> {
+  const formData = new FormData();
+  formData.append("videoFile", file);
+  const $fetch = coursePackFetch();
+  return await $fetch<{ video: string }>("/course-pack/video", {
+    method: "post",
+    body: formData,
+    retry: 0,
   });
 }

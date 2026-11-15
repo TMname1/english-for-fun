@@ -23,7 +23,8 @@ function ensureVideoElement(): HTMLVideoElement | null {
   videoEl = document.createElement("video");
   videoEl.setAttribute("playsinline", "");
   videoEl.preload = "auto";
-  videoEl.controls = true;
+  // 控制栏默认隐藏，由 VideoPlayer.vue 鼠标悬停时切换显示
+  videoEl.controls = false;
   // 内联样式：class 写在 TS 里可能被 Tailwind 扫描遗漏
   videoEl.style.width = "100%";
   videoEl.style.maxHeight = "40vh";
@@ -59,6 +60,13 @@ export function attachVideoContainer(container: HTMLElement | null): void {
     }
   } else {
     el.remove();
+  }
+}
+
+/** 显隐原生控制栏：VideoPlayer.vue 鼠标进入/离开容器时调用 */
+export function setVideoControls(visible: boolean): void {
+  if (videoEl) {
+    videoEl.controls = visible;
   }
 }
 

@@ -2,6 +2,7 @@ import { Module } from "@nestjs/common";
 
 import { CourseHistoryModule } from "../course-history/course-history.module";
 import { CoursePackModule } from "../course-pack/course-pack.module";
+import { ForgeModule } from "../forge/forge.module";
 import { GlobalModule } from "../global/global.module";
 import { MasteredElementModule } from "../mastered-element/mastered-element.module";
 import { ToolModule } from "../tool/tool.module";
@@ -19,6 +20,7 @@ import { UserLearningActivityModule } from "../user-learning-activity/user-learn
     CourseHistoryModule,
     MasteredElementModule,
     TtsModule,
+    ForgeModule,
   ],
 })
 export class AppModule {}

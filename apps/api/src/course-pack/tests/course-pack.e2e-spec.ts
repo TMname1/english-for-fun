@@ -244,13 +244,20 @@ describe("course-pack e2e", () => {
     return request(app.getHttpServer()).delete(`/course-pack/${createId()}`).expect(404);
   });
 
-  it("get: /course-pack/:coursePackId/edit returns pack meta and statements (no progress)", async () => {
+  it("get: /course-pack/:coursePackId/edit returns video, statements and timings (no progress)", async () => {
     const { id: coursePackId } = await insertCoursePack(db, {
       title: "待编辑",
       description: "原描述",
       cover: "cover.png",
+      video: "/course-video/e2e.mp4",
     });
-    await insertStatement(db, coursePackId, 2, { english: "two", chinese: "二", soundmark: "/2/" });
+    await insertStatement(db, coursePackId, 2, {
+      english: "two",
+      chinese: "二",
+      soundmark: "/2/",
+      startTime: 3,
+      endTime: 4,
+    });
     await insertStatement(db, coursePackId, 1, { english: "one", chinese: "一", soundmark: "/1/" });
 
     return request(app.getHttpServer())
@@ -261,13 +268,25 @@ describe("course-pack e2e", () => {
           title: "待编辑",
           description: "原描述",
           cover: "cover.png",
+          video: "/course-video/e2e.mp4",
           statements: [
             { english: "one", chinese: "一", phonetic: "/1/" },
-            { english: "two", chinese: "二", phonetic: "/2/" },
+            { english: "two", chinese: "二", phonetic: "/2/", startTime: 3, endTime: 4 },
           ],
         });
         expect(body).not.toHaveProperty("statementIndex");
       });
+  });
+
+  it("post: /course-pack/video without a file returns 400", async () => {
+    return request(app.getHttpServer()).post("/course-pack/video").expect(400);
+  });
+
+  it("post: /course-pack/video with unsupported extension returns 400", async () => {
+    return request(app.getHttpServer())
+      .post("/course-pack/video")
+      .attach("videoFile", Buffer.from("not-a-video"), "notes.txt")
+      .expect(400);
   });
 
   it("patch: /course-pack/:coursePackId updates meta and rebuilds statements", async () => {

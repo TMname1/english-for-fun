@@ -1,7 +1,29 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post } from "@nestjs/common";
+import { randomUUID } from "node:crypto";
+import { existsSync, mkdirSync } from "node:fs";
+import { extname } from "node:path";
 
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  UploadedFile,
+  UseInterceptors,
+} from "@nestjs/common";
+import { FileInterceptor } from "@nestjs/platform-express";
+import { diskStorage } from "multer";
+
+import { COURSE_VIDEO_DIR } from "../forge/runner-client";
 import { CoursePackService } from "./course-pack.service";
 import { CreateCoursePackDto } from "./dto/create-course-pack.dto";
+
+/** 与 forge.controller / course-forge 的视频白名单保持一致 */
+const VIDEO_EXT_WHITELIST = new Set([".mp4", ".m4v", ".mkv", ".webm", ".mov", ".avi"]);
+const MAX_VIDEO_BYTES = 2 * 1024 * 1024 * 1024;
 
 @Controller("course-pack")
 export class CoursePackController {
@@ -15,6 +37,43 @@ export class CoursePackController {
   @Post()
   async create(@Body() createCoursePackDto: CreateCoursePackDto) {
     return await this.coursePackService.create(createCoursePackDto);
+  }
+
+  /**
+   * 上传本地视频文件到课程视频静态目录（不跑 ASR），返回站内路径。
+   * 添加/修改课程表单用它把视频落到 /course-video，再回填到 video 字段。
+   */
+  @Post("video")
+  @UseInterceptors(
+    FileInterceptor("videoFile", {
+      storage: diskStorage({
+        destination: (_req, _file, cb) => {
+          if (!existsSync(COURSE_VIDEO_DIR)) {
+            mkdirSync(COURSE_VIDEO_DIR, { recursive: true });
+          }
+          cb(null, COURSE_VIDEO_DIR);
+        },
+        filename: (_req, file, cb) => {
+          const ext = extname(file.originalname).toLowerCase();
+          cb(null, `${randomUUID()}${ext}`);
+        },
+      }),
+      limits: { fileSize: MAX_VIDEO_BYTES },
+      fileFilter: (_req, file, cb) => {
+        const ext = extname(file.originalname).toLowerCase();
+        if (!VIDEO_EXT_WHITELIST.has(ext)) {
+          cb(new BadRequestException(`不支持的视频格式：${ext || "(无扩展名)"}`), false);
+          return;
+        }
+        cb(null, true);
+      },
+    }),
+  )
+  uploadVideo(@UploadedFile() file: Express.Multer.File | undefined) {
+    if (!file) {
+      throw new BadRequestException("缺少视频文件 videoFile");
+    }
+    return { video: `/course-video/${file.filename}` };
   }
 
   @Delete(":coursePackId")
