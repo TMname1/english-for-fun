@@ -9,6 +9,7 @@ const STAGE_LABEL: Record<ForgeJobStageValue, string> = {
   pending: "排队中…",
   transcoding: "音频提取中…",
   transcribing: "ASR 转写中…",
+  transcribed: "等待校对…",
   structuring: "LLM 结构化中…",
   aligning: "时间戳对齐中…",
   done: "已完成",
@@ -29,7 +30,12 @@ export function useForgeJob() {
     try {
       const view = await fetchForgeJob(jobId);
       job.value = view;
-      if (view.status === "done" || view.status === "failed" || view.status === "cancelled") {
+      if (
+        view.status === "done" ||
+        view.status === "failed" ||
+        view.status === "cancelled" ||
+        view.status === "awaiting_review"
+      ) {
         stopPolling();
       }
     } catch {
@@ -68,6 +74,7 @@ export function useForgeJob() {
   const isDone = computed(() => job.value?.status === "done");
   const isFailed = computed(() => job.value?.status === "failed");
   const isCancelled = computed(() => job.value?.status === "cancelled");
+  const isAwaitingReview = computed(() => job.value?.status === "awaiting_review");
   const isTerminal = computed(() => isDone.value || isFailed.value || isCancelled.value);
   const elapsedSeconds = computed(() => (job.value ? Math.floor(job.value.elapsedMs / 1000) : 0));
   const errorText = computed(() => job.value?.error ?? "");
@@ -79,6 +86,7 @@ export function useForgeJob() {
     isDone,
     isFailed,
     isCancelled,
+    isAwaitingReview,
     isTerminal,
     elapsedSeconds,
     errorText,

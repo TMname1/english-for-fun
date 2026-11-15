@@ -4,82 +4,8 @@ import {
   buildCreateCoursePackPayload,
   parseCourseJsonImport,
   parseCoursePackJsonImport,
-  parseStatementsJson,
   validateStatements,
 } from "../coursePackManage";
-
-describe("parseStatementsJson", () => {
-  it("parses valid statements and defaults phonetic to empty string", () => {
-    const result = parseStatementsJson(
-      JSON.stringify([{ english: "I am fine.", chinese: "我很好。" }]),
-    );
-
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.statements).toEqual([
-        { english: "I am fine.", chinese: "我很好。", phonetic: "" },
-      ]);
-    }
-  });
-
-  it("carries startTime, endTime and words when present", () => {
-    const result = parseStatementsJson(
-      JSON.stringify([
-        {
-          english: "Hello",
-          chinese: "你好",
-          phonetic: "/həˈloʊ/",
-          startTime: 0,
-          endTime: 0.12,
-          words: [{ word: "Hello", start: 0, end: 0.12 }],
-        },
-      ]),
-    );
-
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.statements).toEqual([
-        {
-          english: "Hello",
-          chinese: "你好",
-          phonetic: "/həˈloʊ/",
-          startTime: 0,
-          endTime: 0.12,
-          words: [{ word: "Hello", start: 0, end: 0.12 }],
-        },
-      ]);
-    }
-  });
-
-  it("rejects empty text", () => {
-    const result = parseStatementsJson("   ");
-    expect(result).toEqual({ ok: false, error: "句子内容不能为空" });
-  });
-
-  it("rejects invalid json", () => {
-    const result = parseStatementsJson("{not json");
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toContain("不是合法的 JSON");
-  });
-
-  it("rejects empty array", () => {
-    const result = parseStatementsJson("[]");
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toContain("至少要有 1 条");
-  });
-
-  it("rejects item without english", () => {
-    const result = parseStatementsJson('[{ "chinese": "只有中文" }]');
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toContain("第 1 条句子缺少 english");
-  });
-
-  it("rejects non-string phonetic", () => {
-    const result = parseStatementsJson('[{ "english": "hi", "chinese": "嗨", "phonetic": 123 }]');
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toContain("phonetic 必须是字符串");
-  });
-});
 
 describe("validateStatements", () => {
   it("trims fields and defaults phonetic", () => {

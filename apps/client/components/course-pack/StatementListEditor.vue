@@ -2,55 +2,13 @@
   <div class="flex flex-col gap-3">
     <div class="flex items-center justify-between">
       <span class="text-sm opacity-70">共 {{ list.length }} 条句子</span>
-      <UButton
-        :icon="showPasteArea ? 'i-ph-arrow-up' : 'i-ph-code'"
-        color="gray"
-        variant="ghost"
-        size="xs"
-        @click="showPasteArea = !showPasteArea"
-      >
-        {{ showPasteArea ? "收起 JSON" : "粘贴 JSON" }}
-      </UButton>
-    </div>
-
-    <div
-      v-if="showPasteArea"
-      class="flex flex-col gap-2 rounded-lg border border-dashed p-3 dark:border-gray-600"
-    >
-      <p class="text-xs opacity-70">
-        粘贴句子数组 JSON，「应用」后会替换当前列表。支持可选字段 startTime / endTime / words。
-      </p>
-      <UTextarea
-        v-model="pasteText"
-        :rows="5"
-        class="font-mono text-sm"
-        placeholder='[
-  { "english": "How are you?", "chinese": "你好吗？", "phonetic": "/haʊ ɑːr ju/", "startTime": 0, "endTime": 1.2 }
-]'
-      />
-      <div class="flex items-center gap-3">
-        <UButton
-          color="primary"
-          variant="soft"
-          size="xs"
-          @click="applyPaste"
-        >
-          应用（替换列表）
-        </UButton>
-        <span
-          v-if="pasteError"
-          class="text-xs text-red-500"
-        >
-          {{ pasteError }}
-        </span>
-      </div>
     </div>
 
     <p
       v-if="list.length === 0"
       class="rounded-lg border border-dashed p-4 text-center text-sm opacity-60 dark:border-gray-600"
     >
-      暂无句子。点击下方「添加一句」或使用右上角「粘贴 JSON」批量导入。
+      暂无句子。点击下方「添加一句」或使用上方「导入句子 JSON」批量导入。
     </p>
 
     <div class="flex flex-col gap-3">
@@ -146,10 +104,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed } from "vue";
 
 import type { CreateCoursePackStatement } from "~/api/course-pack";
-import { parseStatementsJson } from "~/utils/coursePackManage";
 
 interface Props {
   modelValue: CreateCoursePackStatement[];
@@ -166,10 +123,6 @@ const emit = defineEmits<{
 }>();
 
 const list = computed(() => props.modelValue);
-
-const showPasteArea = ref(false);
-const pasteText = ref("");
-const pasteError = ref("");
 
 function commit(next: CreateCoursePackStatement[]) {
   emit("update:modelValue", next);
@@ -201,17 +154,5 @@ function patchNumber(index: number, key: "startTime" | "endTime", raw: string | 
   const parsed = text === "" ? Number.NaN : Number(text);
   const value = Number.isFinite(parsed) ? parsed : undefined;
   commit(list.value.map((s, i) => (i === index ? { ...s, [key]: value } : s)));
-}
-
-function applyPaste() {
-  pasteError.value = "";
-  const result = parseStatementsJson(pasteText.value);
-  if (!result.ok) {
-    pasteError.value = result.error;
-    return;
-  }
-  commit(result.statements);
-  showPasteArea.value = false;
-  pasteText.value = "";
 }
 </script>

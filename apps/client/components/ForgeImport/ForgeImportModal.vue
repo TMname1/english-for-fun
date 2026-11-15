@@ -122,7 +122,8 @@
           <span class="ml-auto text-sm opacity-70">已用 {{ elapsed }}s</span>
         </div>
         <p class="text-xs opacity-70">
-          整条流水线（提取音轨 → ASR → LLM 结构化 → 时间戳对齐）通常需要 1-5 分钟，请勿关闭页面。
+          先提取音轨并 ASR 转写，转录完成后会暂停让你校对文字；之后自动继续 LLM
+          结构化与时间戳对齐。请勿关闭页面。
         </p>
         <div class="flex justify-end">
           <UButton
@@ -134,10 +135,10 @@
         </div>
       </div>
 
-      <ForgeImportPreview
-        v-else-if="step === 'preview' && job"
+      <ForgeTranscriptReview
+        v-else-if="step === 'review' && job"
         :job="job"
-        @confirmed="handleConfirmed"
+        @resume="handleResume"
         @cancel="close"
       />
 
@@ -174,12 +175,14 @@
 import { computed, reactive, ref, watch } from "vue";
 import { toast } from "vue-sonner";
 
-import type { ForgeJobView } from "~/api/forge";
-import { cancelForgeJob, uploadForgeJob } from "~/api/forge";
+import type { CreateCoursePackPayload } from "~/api/course-pack";
+import type { ForgeJobView, ResumeTranscriptSegment } from "~/api/forge";
+import { createCoursePack } from "~/api/course-pack";
+import { cancelForgeJob, resumeForgeJob, uploadForgeJob } from "~/api/forge";
 import { useForgeJob } from "~/composables/forge/useForgeJob";
-import ForgeImportPreview from "./ForgeImportPreview.vue";
+import ForgeTranscriptReview from "./ForgeTranscriptReview.vue";
 
-type Step = "form" | "working" | "preview" | "failed";
+type Step = "form" | "working" | "review" | "failed";
 
 const props = defineProps<{ show: boolean }>();
 const emit = defineEmits<{
@@ -190,6 +193,7 @@ const emit = defineEmits<{
 const VIDEO_ACCEPT = ".mp4,.m4v,.mkv,.webm,.mov,.avi";
 
 const step = ref<Step>("form");
+const importing = ref(false);
 const fileInput = ref<HTMLInputElement | null>(null);
 const file = ref<File | null>(null);
 const form = reactive({
@@ -210,15 +214,21 @@ const workingLabel = computed(() => {
 const canSubmit = computed(() => Boolean(file.value && form.title.trim()));
 
 watch(
+  () => forge.isAwaitingReview.value,
+  (awaiting) => {
+    if (awaiting && step.value === "working") step.value = "review";
+  },
+);
+watch(
   () => forge.isDone.value,
   (done) => {
-    if (done && step.value === "working") step.value = "preview";
+    if (done && step.value === "working") void finalizeImport();
   },
 );
 watch(
   () => forge.isFailed.value || forge.isCancelled.value,
   (bad) => {
-    if (bad && step.value === "working") step.value = "failed";
+    if (bad && (step.value === "working" || step.value === "review")) step.value = "failed";
   },
 );
 
@@ -254,7 +264,11 @@ function handleVisibilityChange(value: boolean) {
 }
 
 function close() {
-  if (step.value === "working" && job.value && !forge.isTerminal.value) {
+  if (
+    (step.value === "working" || step.value === "review") &&
+    job.value &&
+    !forge.isTerminal.value
+  ) {
     void cancelForgeJob(job.value.id);
   }
   resetAll();
@@ -282,6 +296,63 @@ function resetAll() {
   form.type = "dialogue";
   form.desc = "";
   form.language = "en";
+}
+
+function handleResume(segments: ResumeTranscriptSegment[]) {
+  if (!job.value) return;
+  step.value = "working";
+  void (async () => {
+    try {
+      await resumeForgeJob(job.value!.id, segments);
+      forge.start(job.value!.id);
+    } catch (error) {
+      step.value = "failed";
+      toast.error("继续处理失败：" + (error instanceof Error ? error.message : String(error)));
+    }
+  })();
+}
+
+/** 流水线 done：去掉末尾可编辑预览，直接按产物写库并跳转 */
+async function finalizeImport() {
+  const j = job.value;
+  if (!j?.courseJson) {
+    step.value = "failed";
+    toast.error("产物缺失，无法导入");
+    return;
+  }
+  if (importing.value) return;
+  importing.value = true;
+  try {
+    const data = j.courseJson;
+    const payload: CreateCoursePackPayload = {
+      title: (data.title || j.title || "").trim(),
+      description: (data.description || j.description || "").trim(),
+      cover: data.cover ?? "",
+      video: j.videoPath || undefined,
+      courses: {
+        title: data.courses?.title ?? data.title ?? j.title,
+        description: data.courses?.description ?? "",
+        statements: (data.courses?.statements ?? []).map((s) => ({
+          english: (s.english ?? "").trim(),
+          chinese: (s.chinese ?? "").trim(),
+          phonetic: (s.phonetic ?? "").trim(),
+          startTime: s.startTime ?? undefined,
+          endTime: s.endTime ?? undefined,
+          words: s.words && s.words.length > 0 ? s.words : undefined,
+        })),
+      },
+    };
+    if (!payload.title) throw new Error("缺少课程包标题");
+    if (payload.courses.statements.length === 0) throw new Error("句子列表为空，无法导入");
+    const result = await createCoursePack(payload);
+    toast.success("已导入到课程库");
+    handleConfirmed(result.coursePackId);
+  } catch (error) {
+    step.value = "failed";
+    toast.error("导入失败：" + (error instanceof Error ? error.message : String(error)));
+  } finally {
+    importing.value = false;
+  }
 }
 
 function handleConfirmed(coursePackId: string) {

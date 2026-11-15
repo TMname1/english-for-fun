@@ -8,7 +8,7 @@
         class="text-sm opacity-70"
       >
         句子以列表形式编辑，每条含 english / chinese / phonetic（上传配套视频后可再加 startTime /
-        endTime）；也可用「粘贴 JSON」批量导入。
+        endTime）；也可用「导入句子 JSON」读取本地句子文件批量导入。
         <span v-if="activeTab === 0"> 顶部还可用「导入完整 JSON」读取本地课程包文件。</span>
         <span v-else> 保存时会用这里的句子整体替换该课程包原有句子。</span>
       </p>
@@ -245,9 +245,31 @@
                       placeholder="或填写站内路径 /course-video/xxx.mp4 / 外部 URL（可选）"
                     />
                   </div>
-                  <StatementListEditor
-                    v-model="editStatements"
-                    :show-timings="!!editPackForm.video"
+                  <div class="flex flex-col gap-3 rounded-lg border p-4 dark:border-gray-700">
+                    <div class="flex items-center justify-between">
+                      <span class="font-medium">句子列表</span>
+                      <UButton
+                        icon="i-ph-upload-simple"
+                        color="gray"
+                        variant="soft"
+                        size="xs"
+                        @click="openEditCourseJsonPicker"
+                      >
+                        导入句子 JSON
+                      </UButton>
+                    </div>
+                    <StatementListEditor
+                      v-model="editStatements"
+                      :show-timings="!!editPackForm.video"
+                    />
+                  </div>
+
+                  <input
+                    ref="editCourseJsonInput"
+                    type="file"
+                    accept="application/json,.json"
+                    class="hidden"
+                    @change="handleEditCourseJsonFile"
                   />
                   <div class="flex justify-end gap-3">
                     <UButton
@@ -496,6 +518,39 @@ async function handlePackJsonFile(event: Event) {
   packForm.value = { ...result.pack };
   courseForm.value = result.course;
   toast.success(`已导入课程包「${result.pack.title}」，确认无误后点击创建`);
+}
+
+const editCourseJsonInput = ref<HTMLInputElement | null>(null);
+
+function openEditCourseJsonPicker() {
+  editCourseJsonInput.value?.click();
+}
+
+async function handleEditCourseJsonFile(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  // 清空选择，保证重复导入同一个文件也能再次触发 change
+  input.value = "";
+  if (!file) return;
+
+  errorMessage.value = "";
+
+  let text = "";
+  try {
+    text = await file.text();
+  } catch {
+    errorMessage.value = `读取文件「${file.name}」失败`;
+    return;
+  }
+
+  const result = parseCourseJsonImport(text);
+  if (!result.ok) {
+    errorMessage.value = `导入「${file.name}」失败：${result.error}`;
+    return;
+  }
+
+  editStatements.value = result.statements;
+  toast.success(`已导入「${file.name}」，共 ${result.statements.length} 个句子`);
 }
 
 onMounted(async () => {
