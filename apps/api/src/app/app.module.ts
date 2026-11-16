@@ -1,5 +1,6 @@
 import { Module } from "@nestjs/common";
 
+import { BiliModule } from "../bili/bili.module";
 import { CourseHistoryModule } from "../course-history/course-history.module";
 import { CoursePackModule } from "../course-pack/course-pack.module";
 import { ForgeModule } from "../forge/forge.module";
@@ -21,6 +22,7 @@ import { UserLearningActivityModule } from "../user-learning-activity/user-learn
     MasteredElementModule,
     TtsModule,
     ForgeModule,
+    BiliModule,
   ],
 })
 export class AppModule {}

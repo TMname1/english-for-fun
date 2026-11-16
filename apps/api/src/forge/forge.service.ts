@@ -45,33 +45,76 @@ export class ForgeService {
   createJob(file: Express.Multer.File, dto: CreateForgeJobDto): { jobId: string } {
     // 全局 ValidationPipe 未开 transform，multipart 布尔字段到达时仍是字符串
     const defer = String(dto.defer) === "true";
-    const jobId = file.filename.replace(/\.[^.]+$/, "");
-    const videoFsPath = join(COURSE_VIDEO_DIR, file.filename);
-    const videoUrlPath = `/course-video/${file.filename}`;
-    const outDir = join(FORGE_OUTPUT_ROOT, jobId);
-
-    const record: ForgeJobRecord = {
-      id: jobId,
-      status: defer ? "pending" : "running",
-      stage: "pending",
-      message: defer ? "已上传，等待选择切点" : "流水线启动中…",
-      startedAt: Date.now(),
-      outDir,
-      videoFsPath,
-      videoUrlPath,
+    const record = this.buildRecord({
+      fileName: file.filename,
       title: dto.title,
       type: dto.type,
-      language: dto.language ?? "en",
-      description: dto.desc,
-      phase: "transcribe",
-    };
-    this.store.create(record);
+      language: dto.language,
+      desc: dto.desc,
+      defer,
+    });
 
     if (!defer) {
       this.launchTranscribe(record);
     }
 
-    return { jobId };
+    return { jobId: record.id };
+  }
+
+  /**
+   * B 站下载完成后，用已在服务器落盘的视频文件建一个 defer 流水线任务（等待前端进入切片页选择切点）。
+   * 文件名需已落在 COURSE_VIDEO_DIR 下。
+   */
+  createJobFromLocalVideo(params: {
+    fileName: string;
+    title: string;
+    type: "dialogue" | "music";
+    language?: string;
+    desc?: string;
+  }): { jobId: string } {
+    const record = this.buildRecord({
+      fileName: params.fileName,
+      title: params.title,
+      type: params.type,
+      language: params.language,
+      desc: params.desc,
+      defer: true,
+      pendingMessage: "已下载，等待选择切点",
+    });
+    return { jobId: record.id };
+  }
+
+  private buildRecord(input: {
+    fileName: string;
+    title: string;
+    type: "dialogue" | "music";
+    language?: string;
+    desc?: string;
+    defer: boolean;
+    pendingMessage?: string;
+  }): ForgeJobRecord {
+    const jobId = input.fileName.replace(/\.[^.]+$/, "");
+    const videoFsPath = join(COURSE_VIDEO_DIR, input.fileName);
+    const videoUrlPath = `/course-video/${input.fileName}`;
+    const outDir = join(FORGE_OUTPUT_ROOT, jobId);
+
+    const record: ForgeJobRecord = {
+      id: jobId,
+      status: input.defer ? "pending" : "running",
+      stage: "pending",
+      message: input.defer ? input.pendingMessage ?? "已上传，等待选择切点" : "流水线启动中…",
+      startedAt: Date.now(),
+      outDir,
+      videoFsPath,
+      videoUrlPath,
+      title: input.title,
+      type: input.type,
+      language: input.language ?? "en",
+      description: input.desc,
+      phase: "transcribe",
+    };
+    this.store.create(record);
+    return record;
   }
 
   /** defer 上传后提交切点并启动转写；clips 缺省转写整段 */
