@@ -214,7 +214,7 @@
         </div>
         <progress
           class="progress progress-primary w-full"
-          :value="download.total > 0 ? download.percent : undefined"
+          :value="download.total > 0 ? download.percent * 100 : undefined"
           :max="download.total > 0 ? 100 : undefined"
         />
         <div class="flex justify-end">
@@ -398,7 +398,7 @@ const downloadLabel = computed(() => {
   if (d.status === "done") return "下载完成";
   if (d.status === "failed") return `下载失败：${d.error || "未知错误"}`;
   if (d.status === "cancelled") return "下载已取消";
-  return `下载中 · ${d.phase}${d.percent > 0 ? ` ${d.percent.toFixed(1)}%` : ""}`;
+  return `下载中 · ${d.phase}${d.percent > 0 ? ` ${(d.percent * 100).toFixed(1)}%` : ""}`;
 });
 
 watch(sourceMode, (mode) => {

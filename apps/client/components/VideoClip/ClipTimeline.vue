@@ -56,11 +56,12 @@
             v-for="clip in clips"
             :key="clip.index"
             class="absolute bottom-3 top-3 overflow-hidden rounded-lg border transition-colors duration-150"
-            :class="
+            :class="[
               clip.selected
                 ? 'border-violet-400/60 bg-gradient-to-br from-violet-600/70 to-fuchsia-600/50 shadow-[0_0_14px_rgba(139,92,246,0.25)]'
-                : 'border-white/10 bg-white/5 opacity-60'
-            "
+                : 'border-white/10 bg-white/5 opacity-60',
+              isOversized(clip) ? 'border-red-500/80 ring-1 ring-red-500/50' : '',
+            ]"
             :style="{
               left: `${clip.start * pxPerSec + 1}px`,
               width: `${Math.max((clip.end - clip.start) * pxPerSec - 2, 8)}px`,
@@ -80,8 +81,12 @@
                 <span class="whitespace-nowrap">Clip {{ clip.index + 1 }}</span>
               </label>
               <div class="flex items-center justify-between gap-1">
-                <span class="whitespace-nowrap font-mono text-[10px] opacity-75">
-                  {{ formatDuration(clip.end - clip.start) }}
+                <span
+                  class="whitespace-nowrap font-mono text-[10px]"
+                  :class="isOversized(clip) ? 'font-semibold text-red-400' : 'opacity-75'"
+                >
+                  {{ formatDuration(clip.end - clip.start)
+                  }}{{ isOversized(clip) ? " ·超5min" : "" }}
                 </span>
                 <button
                   class="rounded bg-black/30 px-1.5 py-0.5 text-[10px] hover:bg-black/50"
@@ -138,7 +143,7 @@
 import { computed, ref, watch } from "vue";
 
 import type { EditorClip } from "~/composables/videoClip/useClipEditor";
-import { formatDuration, formatTimecode } from "~/composables/videoClip/clipMath";
+import { formatDuration, formatTimecode, MAX_CLIP_SECONDS } from "~/composables/videoClip/clipMath";
 
 const props = defineProps<{
   duration: number;
@@ -173,6 +178,10 @@ function handleSeekClick(event: MouseEvent) {
   const target = event.currentTarget as HTMLElement;
   const rect = target.getBoundingClientRect();
   emit("seek", (event.clientX - rect.left) / pxPerSec.value);
+}
+
+function isOversized(clip: { start: number; end: number }): boolean {
+  return clip.end - clip.start > MAX_CLIP_SECONDS;
 }
 
 // 播放时让播放头保持在可视范围内

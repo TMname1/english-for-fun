@@ -1,5 +1,8 @@
 export const CUT_EPS = 0.05;
 
+/** 与后端 / course-forge 的 ASR 单段 5 分钟上限保持一致 */
+export const MAX_CLIP_SECONDS = 300;
+
 export interface ClipSpan {
   start: number;
   end: number;
@@ -25,6 +28,22 @@ export function addCut(cuts: number[], time: number, duration: number): number[]
   if (t < CUT_EPS || duration - t < CUT_EPS) return cuts;
   if (cuts.some((c) => Math.abs(c - t) < CUT_EPS)) return cuts;
   return [...cuts, t].sort((a, b) => a - b);
+}
+
+/** 提交前校验：返回不可提交的中文原因，null 表示可以提交 */
+export function validateClipSelection(
+  duration: number,
+  cuts: number[],
+  selected: ClipSpan[],
+): string | null {
+  if (duration <= 0 || selected.length === 0) return null;
+  if (cuts.length === 0 && duration > MAX_CLIP_SECONDS) {
+    return "视频超过 5 分钟，不能整段转写；请先添加切点，把片段控制在 5 分钟以内";
+  }
+  if (selected.some((c) => c.end - c.start > MAX_CLIP_SECONDS)) {
+    return "选中的片段超过 5 分钟，请继续添加切点缩短后再提交";
+  }
+  return null;
 }
 
 /** 秒 → "M:SS.s"（超过 1 小时带小时位） */

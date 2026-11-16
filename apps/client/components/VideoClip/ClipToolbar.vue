@@ -33,14 +33,20 @@
         size="md"
         icon="i-ph-microphone-stage"
         :loading="submitting"
-        :disabled="selectedCount === 0"
+        :disabled="selectedCount === 0 || Boolean(blockReason)"
         @click="emit('submit')"
       >
         转写选中片段
       </UButton>
     </div>
     <p
-      v-if="selectedCount === 0"
+      v-if="blockReason"
+      class="w-full text-right text-xs text-red-500"
+    >
+      {{ blockReason }}
+    </p>
+    <p
+      v-else-if="selectedCount === 0"
       class="w-full text-right text-xs text-amber-500"
     >
       至少勾选一个片段才能开始转写
@@ -58,6 +64,7 @@ defineProps<{
   totalCount: number;
   selectedSeconds: number;
   submitting: boolean;
+  blockReason?: string | null;
 }>();
 
 const emit = defineEmits<{
