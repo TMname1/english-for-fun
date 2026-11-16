@@ -75,9 +75,9 @@ const HELP = `Course Forge：视频/音频 -> 课程包流水线
 
 环境变量：
   FORGE_LLM_BASE_URL (默认 http://localhost:11434/v1)  FORGE_LLM_MODEL (默认 qwen3:4b)  FORGE_LLM_API_KEY
-  FORGE_ASR_URL (默认 http://localhost:9000)           FORGE_API_URL (默认 http://localhost:3001)
+  FORGE_ASR_BASE_URL / FORGE_ASR_MODEL / FORGE_ASR_API_KEY（百炼 Qwen-Audio-ASR）   FORGE_API_URL (默认 http://localhost:3001)
   FORGE_COURSE_VIDEO_DIR (默认 apps/api/storage/course-video)  导入时视频复制目标目录
-  FORGE_ASR_STOP_AFTER=0 转写后不自动停 ASR 容器       FORGE_LLM_PREFLIGHT=0 关闭 LLM 调用前预检
+  FORGE_ASR_TIMEOUT_MS 单次转写超时（默认 3 分钟）       FORGE_LLM_PREFLIGHT=0 关闭 LLM 调用前预检
   FORGE_LLM_VRAM_STRICT=0 显存不足仅警告（CPU 卸载慢跑）  FORGE_LLM_VRAM_MARGIN_MB 显存估算余量（默认 512）
   FORGE_LLM_REASONING_EFFORT (默认 none，关闭 ollama 思考模式；非 ollama 服务如 DashScope 必须置空串)
   以上变量可写入 packages/course-forge/.env（见 .env.example；进程环境变量优先）。云端推荐：

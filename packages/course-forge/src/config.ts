@@ -66,10 +66,16 @@ export const config = {
   packageDir,
   defaultOutRoot: join(packageDir, "output"),
 
-  /** ASR（docker-compose 的 asr 服务，OpenAI 兼容接口） */
-  asrBaseUrl: env("FORGE_ASR_URL", "http://localhost:9000"),
-  /** docker compose 拉起 asr 服务后的等待上限（首次要拉镜像 + 下载模型） */
-  asrWaitMs: envInt("FORGE_ASR_WAIT_MS", 15 * 60 * 1000),
+  /** ASR（阿里云百炼 DashScope 非实时语音识别 Qwen-Audio-ASR：原生 multimodal-generation 接口，SSE 流式返回句/词级毫秒时间戳） */
+  asrBaseUrl: env(
+    "FORGE_ASR_BASE_URL",
+    "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
+  ),
+  asrModel: env("FORGE_ASR_MODEL", "qwen-audio-3.1-asr-flash"),
+  /** 百炼 DashScope API Key（sk- 开头）；与 LLM 解耦，单独配置 */
+  asrApiKey: env("FORGE_ASR_API_KEY", ""),
+  /** 单次转写请求超时（毫秒）；流式长音频生成耗时较长，默认 3 分钟 */
+  asrTimeoutMs: envInt("FORGE_ASR_TIMEOUT_MS", 3 * 60 * 1000),
 
   /** LLM（OpenAI 兼容 chat completions；默认本地 ollama） */
   llmBaseUrl: env("FORGE_LLM_BASE_URL", "http://localhost:11434/v1"),
@@ -82,8 +88,6 @@ export const config = {
   llmEnableThinking: parseEnableThinking(env("FORGE_LLM_ENABLE_THINKING", "")),
   /** 单次 LLM 调用携带的最大转写词数：一个分块恰好生成一门课，分块大小≈课程规模（约 5~15 个目标句） */
   llmMaxWordsPerCall: envInt("FORGE_LLM_MAX_WORDS", 250),
-  /** 转写结束后自动停止 asr 容器，把显存让给 LLM（0 = 保持常驻，可加快下次转写） */
-  asrStopAfterTranscribe: env("FORGE_ASR_STOP_AFTER", "1") !== "0",
   /** LLM 调用前是否预检（服务连通 / 模型存在 / 显存余量） */
   llmPreflight: env("FORGE_LLM_PREFLIGHT", "1") !== "0",
   /** 显存估算不足时是否直接拦停（0 = 仅警告，接受 CPU 卸载慢跑） */
