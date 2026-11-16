@@ -187,12 +187,3 @@ pnpm test:e2e
 # 单测和端对端测试一起跑
 pnpm test
 ```
-
-## 文档项目
-
-基于Vitepress文档的项目，执行以下命令：
-
-```bash
-# 本地开发
-pnpm docs:dev
-```
