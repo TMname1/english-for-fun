@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 
 import type { ClipRange, ForgeMeta, ForgePayload, Transcript } from "./types";
 import { alignStatements, formatAlignmentSummary } from "./align";
-import { ensureAsrReady, stopAsrService, transcodeToWav, transcribe } from "./asr";
+import { transcodeToWav, transcribe } from "./asr";
 import { mergeClipTranscripts, normalizeClips, offsetTranscript, tagClipBoundaries } from "./clips";
 import { config, createRunId } from "./config";
 import { generateDraft } from "./llm";
@@ -88,7 +88,6 @@ export async function forgeTranscribe(opts: MakeOptions): Promise<string> {
 
   // 视频输入时 ffmpeg -vn 直接提取音轨；时间戳相对同一时间轴，天然与视频同步
   opts.onStage?.("transcoding");
-  await ensureAsrReady();
   await mkdir(paths.work(outDir), { recursive: true });
   const language = opts.language ?? "en";
   const clips = opts.clips ? normalizeClips(opts.clips) : undefined;
@@ -135,11 +134,6 @@ export async function forgeTranscribe(opts: MakeOptions): Promise<string> {
   console.log(
     `[forge] 转写完成：${transcript.segments.length} 段（词级时间戳：${transcript.wordLevel ? "有" : "无，段级降级"}）`,
   );
-
-  // 转写一结束就停 asr 容器——whisper 空闲时也占着显存，小显存卡上会挤爆 LLM 加载
-  if (config.asrStopAfterTranscribe) {
-    stopAsrService();
-  }
 
   return outDir;
 }

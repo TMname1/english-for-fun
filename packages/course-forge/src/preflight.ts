@@ -223,7 +223,7 @@ export async function preflightLlm(): Promise<void> {
   if (verdict.level === "fail") {
     throw new Error(
       `[llm] 预检失败：显存余量不足（空闲 ${verdict.freeMb}MB < 所需约 ${verdict.requiredMb}MB；${config.llmModel} 权重约 ${modelMb}MB）。` +
-        `处置：关闭占显存的应用；若 ASR 容器在占显存，确认未设置 FORGE_ASR_STOP_AFTER=0（本流程转写后会自动停它）；` +
+        `处置：关闭占显存的应用；` +
         `接受 CPU 卸载慢跑则设 FORGE_LLM_VRAM_STRICT=0 重跑`,
     );
   }
