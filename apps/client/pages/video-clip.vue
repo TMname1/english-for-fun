@@ -195,7 +195,20 @@ watch(
 async function handleUpload(payload: ClipUploadPayload) {
   uploading.value = true;
   try {
-    const { jobId: id } = await uploadForgeJob({ ...payload, defer: true });
+    let id: string;
+    if (payload.kind === "bili") {
+      // B 站下载已在服务端建好延迟任务，直接复用 jobId
+      id = payload.jobId;
+    } else {
+      ({ jobId: id } = await uploadForgeJob({
+        file: payload.file,
+        title: payload.title,
+        type: payload.type,
+        language: payload.language,
+        desc: payload.desc,
+        defer: true,
+      }));
+    }
     jobId.value = id;
     const view = await fetchForgeJob(id);
     videoUrl.value = `${runtimeConfig.public.apiBase}${view.videoPath}`;

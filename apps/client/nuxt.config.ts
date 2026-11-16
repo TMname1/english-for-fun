@@ -50,7 +50,6 @@ export default defineNuxtConfig({
   runtimeConfig: {
     public: {
       apiBase: process.env.API_BASE || "",
-      helpDocsURL: process.env.HELP_DOCS_URL || "",
       // 仅本地 dev 暴露"导入视频"按钮；生产 .env 设 ALLOW_FORGE=0 关闭
       allowForge: process.env.ALLOW_FORGE !== "0",
     },
