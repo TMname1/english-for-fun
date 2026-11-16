@@ -1,126 +1,37 @@
-import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 
 import type { ClipRange, Transcript, TranscriptSegment, TranscriptWord } from "./types";
-import { config, repoRoot } from "./config";
+import { config } from "./config";
 import { runFfmpeg } from "./util";
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-async function probeHealth(timeoutMs = 2500): Promise<boolean> {
-  for (const path of ["/health", "/v1/models"]) {
-    try {
-      const res = await fetch(`${config.asrBaseUrl}${path}`, {
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-      if (res.ok) {
-        return true;
-      }
-    } catch {
-      // 尝试下一个探测端点
-    }
-  }
-  return false;
-}
-
 /**
- * 检查服务端已安装 whisper-1 模型；未安装则 POST /v1/models/whisper-1 触发一次性下载
- * （约 3GB，服务端直接从 HuggingFace 拉取，耗时取决于网络；超时受 FORGE_ASR_WAIT_MS 控制）。
+ * flash 同步版（qwen-audio-3.1-asr-flash）官方建议单段 ≤5 分钟。超过直接报错，
+ * 长音频请用切片把选区分段（流水线已支持多 clip 分段转写 + 合并）。
  */
-async function ensureModelInstalled(): Promise<void> {
-  let ids: string[] | null = null;
-  try {
-    const res = await fetch(`${config.asrBaseUrl}/v1/models`, {
-      signal: AbortSignal.timeout(10_000),
-    });
-    if (res.ok) {
-      const json = (await res.json()) as { data?: Array<{ id?: string }> };
-      ids = (json.data ?? []).map((m) => m.id ?? "");
-    }
-  } catch {
-    // 列不出来就无条件触发一次安装（已存在时服务端会快速返回）
-  }
-  if (ids && ids.some((id) => id === "whisper-1" || id.includes("faster-whisper-large-v3"))) {
-    return;
-  }
+const MAX_ASR_SECONDS = 300;
 
-  console.log(`[asr] 服务端尚未安装转写模型，触发下载（约 3GB，首次可能需要几分钟到几十分钟）...`);
-  const dl = await fetch(`${config.asrBaseUrl}/v1/models/whisper-1`, {
-    method: "POST",
-    signal: AbortSignal.timeout(config.asrWaitMs),
-  });
-  if (!dl.ok) {
-    throw new Error(
-      `[asr] 模型下载失败（HTTP ${dl.status}）: ${(await dl.text().catch(() => "")).slice(0, 300)}\n` +
-        `可手动重试：curl -X POST ${config.asrBaseUrl}/v1/models/whisper-1（需能访问 huggingface.co，必要时给 Docker 配代理）`,
-    );
-  }
-  console.log(`[asr] 模型安装完成`);
+/** DashScope Qwen-Audio-ASR 流式返回的词结构（时间戳单位毫秒） */
+interface QwenAsrWord {
+  text?: string;
+  begin_time?: number;
+  end_time?: number;
+  punctuation?: string;
 }
 
-/**
- * 确保 ASR 服务可用且模型就绪；服务不可用则通过 docker compose（asr profile）拉起并等待健康检查通过。
- * 首次运行会拉镜像并下载模型权重，可能耗时较久（受 FORGE_ASR_WAIT_MS 控制，默认 15 分钟）。
- */
-export async function ensureAsrReady(): Promise<void> {
-  if (await probeHealth()) {
-    await ensureModelInstalled();
-    return;
-  }
-
-  console.log(`[asr] ASR 服务未就绪，尝试启动容器：docker compose --profile asr up -d asr`);
-  const result = spawnSync("docker", ["compose", "--profile", "asr", "up", "-d", "asr"], {
-    cwd: repoRoot,
-    encoding: "utf-8",
-  });
-  if (result.status !== 0) {
-    const detail = (result.stderr || result.stdout || String(result.error ?? "")).trim();
-    throw new Error(
-      `[asr] docker compose 启动 asr 服务失败。请确认 Docker 已运行、镜像可拉取（必要时配置代理）。\n${detail.slice(0, 800)}`,
-    );
-  }
-
-  const deadline = Date.now() + config.asrWaitMs;
-  let logged = false;
-  while (Date.now() < deadline) {
-    await sleep(4000);
-    if (await probeHealth()) {
-      console.log(`[asr] ASR 服务已就绪`);
-      await ensureModelInstalled();
-      return;
-    }
-    if (!logged) {
-      console.log(
-        `[asr] 等待 ASR 服务健康检查（首次启动需拉镜像/下载模型，最长 ${Math.round(config.asrWaitMs / 60000)} 分钟）...`,
-      );
-      logged = true;
-    }
-  }
-  throw new Error(
-    `[asr] 等待超时。可查看日志排查：docker compose logs asr（也可用 FORGE_ASR_WAIT_MS 放宽超时）`,
-  );
+/** DashScope Qwen-Audio-ASR 流式返回的句子结构（时间戳单位毫秒） */
+export interface QwenAsrSentence {
+  sentence_id?: number;
+  begin_time?: number;
+  end_time?: number;
+  text?: string;
+  sentence_end?: boolean;
+  words?: QwenAsrWord[];
 }
 
-/** 停止 asr 容器的 docker compose 参数（与 ensureAsrReady 的启动参数对称；纯函数便于测试） */
-export function asrComposeStopArgs(): string[] {
-  return ["compose", "--profile", "asr", "stop", "asr"];
-}
-
-/**
- * 转写结束后停掉 asr 容器：whisper 即使空闲也持续驻留显存，小显存卡上会挤爆 LLM 加载。
- * 失败仅告警不阻断——显存问题交给 LLM 预检兜底拦停。
- */
-export function stopAsrService(): void {
-  const args = asrComposeStopArgs();
-  const result = spawnSync("docker", args, { cwd: repoRoot, encoding: "utf-8" });
-  if (result.status !== 0) {
-    const detail = (result.stderr || result.stdout || String(result.error ?? "")).trim();
-    console.warn(
-      `[asr] 停止 ASR 容器失败（不影响流程，可手动执行：docker ${args.join(" ")}）：\n${detail.slice(0, 300)}`,
-    );
-    return;
-  }
-  console.log(`[asr] 已停止 ASR 容器，显存让给 LLM`);
+/** 毫秒 → 秒；非法值返回 null */
+function msToSeconds(ms: unknown): number | null {
+  const n = Number(ms);
+  return Number.isFinite(n) ? n / 1000 : null;
 }
 
 /** 转码为 ASR 友好格式：16kHz 单声道 16-bit PCM wav；range 存在时只提取该时间区间 */
@@ -150,91 +61,185 @@ export async function transcodeToWav(
   ]);
 }
 
-interface VerboseSegment {
-  id?: number;
-  start?: number;
-  end?: number;
-  text?: string;
-  words?: Array<{ word?: string; start?: number; end?: number }>;
-}
-
-/** 解析 verbose_json 响应；无词级时间戳时降级为段级 */
-export function parseTranscription(json: unknown, language: string): Transcript {
-  const raw = (json ?? {}) as { segments?: VerboseSegment[] };
+/**
+ * 把流式收集到的稳定句子（sentence_end=true）转成 Transcript。
+ * 毫秒时间戳换算为秒；词文字 = trim(text) + punctuation，标点并入词尾，与下游 align 的逐词口径一致。
+ */
+export function buildTranscriptFromSentences(
+  sentences: QwenAsrSentence[],
+  language: string,
+): Transcript {
   const segments: TranscriptSegment[] = [];
   let anyWords = false;
 
-  (raw.segments ?? []).forEach((seg, index) => {
-    const start = Number(seg.start);
-    const end = Number(seg.end);
-    if (!Number.isFinite(start) || !Number.isFinite(end)) {
+  sentences.forEach((sent, index) => {
+    const start = msToSeconds(sent.begin_time);
+    const end = msToSeconds(sent.end_time);
+    if (start === null || end === null) {
       return;
     }
+
     const words: TranscriptWord[] = [];
-    for (const w of seg.words ?? []) {
-      const ws = Number(w.start);
-      const we = Number(w.end);
-      const text = (w.word ?? "").trim();
-      if (text && Number.isFinite(ws) && Number.isFinite(we)) {
+    for (const w of sent.words ?? []) {
+      const ws = msToSeconds(w.begin_time);
+      const we = msToSeconds(w.end_time);
+      const text = `${(w.text ?? "").trim()}${w.punctuation ?? ""}`.trim();
+      if (text && ws !== null && we !== null) {
         words.push({ word: text, start: ws, end: we });
       }
     }
     if (words.length > 0) {
       anyWords = true;
     }
+
+    const text = (sent.text ?? "").trim();
+    if (!text && words.length === 0) {
+      return;
+    }
+
     segments.push({
-      id: Number.isFinite(Number(seg.id)) ? Number(seg.id) : index,
+      // sentence_id 从 1 起，转 0 基与下游 id 口径一致
+      id: Number.isFinite(Number(sent.sentence_id)) ? Number(sent.sentence_id) - 1 : index,
       start,
       end,
-      text: (seg.text ?? "").trim(),
+      text:
+        text ||
+        words
+          .map((x) => x.word)
+          .join(" ")
+          .trim(),
       words: words.length > 0 ? words : undefined,
     });
   });
 
   if (segments.length === 0) {
-    throw new Error("[asr] 转写结果为空，未识别到英文语音（音乐伴奏过密时常见，建议用人声干声）");
+    throw new Error(
+      "[asr] 转写结果为空，未识别到语音（伴奏过密或静音时常见，建议用人声干声、或缩短选区）",
+    );
   }
 
   return { wordLevel: anyWords, language, segments };
 }
 
 /**
- * 调 ASR 服务转写 wav。优先请求词级时间戳；服务端不支持时自动去掉该参数重试（段级降级）。
+ * 解析 SSE 流，收集每个句子的最终结果（sentence_end=true）。
+ * DashScope 流式每个事件带一个 output.sentence，中间事件会反复更新同一句；按 sentence_id 去重取最后一次稳定值。
  */
-export async function transcribe(wavPath: string, language = "en"): Promise<Transcript> {
-  const buf = await readFile(wavPath);
+async function collectFinalSentences(res: Response): Promise<QwenAsrSentence[]> {
+  if (!res.body) {
+    throw new Error("[asr] 响应没有数据流（SSE body 为空）");
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  const byId = new Map<number, QwenAsrSentence>();
+  let buffer = "";
 
-  const post = async (withWordTimestamps: boolean) => {
-    const form = new FormData();
-    form.set("file", new Blob([new Uint8Array(buf)], { type: "audio/wav" }), "audio.wav");
-    form.set("model", "whisper-1");
-    form.set("language", language);
-    form.set("response_format", "verbose_json");
-    if (withWordTimestamps) {
-      // 新版 OpenAI 协议参数（speaches 等实现只认这个，不再支持旧的 word_timestamps 布尔值）
-      form.set("timestamp_granularities[]", "word");
+  const handleEvent = (event: string): void => {
+    let payload = "";
+    for (const line of event.split("\n")) {
+      if (line.startsWith("data:")) {
+        payload += line.slice(5).trim();
+      }
     }
-    return fetch(`${config.asrBaseUrl}/v1/audio/transcriptions`, { method: "POST", body: form });
+    if (!payload) return;
+    let json: { code?: string; message?: string; output?: { sentence?: QwenAsrSentence } };
+    try {
+      json = JSON.parse(payload);
+    } catch {
+      return; // 心跳、[DONE]、状态行等非 JSON 事件忽略
+    }
+    if (json.code && !json.output) {
+      throw new Error(`[asr] 服务返回错误: ${json.code} ${json.message ?? ""}`.trim());
+    }
+    const sentence = json.output?.sentence;
+    if (sentence && sentence.sentence_end === true) {
+      const id = Number.isFinite(Number(sentence.sentence_id))
+        ? Number(sentence.sentence_id)
+        : byId.size + 1;
+      byId.set(id, sentence);
+    }
   };
 
-  console.log(`[asr] 提交转写请求: ${wavPath}`);
-  let res = await post(true);
-  if (!res.ok) {
-    const firstError = await res.text().catch(() => "");
-    console.log(
-      `[asr] 带 timestamp_granularities[]=word 的请求失败（${res.status}），尝试段级降级重试: ${firstError.slice(0, 200)}`,
-    );
-    res = await post(false);
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
+    let sep = buffer.indexOf("\n\n");
+    while (sep !== -1) {
+      handleEvent(buffer.slice(0, sep));
+      buffer = buffer.slice(sep + 2);
+      sep = buffer.indexOf("\n\n");
+    }
   }
-  if (!res.ok) {
+  buffer += decoder.decode().replace(/\r\n/g, "\n");
+  if (buffer.trim()) {
+    handleEvent(buffer);
+  }
+
+  return [...byId.values()].sort((a, b) => Number(a.sentence_id ?? 0) - Number(b.sentence_id ?? 0));
+}
+
+/**
+ * 调百炼 Qwen-Audio-ASR 转写 wav：base64 data URI 上传 + SSE 流式，逐句收集句/词级时间戳。
+ * 超 5 分钟直接报错（flash 同步版建议上限）；词级时间戳由模型固定返回。
+ */
+export async function transcribe(wavPath: string, language = "en"): Promise<Transcript> {
+  if (!config.asrApiKey) {
+    throw new Error("[asr] 未配置 FORGE_ASR_API_KEY（百炼 DashScope API Key，sk- 开头）");
+  }
+
+  const buf = await readFile(wavPath);
+  // 16k 单声道 16-bit PCM ≈ 32000 字节/秒（含 44 字节 wav 头），用于入参前的时长校验
+  const durationSec = (buf.length - 44) / 32000;
+  if (durationSec > MAX_ASR_SECONDS + 1) {
     throw new Error(
-      `[asr] 转写请求失败（HTTP ${res.status}）: ${(await res.text()).slice(0, 400)}`,
+      `[asr] 音频约 ${durationSec.toFixed(1)}s，超过单段上限 ${MAX_ASR_SECONDS}s；请用切片把选区缩短到 5 分钟以内`,
     );
   }
 
-  const transcript = parseTranscription(await res.json(), language);
+  const body = JSON.stringify({
+    model: config.asrModel,
+    input: {
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_audio",
+              input_audio: { data: `data:audio/wav;base64,${buf.toString("base64")}` },
+            },
+          ],
+        },
+      ],
+    },
+    parameters: {
+      format: "wav",
+      sample_rate: "16000",
+      language_hints: [language],
+    },
+  });
+
+  console.log(
+    `[asr] 提交转写请求: ${wavPath}（${config.asrModel}，约 ${durationSec.toFixed(1)}s）`,
+  );
+  const res = await fetch(config.asrBaseUrl, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${config.asrApiKey}`,
+      "Content-Type": "application/json",
+      "X-DashScope-SSE": "enable",
+    },
+    body,
+    signal: AbortSignal.timeout(config.asrTimeoutMs),
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(`[asr] 转写请求失败（HTTP ${res.status}）: ${detail.slice(0, 400)}`);
+  }
+
+  const transcript = buildTranscriptFromSentences(await collectFinalSentences(res), language);
   if (!transcript.wordLevel) {
-    console.warn(`[asr] 警告: 服务端未返回词级时间戳，transcript.json 仅含段级文本与起止时间`);
+    console.warn(`[asr] 警告: 未返回词级时间戳，transcript.json 仅含段级文本与起止时间`);
   }
   return transcript;
 }
