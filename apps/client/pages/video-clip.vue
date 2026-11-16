@@ -41,6 +41,7 @@
           :total-count="editor.clips.value.length"
           :selected-seconds="editor.selectedSeconds.value"
           :submitting="submitting"
+          :block-reason="submitBlockReason"
           @add-cut="handleAddCut"
           @select-all="editor.selectAll(true)"
           @select-none="editor.selectAll(false)"
@@ -61,7 +62,8 @@
         />
 
         <p class="text-xs opacity-60">
-          快捷键：空格 播放/暂停 · C 在播放头添加切点。不打切点则整段视频作为一个片段转写。
+          快捷键：空格 播放/暂停 · C 在播放头添加切点。5 分钟内的视频不打切点可整段转写；超过 5
+          分钟必须先切分，且单个片段不超过 5 分钟。
         </p>
       </div>
 
@@ -148,6 +150,7 @@ import ClipToolbar from "~/components/VideoClip/ClipToolbar.vue";
 import ClipUploadForm from "~/components/VideoClip/ClipUploadForm.vue";
 import { buildCoursePackPayload } from "~/composables/forge/buildCoursePackPayload";
 import { useForgeJob } from "~/composables/forge/useForgeJob";
+import { validateClipSelection } from "~/composables/videoClip/clipMath";
 import { useClipEditor } from "~/composables/videoClip/useClipEditor";
 import { useClipPlayer } from "~/composables/videoClip/useClipPlayer";
 
@@ -166,6 +169,10 @@ const submittedClipCount = ref(1);
 
 const editor = useClipEditor();
 const player = useClipPlayer(videoEl);
+
+const submitBlockReason = computed(() =>
+  validateClipSelection(editor.duration.value, editor.cuts.value, editor.selectedClips.value),
+);
 const forge = useForgeJob();
 
 const workingLabel = computed(() => forge.stageLabel.value || "处理中…");

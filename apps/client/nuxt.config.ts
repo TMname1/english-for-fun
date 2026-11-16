@@ -28,7 +28,7 @@ export default defineNuxtConfig({
   },
   app: {
     head: {
-      title: "Earthworm",
+      title: "EnglishForFun",
       link: [{ rel: "icon", href: "/favicon.ico" }],
       script: appScripts,
     },

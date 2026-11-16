@@ -91,7 +91,7 @@ export const tpl_1 = ({
             src: "/logo.png",
             width: "48",
             height: "48",
-            alt: "Earthworm logo",
+            alt: "EnglishForFun logo",
           },
         },
         {
