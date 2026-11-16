@@ -10,9 +10,7 @@
 
 ```
 视频 / 音频文件
-  │  Step 1    转写        ffmpeg -vn 提取音轨 → docker 内 faster-whisper → 带词级时间戳的 transcript.json
-  ▼
-  │  Step 1.5  释放显存    转写完成后自动停止 ASR 容器，把显存让给 LLM
+  │  Step 1    转写        ffmpeg -vn 提取音轨 → 百炼 Qwen-Audio-ASR（流式）→ 带词级时间戳的 transcript.json
   ▼
   │  Step 2    结构化      本地/云端 LLM（OpenAI 兼容）把字幕拆成 Earthworm 式课程 JSON
   ▼
@@ -41,24 +39,22 @@
    ```bash
    pnpm db:init
    ```
-3. **准备 ASR 转写服务**（二选一）：
-   - 用项目自带的 docker 服务：确保 Docker 在跑即可，首次 `forge` 会自动
-     `docker compose --profile asr up -d asr` 拉起并等你把模型下好（`asr` 服务不在 `docker:start` 里，纯按需）。
-   - 或自备任意返回 `verbose_json` 的 OpenAI 兼容转写服务，设 `FORGE_ASR_URL` 指过去，脚本探测到就绪就不再拉容器。
-   - 镜像选择、`PRELOAD_MODELS`、GPU/CPU、离线与 HF 镜像站等见 §6。
+3. **配置 ASR（阿里云百炼 Qwen-Audio-ASR）**：写进 `packages/course-forge/.env`（复制 `.env.example`）：
+   - `FORGE_ASR_API_KEY=sk-...`（百炼 DashScope Key，必填）；`FORGE_ASR_MODEL` 默认 `qwen-audio-3.1-asr-flash`。
+   - 走 DashScope 原生 `multimodal-generation` 接口、SSE 流式，固定返回句/词级时间戳（毫秒，流水线内换算为秒）。
+   - flash 同步版建议单段音频 ≤5 分钟；超长选区请用切片分段（流水线支持多 clip 合并）。详见 §6。
 4. **准备 LLM**（结构化用，OpenAI 兼容接口）：默认本地 ollama
    ```bash
    ollama serve            # 若未常驻
    ollama pull qwen3:4b    # 默认模型；显存/效果不够见 §6、§7
    ```
-   想切 DeepSeek / OpenAI 等云端，只改环境变量（见 §6），代码不动。
+   想切 DeepSeek / OpenAI / 百炼等云端，只改环境变量（见 §6），代码不动。
 
 自检（可选，跑之前确认三方就绪）：
 
 ```bash
-docker ps                                   # Docker 在跑
 curl http://localhost:11434/v1/models       # ollama 可达（或你的云端）
-# ASR 首次由脚本自动拉起；手动检查：curl http://localhost:9000/health
+# ASR 走百炼云 API，无需本地服务；确认 .env 里 FORGE_ASR_API_KEY 已填即可
 ```
 
 ---
@@ -95,7 +91,6 @@ pnpm forge -- --video "D:/media/friends_s01e01.mp4" --title "老友记 S01E01" -
 
 # 控制台会打印：
 #   [asr] 提交转写请求 ...          [forge] 转写完成：NN 段（词级时间戳：有）
-#   [asr] 已停止 ASR 容器，显存让给 LLM
 #   [llm] 结构化分析 ...            [forge] 结构化完成：1 课 / Y 条 statement
 #   [forge] 对齐：XX/YY 条命中（成功率 ZZ%）
 #   [forge] 产物目录：D:\...\output\20261110-203012
@@ -202,54 +197,48 @@ pnpm forge -- --audio "D:/media/podcast.mp3" --title "某播客" --type dialogue
 流水线侧（`course-forge`，全部有合理默认，通常不用设；也可集中写进 `packages/course-forge/.env`，
 复制 `.env.example` 即可，进程环境变量优先于该文件）：
 
-| 变量                         | 默认                             | 说明                                                                                                                 |
-| ---------------------------- | -------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `FORGE_ASR_URL`              | `http://localhost:9000`          | ASR 服务地址（compose `asr` 的宿主端口）。指到外部服务即绕过自动拉容器                                               |
-| `FORGE_ASR_WAIT_MS`          | 900000（15 分）                  | 拉起 asr 容器后等待健康检查的上限；首次下模型慢可调大                                                                |
-| `FORGE_ASR_STOP_AFTER`       | `1`（自动停止）                  | 转写结束后是否停止 ASR 容器释放显存；设为 `0` 保持常驻可加快下次转写                                                 |
-| `FORGE_LLM_BASE_URL`         | `http://localhost:11434/v1`      | OpenAI 兼容 chat 端点（ollama / DeepSeek / OpenAI…）                                                                 |
-| `FORGE_LLM_MODEL`            | `qwen3:4b`                       | 结构化模型；4B 本地模型已证实做不动本课程组装任务，推荐换云端 qwen-plus（见 `.env.example`）                         |
-| `FORGE_LLM_API_KEY`          | `ollama`                         | 云端服务填真实 key                                                                                                   |
-| `FORGE_LLM_MAX_TOKENS`       | 16000                            | 单次 LLM 输出上限                                                                                                    |
-| `FORGE_LLM_REASONING_EFFORT` | `none`                           | ollama 专用参数；非 ollama（如 DashScope）**必须置空**，留空串即不发送该字段                                         |
-| `FORGE_LLM_ENABLE_THINKING`  | 空（不发送）                     | 思考开关（`enable_thinking`）；qwen3.8-flash 等默认开思考的云端模型设 `false`，否则思考吃光 max_tokens、生成看似卡死 |
-| `FORGE_LLM_MAX_WORDS`        | 250                              | 单次调用携带的最大词数；转写先预拼成完整句再分块，**一个分块生成一门课**                                             |
-| `FORGE_LLM_PREFLIGHT`        | `1`                              | LLM 调用前是否预检（服务连通/模型存在/显存余量）；设为 `0` 跳过                                                      |
-| `FORGE_LLM_VRAM_STRICT`      | `1`                              | 显存估算不足时是否直接拦停；设为 `0` 仅警告（接受 CPU 卸载慢跑）                                                     |
-| `FORGE_LLM_VRAM_MARGIN_MB`   | 512                              | 显存估算余量（KV cache + CUDA 上下文开销，MB）                                                                       |
-| `FORGE_API_URL`              | `http://localhost:3001`          | 导入目标 API                                                                                                         |
-| `FORGE_COURSE_VIDEO_DIR`     | `apps/api/storage/course-video/` | 导入时视频复制目标目录（API 静态挂载到 `/course-video` 前缀）                                                        |
+| 变量                         | 默认                              | 说明                                                                                                                 |
+| ---------------------------- | --------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `FORGE_ASR_BASE_URL`         | 百炼 `multimodal-generation` 端点 | DashScope Qwen-Audio-ASR 原生接口地址（非 OpenAI 兼容）                                                              |
+| `FORGE_ASR_MODEL`            | `qwen-audio-3.1-asr-flash`        | 非实时 ASR 模型；SSE 流式返回句/词级毫秒时间戳（流水线换算为秒）                                                     |
+| `FORGE_ASR_API_KEY`          | 空（**必填**）                    | 百炼 DashScope API Key（`sk-` 开头）                                                                                 |
+| `FORGE_ASR_TIMEOUT_MS`       | 180000（3 分）                    | 单次转写请求超时；长音频流式生成慢可调大。flash 同步版建议单段 ≤5 分钟，超长请用切片分段                             |
+| `FORGE_LLM_BASE_URL`         | `http://localhost:11434/v1`       | OpenAI 兼容 chat 端点（ollama / DeepSeek / OpenAI…）                                                                 |
+| `FORGE_LLM_MODEL`            | `qwen3:4b`                        | 结构化模型；4B 本地模型已证实做不动本课程组装任务，推荐换云端 qwen-plus（见 `.env.example`）                         |
+| `FORGE_LLM_API_KEY`          | `ollama`                          | 云端服务填真实 key                                                                                                   |
+| `FORGE_LLM_MAX_TOKENS`       | 16000                             | 单次 LLM 输出上限                                                                                                    |
+| `FORGE_LLM_REASONING_EFFORT` | `none`                            | ollama 专用参数；非 ollama（如 DashScope）**必须置空**，留空串即不发送该字段                                         |
+| `FORGE_LLM_ENABLE_THINKING`  | 空（不发送）                      | 思考开关（`enable_thinking`）；qwen3.8-flash 等默认开思考的云端模型设 `false`，否则思考吃光 max_tokens、生成看似卡死 |
+| `FORGE_LLM_MAX_WORDS`        | 250                               | 单次调用携带的最大词数；转写先预拼成完整句再分块，**一个分块生成一门课**                                             |
+| `FORGE_LLM_PREFLIGHT`        | `1`                               | LLM 调用前是否预检（服务连通/模型存在/显存余量）；设为 `0` 跳过                                                      |
+| `FORGE_LLM_VRAM_STRICT`      | `1`                               | 显存估算不足时是否直接拦停；设为 `0` 仅警告（接受 CPU 卸载慢跑）                                                     |
+| `FORGE_LLM_VRAM_MARGIN_MB`   | 512                               | 显存估算余量（KV cache + CUDA 上下文开销，MB）                                                                       |
+| `FORGE_API_URL`              | `http://localhost:3001`           | 导入目标 API                                                                                                         |
+| `FORGE_COURSE_VIDEO_DIR`     | `apps/api/storage/course-video/`  | 导入时视频复制目标目录（API 静态挂载到 `/course-video` 前缀）                                                        |
 
-ASR 容器侧（改 `docker-compose.yml` 的 `asr` 服务）：
+ASR 侧说明：
 
-| 位置                    | 默认                                      | 说明                                                                                                                                                                                                                                                                                           |
-| ----------------------- | ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `image`                 | `ghcr.io/speaches-ai/speaches:0.8.3-cuda` | OpenAI 兼容转写服务 speaches（即原 faster-whisper-server 改名），支持 `verbose_json` + `timestamp_granularities[]`。**勿用 `latest-cpu`**：它停在 2025-09 旧版，读不了新版权重仓库。无 GPU 时改 `:0.8.3-cpu`，同时把 `WHISPER__COMPUTE_TYPE` 改为 `int8`                                       |
-| `PRELOAD_MODELS`        | `["Systran/faster-whisper-large-v3"]`     | 启动时自动下载安装模型（客户端的 `model=whisper-1` 是 speaches 内置别名，映射到它）；权重存项目内 `./.volumes/asr-model-cache`。换模型要同步改请求里的 `model` 字段。个别网络长连接会被掐断，重复 `docker compose --profile asr up -d asr`（或脚本重试 POST /v1/models/whisper-1）即可断点续传 |
-| `WHISPER__COMPUTE_TYPE` | `float16`（CUDA）                         | CPU 用 `int8`                                                                                                                                                                                                                                                                                  |
-| `HF_HUB_DISABLE_XET`    | `1`                                       | 禁用 HF Xet 加速通道（`cas-server.xethub.hf.co` 长连接在部分网络会被中途掐断导致下载损坏），回退普通 HTTP                                                                                                                                                                                      |
-| `ports`                 | `9000:8000`                               | 改端口要同步 `FORGE_ASR_URL`                                                                                                                                                                                                                                                                   |
-| 健康检查                | 容器内 `:8000/health`                     | 脚本还会兜底探测 `/v1/models`                                                                                                                                                                                                                                                                  |
-
-> 注意：**不要**把 `HF_ENDPOINT` 指向 hf-mirror——它的 `/api` 会 308 重定向回官网，反而让 `huggingface_hub` 校验失败。容器默认直连 huggingface.co；连不上时给 Docker 配代理。
+> ASR 已改为阿里云百炼 **Qwen-Audio-ASR** 云 API（`multimodal-generation`，SSE 流式），不再依赖本地 Docker 容器、模型下载或 GPU——只配 `FORGE_ASR_API_KEY` 即可。句/词级时间戳由模型固定返回（毫秒，流水线内换算为秒），无显存占用，也就无需"转写后停容器"。
+> 音频通过 base64 data URI 上传，单段建议 ≤5 分钟（flash 同步版上限）；超长内容请在前端切片，流水线按 clip 分段转写再合并。
 
 ---
 
 ## 7. 故障排查
 
-| 现象                                     | 原因 / 处理                                                                                                                                           |
-| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `[asr] docker compose 启动 asr 服务失败` | Docker 没跑 / 拉不到镜像（配代理）/ 镜像名不对。先手动 `docker compose --profile asr up -d asr` 看报错，或直接设 `FORGE_ASR_URL` 指向你自建的转写服务 |
-| `[asr] 等待超时`                         | 首次在下模型，调大 `FORGE_ASR_WAIT_MS`；或看 `docker compose logs asr`                                                                                |
-| `[asr] 转写结果为空`                     | 音频里没英文语音，或音乐伴奏太密（见下「音乐」）                                                                                                      |
-| `[forge] 对齐成功率低于 85%`             | LLM 产出的句子与 ASR 转写文本有偏差（拼写/标点/合并拆句不同）。对照 `alignment.json` 检查失败条目，可手动在 `course.json` 修正时间戳                  |
-| `[llm] 无法连接 …`                       | ollama 没起 / 没 `pull` 该模型 / 云端 key 或 base 不对。检查 `FORGE_LLM_*` 与 `ollama list`                                                           |
-| `[llm] 输出结构校验失败`                 | 模型没按要求输出 JSON schema。换更强的模型或调低单次 `FORGE_LLM_MAX_WORDS`（分更多块），代码已内置 `json_schema→json_object→纯文本` 逐级降级          |
-| `[import] 无法连接 API`                  | 后端没起。`pnpm dev:serve` 后重试，或核对 `FORGE_API_URL`                                                                                             |
-| `[import] 视频不是 mp4`                  | 部分浏览器（Safari）不能播放 mkv/webm。用 ffmpeg 转成 H.264+AAC mp4 后重跑导入                                                                        |
-| 页面全播 TTS、没有原声                   | 检查：① course.json 的 statement 是否有 `startTime`/`endTime`；② 视频输入时 `meta.json` 是否有 `videoPath`；③ 导入是否成功（日志有「视频已复制」）    |
-| 歌曲识别差                               | Whisper 对带伴奏音频有限。优先喂**人声干声**                                                                                                          |
-| 重复导入会不会产生重复课程包？           | 会。`forge:import` 每次都是**新建**一个课程包（`POST /course-pack`），不覆盖旧的；测试满意后如需清理，在客户端/API 删除旧包                           |
+| 现象                             | 原因 / 处理                                                                                                                                        |
+| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `[asr] 未配置 FORGE_ASR_API_KEY` | 在 `packages/course-forge/.env` 填百炼 DashScope Key（`sk-` 开头）                                                                                 |
+| `[asr] 转写请求失败（HTTP …）`   | Key 失效 / 欠费 / 网络不通 / 模型名不对。核对 `FORGE_ASR_API_KEY`、`FORGE_ASR_MODEL`、`FORGE_ASR_BASE_URL`                                         |
+| `[asr] …超过单段上限 300s`       | flash 同步版建议 ≤5 分钟。用前端切片把选区缩短，或分段转写（流水线按 clip 合并）                                                                   |
+| `[asr] 转写结果为空`             | 音频里没语音，或音乐伴奏太密（见下「音乐」）                                                                                                       |
+| `[forge] 对齐成功率低于 85%`     | LLM 产出的句子与 ASR 转写文本有偏差（拼写/标点/合并拆句不同）。对照 `alignment.json` 检查失败条目，可手动在 `course.json` 修正时间戳               |
+| `[llm] 无法连接 …`               | ollama 没起 / 没 `pull` 该模型 / 云端 key 或 base 不对。检查 `FORGE_LLM_*` 与 `ollama list`                                                        |
+| `[llm] 输出结构校验失败`         | 模型没按要求输出 JSON schema。换更强的模型或调低单次 `FORGE_LLM_MAX_WORDS`（分更多块），代码已内置 `json_schema→json_object→纯文本` 逐级降级       |
+| `[import] 无法连接 API`          | 后端没起。`pnpm dev:serve` 后重试，或核对 `FORGE_API_URL`                                                                                          |
+| `[import] 视频不是 mp4`          | 部分浏览器（Safari）不能播放 mkv/webm。用 ffmpeg 转成 H.264+AAC mp4 后重跑导入                                                                     |
+| 页面全播 TTS、没有原声           | 检查：① course.json 的 statement 是否有 `startTime`/`endTime`；② 视频输入时 `meta.json` 是否有 `videoPath`；③ 导入是否成功（日志有「视频已复制」） |
+| 歌曲识别差                       | ASR 对带伴奏音频有限。优先喂**人声干声**                                                                                                           |
+| 重复导入会不会产生重复课程包？   | 会。`forge:import` 每次都是**新建**一个课程包（`POST /course-pack`），不覆盖旧的；测试满意后如需清理，在客户端/API 删除旧包                        |
 
 ---
 
