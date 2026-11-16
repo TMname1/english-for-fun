@@ -84,10 +84,13 @@ describe("ForgeService（视频切片两段式启动）", () => {
     expect(mockSpawn.mock.calls[0][0].clips).toBeUndefined();
   });
 
-  it("非法 clips 返回 400：空数组 / 过短 / 乱序重叠", () => {
+  it("非法 clips 返回 400：空数组 / 过短 / 超过 5 分钟 / 乱序重叠", () => {
     const { jobId } = service.createJob(fileOf("a.mp4"), { ...baseDto, defer: true });
     expect(() => service.startTranscription(jobId, { clips: [] })).toThrow(BadRequestException);
     expect(() => service.startTranscription(jobId, { clips: [{ start: 1, end: 1.05 }] })).toThrow(
+      BadRequestException,
+    );
+    expect(() => service.startTranscription(jobId, { clips: [{ start: 0, end: 301 }] })).toThrow(
       BadRequestException,
     );
     expect(() =>
@@ -100,6 +103,13 @@ describe("ForgeService（视频切片两段式启动）", () => {
     ).toThrow(BadRequestException);
     expect(mockSpawn).not.toHaveBeenCalled();
     expect(store.get(jobId)!.status).toBe("pending");
+  });
+
+  it("恰好 5 分钟的 clip 允许提交", () => {
+    const { jobId } = service.createJob(fileOf("a.mp4"), { ...baseDto, defer: true });
+    expect(() =>
+      service.startTranscription(jobId, { clips: [{ start: 0, end: 300 }] }),
+    ).not.toThrow();
   });
 
   it("不存在的任务 404；非 pending 状态 400", () => {

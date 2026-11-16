@@ -12,6 +12,8 @@ import { JobStore } from "./job-store";
 import { COURSE_VIDEO_DIR, FORGE_OUTPUT_ROOT, spawnForgeRunner } from "./runner-client";
 
 const JOB_TIMEOUT_MS = 30 * 60 * 1000;
+/** 单个 clip / 整段转写的音频时长上限，与 course-forge 的 MAX_ASR_SECONDS（百炼 ASR flash 5 分钟）对齐 */
+const MAX_CLIP_SECONDS = 300;
 
 export interface ForgeJobView {
   id: string;
@@ -134,6 +136,11 @@ export class ForgeService {
         const c = clips[i];
         if (c.end - c.start < 0.1) {
           throw new BadRequestException(`第 ${i + 1} 个 clip 时长不足 0.1 秒`);
+        }
+        if (c.end - c.start > MAX_CLIP_SECONDS) {
+          throw new BadRequestException(
+            `第 ${i + 1} 个 clip 超过 5 分钟上限，请继续切分缩短后再提交`,
+          );
         }
         if (i > 0 && c.start < clips[i - 1].end) {
           throw new BadRequestException("clips 必须按时间升序且互不重叠");
