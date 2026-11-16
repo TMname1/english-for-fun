@@ -38,15 +38,16 @@
           </button>
 
           <button
-            aria-label="帮助文档"
+            v-if="allowForge"
+            aria-label="导入视频"
             class="btn btn-ghost btn-sm gap-1.5 text-base"
-            @click="handleHelpDocs"
+            @click="navigateTo('/video-clip')"
           >
             <UIcon
-              name="i-ph-book-open-text-duotone"
+              name="i-ph-upload-simple"
               class="h-6 w-6"
             />
-            <span class="hidden sm:inline">帮助文档</span>
+            <span class="hidden sm:inline">导入视频</span>
           </button>
 
           <button
@@ -60,50 +61,18 @@
             />
             <span class="hidden sm:inline">{{ isDarkMode ? "深色" : "浅色" }}</span>
           </button>
-
-          <button
-            v-if="allowForge"
-            aria-label="视频切片"
-            class="btn btn-ghost btn-sm gap-1.5 text-base"
-            @click="navigateTo('/video-clip')"
-          >
-            <UIcon
-              name="i-ph-scissors"
-              class="h-6 w-6"
-            />
-            <span class="hidden sm:inline">视频切片</span>
-          </button>
-
-          <button
-            v-if="allowForge"
-            aria-label="导入视频"
-            class="btn btn-ghost btn-sm gap-1.5 text-base"
-            @click="showForgeModal = true"
-          >
-            <UIcon
-              name="i-ph-upload-simple"
-              class="h-6 w-6"
-            />
-            <span class="hidden sm:inline">导入视频</span>
-          </button>
         </nav>
       </div>
     </div>
-    <ForgeImportModal
-      v-if="allowForge"
-      v-model:show="showForgeModal"
-      @confirmed="handleForgeConfirmed"
-    />
   </header>
 </template>
 
 <script setup lang="ts">
 import { useWindowScroll } from "@vueuse/core";
 import { navigateTo, useRuntimeConfig } from "#imports";
-import { computed, ref } from "vue";
+import { computed } from "vue";
 import { useRoute } from "vue-router";
 
-import ForgeImportModal from "~/components/ForgeImport/ForgeImportModal.vue";
 import { Theme, useDarkMode } from "~/composables/darkMode";
 
 const route = useRoute();
@@ -121,17 +90,8 @@ const isStickyNavBar = computed(() =>
 const isScrolled = computed(() => y.value >= SCROLL_THRESHOLD);
 
 const allowForge = computed(() => runtimeConfig.public.allowForge !== false);
-const showForgeModal = ref(false);
 
 function handleGoToCoursePackManage() {
   navigateTo("/course-pack/manage");
-}
-
-function handleHelpDocs() {
-  window.open(runtimeConfig.public.helpDocsURL, "_blank");
-}
-
-function handleForgeConfirmed(coursePackId: string) {
-  navigateTo(`/game/${coursePackId}`);
 }
 </script>
