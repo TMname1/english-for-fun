@@ -16,10 +16,10 @@
               height="48"
               class="mr-6 hidden overflow-hidden rounded-md md:block"
               src="/logo.png"
-              alt="earth-worm-logo"
+              alt="EnglishForFun logo"
             />
             <h1 class="text-wrap text-2xl font-extrabold leading-normal dark:text-white">
-              Earthworm
+              EnglishForFun
             </h1>
           </div>
         </NuxtLink>
