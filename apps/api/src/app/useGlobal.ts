@@ -3,11 +3,16 @@ import type { NestExpressApplication } from "@nestjs/platform-express";
 
 import { INestApplication, ValidationPipe } from "@nestjs/common";
 
+import { createAuthMiddleware } from "../auth/auth.middleware";
+import { AuthService } from "../auth/auth.service";
 import { HttpExceptionFilter } from "./exception.filter";
 
 export const appGlobalMiddleware = (app: INestApplication) => {
   app.useGlobalPipes(new ValidationPipe());
   app.useGlobalFilters(new HttpExceptionFilter());
+
+  // 单用户登录：除 POST /auth/login 外所有请求（含静态音视频、Swagger）都要求登录 Cookie
+  app.use(createAuthMiddleware(app.get(AuthService)));
 
   // 真实音频切片（如 /course-audio/xxx.mp3），课程导入脚本会把切片写入该目录
   const courseAudioDir =

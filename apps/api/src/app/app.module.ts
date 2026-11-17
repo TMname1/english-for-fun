@@ -1,5 +1,6 @@
 import { Module } from "@nestjs/common";
 
+import { AuthModule } from "../auth/auth.module";
 import { BiliModule } from "../bili/bili.module";
 import { CourseHistoryModule } from "../course-history/course-history.module";
 import { CoursePackModule } from "../course-pack/course-pack.module";
@@ -14,6 +15,7 @@ import { UserLearningActivityModule } from "../user-learning-activity/user-learn
 @Module({
   imports: [
     GlobalModule,
+    AuthModule,
     CoursePackModule,
     UserCourseProgressModule,
     UserLearningActivityModule,

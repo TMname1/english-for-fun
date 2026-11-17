@@ -12,6 +12,7 @@ async function bootstrap() {
   (app as NestApplication).useBodyParser("json", { limit: "10mb" });
   app.enableCors({
     origin: [/^http:\/\/localhost(:\d+)?$/, /^http:\/\/earthworm\.cuixueshe\.com(:81)?$/],
+    credentials: true,
   });
 
   appGlobalMiddleware(app);
