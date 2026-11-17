@@ -177,6 +177,18 @@ const forge = useForgeJob();
 
 const workingLabel = computed(() => forge.stageLabel.value || "处理中…");
 
+// http 层 reject 的是 NestJS 错误对象（{message, statusCode}）而非 Error，String() 会显示 [object Object]
+function describeError(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === "object") {
+    const message = (error as { message?: unknown }).message;
+    if (Array.isArray(message)) return message.join("\n");
+    if (typeof message === "string" && message) return message;
+    return JSON.stringify(error);
+  }
+  return String(error);
+}
+
 watch(
   () => forge.isAwaitingReview.value,
   (awaiting) => {
@@ -222,7 +234,7 @@ async function handleUpload(payload: ClipUploadPayload) {
     editor.reset();
     step.value = "edit";
   } catch (error) {
-    toast.error("上传失败：" + (error instanceof Error ? error.message : String(error)));
+    toast.error("上传失败：" + describeError(error));
   } finally {
     uploading.value = false;
   }
@@ -263,7 +275,7 @@ async function handleSubmitClips() {
     forge.start(jobId.value);
     step.value = "working";
   } catch (error) {
-    toast.error("启动转写失败：" + (error instanceof Error ? error.message : String(error)));
+    toast.error("启动转写失败：" + describeError(error));
   } finally {
     submitting.value = false;
   }
@@ -277,7 +289,7 @@ function handleResume(segments: ResumeTranscriptSegment[]) {
       await resumeForgeJob(jobId.value!, segments);
       forge.start(jobId.value!);
     } catch (error) {
-      errorText.value = error instanceof Error ? error.message : String(error);
+      errorText.value = describeError(error);
       step.value = "failed";
     }
   })();
@@ -300,7 +312,7 @@ async function finalizeImport() {
     toast.success("已导入到课程库");
     navigateTo(`/game/${result.coursePackId}`);
   } catch (error) {
-    errorText.value = error instanceof Error ? error.message : String(error);
+    errorText.value = describeError(error);
     step.value = "failed";
   } finally {
     importing.value = false;
