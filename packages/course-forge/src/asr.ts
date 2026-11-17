@@ -10,15 +10,15 @@ import { runFfmpeg } from "./util";
  */
 const MAX_ASR_SECONDS = 300;
 
-/** DashScope Qwen-Audio-ASR 流式返回的词结构（时间戳单位毫秒） */
-interface QwenAsrWord {
+/** DashScope Qwen-Audio-ASR 同步返回的词结构（时间戳单位毫秒） */
+export interface QwenAsrWord {
   text?: string;
   begin_time?: number;
   end_time?: number;
   punctuation?: string;
 }
 
-/** DashScope Qwen-Audio-ASR 流式返回的句子结构（时间戳单位毫秒） */
+/** DashScope Qwen-Audio-ASR 同步返回的句子结构（时间戳单位毫秒） */
 export interface QwenAsrSentence {
   sentence_id?: number;
   begin_time?: number;
@@ -61,8 +61,70 @@ export async function transcodeToWav(
   ]);
 }
 
+/** 有效 ASR 词 + 碎片拼接信息（供预处理确定性合并碎片词） */
+export interface AsrWordInfo {
+  word: TranscriptWord;
+  /**
+   * 可否无空格拼到前一个有效词：原始文本无前导空格，且原始序列里紧邻前一个有效词。
+   * ASR 把词拦腰拆开时碎片无空格（"Genu"+"inely"）；正常词带前导空格（" and"）；
+   * 独立词（"I"/"a"）虽可能无空格，但其前面的纯空格占位 token 已被过滤、打破相邻关系。
+   */
+  attachToPrev: boolean;
+}
+
+/** 单个 ASR 句子的有效部分；缺时间戳或无内容时返回 null（应丢弃） */
+export interface AsrSegmentParts {
+  start: number;
+  end: number;
+  text: string;
+  words: AsrWordInfo[];
+}
+
 /**
- * 把流式收集到的稳定句子（sentence_end=true）转成 Transcript。
+ * 按统一口径提取句子有效部分：毫秒换算为秒；词文字 = trim(text) + punctuation，
+ * 标点并入词尾，与下游 align 的逐词口径一致。buildTranscriptFromSentences 与预处理共用。
+ */
+export function asrSegmentParts(sent: QwenAsrSentence): AsrSegmentParts | null {
+  const start = msToSeconds(sent.begin_time);
+  const end = msToSeconds(sent.end_time);
+  if (start === null || end === null) {
+    return null;
+  }
+
+  const words: AsrWordInfo[] = [];
+  let lastValidRaw = -2;
+  (sent.words ?? []).forEach((w, j) => {
+    const ws = msToSeconds(w.begin_time);
+    const we = msToSeconds(w.end_time);
+    const text = `${(w.text ?? "").trim()}${w.punctuation ?? ""}`.trim();
+    if (!text || ws === null || we === null) {
+      return;
+    }
+    const attachToPrev = j === lastValidRaw + 1 && !/^\s/.test(w.text ?? "");
+    words.push({ word: { word: text, start: ws, end: we }, attachToPrev });
+    lastValidRaw = j;
+  });
+
+  const text = (sent.text ?? "").trim();
+  if (!text && words.length === 0) {
+    return null;
+  }
+
+  return {
+    start,
+    end,
+    text:
+      text ||
+      words
+        .map((x) => x.word.word)
+        .join(" ")
+        .trim(),
+    words,
+  };
+}
+
+/**
+ * 把 ASR 句子转成 Transcript。
  * 毫秒时间戳换算为秒；词文字 = trim(text) + punctuation，标点并入词尾，与下游 align 的逐词口径一致。
  */
 export function buildTranscriptFromSentences(
@@ -72,45 +134,22 @@ export function buildTranscriptFromSentences(
   const segments: TranscriptSegment[] = [];
   let anyWords = false;
 
-  sentences.forEach((sent, index) => {
-    const start = msToSeconds(sent.begin_time);
-    const end = msToSeconds(sent.end_time);
-    if (start === null || end === null) {
-      return;
+  for (const sent of sentences) {
+    const parts = asrSegmentParts(sent);
+    if (!parts) {
+      continue;
     }
-
-    const words: TranscriptWord[] = [];
-    for (const w of sent.words ?? []) {
-      const ws = msToSeconds(w.begin_time);
-      const we = msToSeconds(w.end_time);
-      const text = `${(w.text ?? "").trim()}${w.punctuation ?? ""}`.trim();
-      if (text && ws !== null && we !== null) {
-        words.push({ word: text, start: ws, end: we });
-      }
-    }
-    if (words.length > 0) {
+    if (parts.words.length > 0) {
       anyWords = true;
     }
-
-    const text = (sent.text ?? "").trim();
-    if (!text && words.length === 0) {
-      return;
-    }
-
     segments.push({
-      // sentence_id 从 1 起，转 0 基与下游 id 口径一致
-      id: Number.isFinite(Number(sent.sentence_id)) ? Number(sent.sentence_id) - 1 : index,
-      start,
-      end,
-      text:
-        text ||
-        words
-          .map((x) => x.word)
-          .join(" ")
-          .trim(),
-      words: words.length > 0 ? words : undefined,
+      id: segments.length,
+      start: parts.start,
+      end: parts.end,
+      text: parts.text,
+      words: parts.words.length > 0 ? parts.words.map((x) => x.word) : undefined,
     });
-  });
+  }
 
   if (segments.length === 0) {
     throw new Error(
@@ -122,68 +161,34 @@ export function buildTranscriptFromSentences(
 }
 
 /**
- * 解析 SSE 流，收集每个句子的最终结果（sentence_end=true）。
- * DashScope 流式每个事件带一个 output.sentence，中间事件会反复更新同一句；按 sentence_id 去重取最后一次稳定值。
+ * 解析同步响应 JSON：output.sentence 为单个句子对象（整段 text + 全部词）。
+ * 防御性兼容数组写法；错误载荷（code 且无 output）抛错。
  */
-async function collectFinalSentences(res: Response): Promise<QwenAsrSentence[]> {
-  if (!res.body) {
-    throw new Error("[asr] 响应没有数据流（SSE body 为空）");
-  }
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  const byId = new Map<number, QwenAsrSentence>();
-  let buffer = "";
-
-  const handleEvent = (event: string): void => {
-    let payload = "";
-    for (const line of event.split("\n")) {
-      if (line.startsWith("data:")) {
-        payload += line.slice(5).trim();
-      }
-    }
-    if (!payload) return;
-    let json: { code?: string; message?: string; output?: { sentence?: QwenAsrSentence } };
-    try {
-      json = JSON.parse(payload);
-    } catch {
-      return; // 心跳、[DONE]、状态行等非 JSON 事件忽略
-    }
-    if (json.code && !json.output) {
-      throw new Error(`[asr] 服务返回错误: ${json.code} ${json.message ?? ""}`.trim());
-    }
-    const sentence = json.output?.sentence;
-    if (sentence && sentence.sentence_end === true) {
-      const id = Number.isFinite(Number(sentence.sentence_id))
-        ? Number(sentence.sentence_id)
-        : byId.size + 1;
-      byId.set(id, sentence);
-    }
+export function parseSyncSentence(json: unknown): QwenAsrSentence[] {
+  const body = json as {
+    code?: string;
+    message?: string;
+    output?: { sentence?: QwenAsrSentence | QwenAsrSentence[] };
   };
-
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
-    let sep = buffer.indexOf("\n\n");
-    while (sep !== -1) {
-      handleEvent(buffer.slice(0, sep));
-      buffer = buffer.slice(sep + 2);
-      sep = buffer.indexOf("\n\n");
-    }
+  if (body?.code && !body.output) {
+    throw new Error(`[asr] 服务返回错误: ${body.code} ${body.message ?? ""}`.trim());
   }
-  buffer += decoder.decode().replace(/\r\n/g, "\n");
-  if (buffer.trim()) {
-    handleEvent(buffer);
+  const sentence = body?.output?.sentence;
+  if (!sentence) {
+    throw new Error(`[asr] 同步响应缺少 output.sentence: ${JSON.stringify(json).slice(0, 300)}`);
   }
-
-  return [...byId.values()].sort((a, b) => Number(a.sentence_id ?? 0) - Number(b.sentence_id ?? 0));
+  return Array.isArray(sentence) ? sentence : [sentence];
 }
 
 /**
- * 调百炼 Qwen-Audio-ASR 转写 wav：base64 data URI 上传 + SSE 流式，逐句收集句/词级时间戳。
- * 超 5 分钟直接报错（flash 同步版建议上限）；词级时间戳由模型固定返回。
+ * 调百炼 Qwen-Audio-ASR 转写 wav：base64 data URI 上传 + 同步调用，等待完整结果一次返回
+ * （output.sentence 单句对象，含整段 text 与全部词级毫秒时间戳）。
+ * 超 5 分钟直接报错（flash 同步版建议上限）。同时返回原始句子供预处理合并碎片词。
  */
-export async function transcribe(wavPath: string, language = "en"): Promise<Transcript> {
+export async function transcribeWithRaw(
+  wavPath: string,
+  language = "en",
+): Promise<{ transcript: Transcript; sentences: QwenAsrSentence[] }> {
   if (!config.asrApiKey) {
     throw new Error("[asr] 未配置 FORGE_ASR_API_KEY（百炼 DashScope API Key，sk- 开头）");
   }
@@ -220,14 +225,13 @@ export async function transcribe(wavPath: string, language = "en"): Promise<Tran
   });
 
   console.log(
-    `[asr] 提交转写请求: ${wavPath}（${config.asrModel}，约 ${durationSec.toFixed(1)}s）`,
+    `[asr] 提交转写请求: ${wavPath}（${config.asrModel}，约 ${durationSec.toFixed(1)}s，同步等待完整结果）`,
   );
   const res = await fetch(config.asrBaseUrl, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${config.asrApiKey}`,
       "Content-Type": "application/json",
-      "X-DashScope-SSE": "enable",
     },
     body,
     signal: AbortSignal.timeout(config.asrTimeoutMs),
@@ -237,9 +241,10 @@ export async function transcribe(wavPath: string, language = "en"): Promise<Tran
     throw new Error(`[asr] 转写请求失败（HTTP ${res.status}）: ${detail.slice(0, 400)}`);
   }
 
-  const transcript = buildTranscriptFromSentences(await collectFinalSentences(res), language);
+  const sentences = parseSyncSentence(await res.json());
+  const transcript = buildTranscriptFromSentences(sentences, language);
   if (!transcript.wordLevel) {
     console.warn(`[asr] 警告: 未返回词级时间戳，transcript.json 仅含段级文本与起止时间`);
   }
-  return transcript;
+  return { transcript, sentences };
 }
