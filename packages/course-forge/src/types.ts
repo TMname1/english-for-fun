@@ -44,7 +44,7 @@ export interface DraftStatement {
 
 /**
  * LLM 单次调用产出的单一课程。
- * "分课程"功能已删除：一个课程包只有一门课程，长音频分块产出的 statements 会合并进这一门课。
+ * "分课程"功能已删除：一个课程包只有一门课程，逐句并发生成的 statements 会合并进这一门课。
  */
 export interface DraftCourse {
   title: string;
