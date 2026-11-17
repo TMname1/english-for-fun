@@ -10,9 +10,11 @@
 
 ```
 视频 / 音频文件
-  │  Step 1    转写        ffmpeg -vn 提取音轨 → 百炼 Qwen-Audio-ASR（流式）→ 带词级时间戳的 transcript.json
+  │  Step 1    转写        ffmpeg -vn 提取音轨 → 百炼 Qwen-Audio-ASR（同步）→ 整段 text + 词级时间戳
   ▼
-  │  Step 2    结构化      本地/云端 LLM（OpenAI 兼容）把字幕拆成 Earthworm 式课程 JSON
+  │  Step 1.5  预处理      LLM 按语义拆成完整句（输出词序号分组）→ 代码合并碎片词 → transcript.json
+  ▼
+  │  Step 2    结构化      本地/云端 LLM（OpenAI 兼容）把每个完整句拆成 Earthworm 式课程 JSON
   ▼
   │  Step 2.5  时间戳对齐   把词级时间戳回填到每条 statement → alignment.json（对齐报告）
   ▼
@@ -41,9 +43,9 @@
    ```
 3. **配置 ASR（阿里云百炼 Qwen-Audio-ASR）**：写进 `packages/course-forge/.env`（复制 `.env.example`）：
    - `FORGE_ASR_API_KEY=sk-...`（百炼 DashScope Key，必填）；`FORGE_ASR_MODEL` 默认 `qwen-audio-3.1-asr-flash`。
-   - 走 DashScope 原生 `multimodal-generation` 接口、SSE 流式，固定返回句/词级时间戳（毫秒，流水线内换算为秒）。
+   - 走 DashScope 原生 `multimodal-generation` 接口、**同步调用**（等待完整结果一次返回），固定返回句/词级时间戳（毫秒，流水线内换算为秒）。
    - flash 同步版建议单段音频 ≤5 分钟；超长选区请用切片分段（流水线支持多 clip 合并）。详见 §6。
-4. **准备 LLM**（结构化用，OpenAI 兼容接口）：默认本地 ollama
+4. **准备 LLM**（预处理拆句与结构化共用，OpenAI 兼容接口）：默认本地 ollama
    ```bash
    ollama serve            # 若未常驻
    ollama pull qwen3:4b    # 默认模型；显存/效果不够见 §6、§7
@@ -72,7 +74,7 @@ curl http://localhost:11434/v1/models       # ollama 可达（或你的云端）
 
 `forge` 的可选参数：
 
-- `--type dialogue|music`：切分策略。`dialogue` 按话题分组、每课 5–10 个目标句；`music` 以每行歌词为候选句。默认 `dialogue`。
+- `--type dialogue|music`：内容类型，写入 `meta.json`（对白/歌曲）。默认 `dialogue`。
 - `--desc <描述>`：课程包描述。缺省自动生成一句。
 - `--language <代码>`：转写语言提示，默认 `en`。
 - `--out <目录>`：自定义产物目录。缺省写入 `packages/course-forge/output/<runId>/`，`runId` 形如 `20261110-203012`。
@@ -90,8 +92,10 @@ curl http://localhost:11434/v1/models       # ollama 可达（或你的云端）
 pnpm forge -- --video "D:/media/friends_s01e01.mp4" --title "老友记 S01E01" --type dialogue
 
 # 控制台会打印：
-#   [asr] 提交转写请求 ...          [forge] 转写完成：NN 段（词级时间戳：有）
-#   [llm] 结构化分析 ...            [forge] 结构化完成：1 课 / Y 条 statement
+#   [asr] 提交转写请求 ...（同步等待完整结果）
+#   [preprocess] 段 1/1 完成：NN 个碎片词 -> MM 个完整句（合并后 KK 词）
+#   [forge] 转写 + 预处理完成：MM 个完整句（词级时间戳：有）
+#   [llm] MM 个句子，一句一调用 ...   [forge] 结构化完成：1 课 / Y 条 statement
 #   [forge] 对齐：XX/YY 条命中（成功率 ZZ%）
 #   [forge] 产物目录：D:\...\output\20261110-203012
 #   [forge] 下一步：校对 course.json，然后 pnpm forge:import ...
@@ -121,13 +125,15 @@ pnpm forge -- --audio "D:/media/podcast.mp3" --title "某播客" --type dialogue
 
 一次 `forge` 产出（下文用 `<out>` 代表 `output/<runId>`）：
 
-| 文件 / 目录       | 谁生成   | 作用                                                                                    | 能否手改                   |
-| ----------------- | -------- | --------------------------------------------------------------------------------------- | -------------------------- |
-| `meta.json`       | Step 1   | 运行元信息（`runId`、`title`、`type`、`audioPath`、**视频输入时的 `videoPath`**、时间） | 可改 `title`/`description` |
-| `transcript.json` | Step 1   | ASR 原始转写（词级时间戳 / 段级降级后的结构）                                           | 不建议改                   |
-| `alignment.json`  | Step 2.5 | 时间戳对齐报告（每条 statement 的匹配方式与命中时间，可用于人工校对）                   | 只读参考                   |
-| `course.json`     | Step 3   | **最终课程包**（含 `startTime`/`endTime`/`words` 时间戳），这是你要校对和导入的文件     | ✅ 主要校对对象            |
-| `.work/`          | Step 1   | 转码中间 wav，用完即删                                                                  | —                          |
+| 文件 / 目录           | 谁生成   | 作用                                                                                    | 能否手改                   |
+| --------------------- | -------- | --------------------------------------------------------------------------------------- | -------------------------- |
+| `meta.json`           | Step 1   | 运行元信息（`runId`、`title`、`type`、`audioPath`、**视频输入时的 `videoPath`**、时间） | 可改 `title`/`description` |
+| `transcript.json`     | Step 1.5 | **预处理后**的转写：一个 segment 即一个完整句，碎片词已合并（词级时间戳 / 段级降级）    | GUI 流程可人工校对         |
+| `transcript.raw.json` | Step 1   | 原始 ASR 转写（整段 text + 未合并的碎片词），供回溯对照                                 | 不建议改                   |
+| `clips.json`          | Step 1   | 仅切片流程：选中的时间区间，structure 阶段据此重打 clipIndex                            | 不建议改                   |
+| `alignment.json`      | Step 2.5 | 时间戳对齐报告（每条 statement 的匹配方式与命中时间，可用于人工校对）                   | 只读参考                   |
+| `course.json`         | Step 3   | **最终课程包**（含 `startTime`/`endTime`/`words` 时间戳），这是你要校对和导入的文件     | ✅ 主要校对对象            |
+| `.work/`              | Step 1   | 转码中间 wav，用完即删                                                                  | —                          |
 
 生命周期要点：
 
@@ -200,26 +206,27 @@ pnpm forge -- --audio "D:/media/podcast.mp3" --title "某播客" --type dialogue
 | 变量                         | 默认                              | 说明                                                                                                                 |
 | ---------------------------- | --------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
 | `FORGE_ASR_BASE_URL`         | 百炼 `multimodal-generation` 端点 | DashScope Qwen-Audio-ASR 原生接口地址（非 OpenAI 兼容）                                                              |
-| `FORGE_ASR_MODEL`            | `qwen-audio-3.1-asr-flash`        | 非实时 ASR 模型；SSE 流式返回句/词级毫秒时间戳（流水线换算为秒）                                                     |
+| `FORGE_ASR_MODEL`            | `qwen-audio-3.1-asr-flash`        | 非实时 ASR 模型；同步返回整段 text + 句/词级毫秒时间戳（流水线换算为秒）                                             |
 | `FORGE_ASR_API_KEY`          | 空（**必填**）                    | 百炼 DashScope API Key（`sk-` 开头）                                                                                 |
-| `FORGE_ASR_TIMEOUT_MS`       | 180000（3 分）                    | 单次转写请求超时；长音频流式生成慢可调大。flash 同步版建议单段 ≤5 分钟，超长请用切片分段                             |
+| `FORGE_ASR_TIMEOUT_MS`       | 180000（3 分）                    | 单次转写请求超时；同步等待完整结果，长音频可调大。flash 同步版建议单段 ≤5 分钟，超长请用切片分段                     |
 | `FORGE_LLM_BASE_URL`         | `http://localhost:11434/v1`       | OpenAI 兼容 chat 端点（ollama / DeepSeek / OpenAI…）                                                                 |
-| `FORGE_LLM_MODEL`            | `qwen3:4b`                        | 结构化模型；4B 本地模型已证实做不动本课程组装任务，推荐换云端 qwen-plus（见 `.env.example`）                         |
+| `FORGE_LLM_MODEL`            | `tongyi-xiaomi-analysis-flash`    | 句子分析（结构化组装链）模型；与预处理模型分开配置，共用 base URL / API Key（见 `.env.example`）                     |
+| `FORGE_PREPROCESS_MODEL`     | `qwen3.8-flash`                   | 预处理（拆句）模型；本地 ollama 时两个变量可设同一模型                                                               |
 | `FORGE_LLM_API_KEY`          | `ollama`                          | 云端服务填真实 key                                                                                                   |
 | `FORGE_LLM_MAX_TOKENS`       | 16000                             | 单次 LLM 输出上限                                                                                                    |
 | `FORGE_LLM_REASONING_EFFORT` | `none`                            | ollama 专用参数；非 ollama（如 DashScope）**必须置空**，留空串即不发送该字段                                         |
 | `FORGE_LLM_ENABLE_THINKING`  | 空（不发送）                      | 思考开关（`enable_thinking`）；qwen3.8-flash 等默认开思考的云端模型设 `false`，否则思考吃光 max_tokens、生成看似卡死 |
-| `FORGE_LLM_MAX_WORDS`        | 250                               | 单次调用携带的最大词数；转写先预拼成完整句再分块，**一个分块生成一门课**                                             |
 | `FORGE_LLM_PREFLIGHT`        | `1`                               | LLM 调用前是否预检（服务连通/模型存在/显存余量）；设为 `0` 跳过                                                      |
 | `FORGE_LLM_VRAM_STRICT`      | `1`                               | 显存估算不足时是否直接拦停；设为 `0` 仅警告（接受 CPU 卸载慢跑）                                                     |
 | `FORGE_LLM_VRAM_MARGIN_MB`   | 512                               | 显存估算余量（KV cache + CUDA 上下文开销，MB）                                                                       |
 | `FORGE_API_URL`              | `http://localhost:3001`           | 导入目标 API                                                                                                         |
 | `FORGE_COURSE_VIDEO_DIR`     | `apps/api/storage/course-video/`  | 导入时视频复制目标目录（API 静态挂载到 `/course-video` 前缀）                                                        |
 
-ASR 侧说明：
+ASR 与预处理说明：
 
-> ASR 已改为阿里云百炼 **Qwen-Audio-ASR** 云 API（`multimodal-generation`，SSE 流式），不再依赖本地 Docker 容器、模型下载或 GPU——只配 `FORGE_ASR_API_KEY` 即可。句/词级时间戳由模型固定返回（毫秒，流水线内换算为秒），无显存占用，也就无需"转写后停容器"。
+> ASR 已改为阿里云百炼 **Qwen-Audio-ASR** 云 API（`multimodal-generation`，**同步调用**），不再依赖本地 Docker 容器、模型下载或 GPU——只配 `FORGE_ASR_API_KEY` 即可。同步响应一次返回整段 `text` 与全部词（`output.sentence` 单句对象），句/词级时间戳由模型固定返回（毫秒，流水线内换算为秒），无显存占用，也就无需"转写后停容器"。
 > 音频通过 base64 data URI 上传，单段建议 ≤5 分钟（flash 同步版上限）；超长内容请在前端切片，流水线按 clip 分段转写再合并。
+> **预处理**（Step 1.5）：ASR 的词表含碎片（`Genu`+`inely`、`I`+`'`+`ve`）。整段 text + 编号词表交给 `FORGE_PREPROCESS_MODEL`（默认 `qwen3.8-flash`）按语义拆成完整句（不局限于标点），模型只输出词序号分组；代码校验分组不重不漏后确定性合并碎片词、从原始 ASR 词取时间戳（零幻觉）。每个 clip 单独预处理，失败重试一次后仍不合格则整体报错。产物 `transcript.json` 一个 segment 即一个完整句，原始结果保留在 `transcript.raw.json`。
 
 ---
 
@@ -231,9 +238,10 @@ ASR 侧说明：
 | `[asr] 转写请求失败（HTTP …）`   | Key 失效 / 欠费 / 网络不通 / 模型名不对。核对 `FORGE_ASR_API_KEY`、`FORGE_ASR_MODEL`、`FORGE_ASR_BASE_URL`                                         |
 | `[asr] …超过单段上限 300s`       | flash 同步版建议 ≤5 分钟。用前端切片把选区缩短，或分段转写（流水线按 clip 合并）                                                                   |
 | `[asr] 转写结果为空`             | 音频里没语音，或音乐伴奏太密（见下「音乐」）                                                                                                       |
+| `[preprocess] …最终失败`         | 预处理 LLM 拆句输出重试后仍不合格（词序号分组不合法/结构错误）。换更强的 `FORGE_PREPROCESS_MODEL`，或检查该段转写是否异常                          |
 | `[forge] 对齐成功率低于 85%`     | LLM 产出的句子与 ASR 转写文本有偏差（拼写/标点/合并拆句不同）。对照 `alignment.json` 检查失败条目，可手动在 `course.json` 修正时间戳               |
 | `[llm] 无法连接 …`               | ollama 没起 / 没 `pull` 该模型 / 云端 key 或 base 不对。检查 `FORGE_LLM_*` 与 `ollama list`                                                        |
-| `[llm] 输出结构校验失败`         | 模型没按要求输出 JSON schema。换更强的模型或调低单次 `FORGE_LLM_MAX_WORDS`（分更多块），代码已内置 `json_schema→json_object→纯文本` 逐级降级       |
+| `[llm] 输出结构校验失败`         | 模型没按要求输出 JSON schema。换更强的模型，代码已内置 `json_schema→json_object→纯文本` 逐级降级                                                   |
 | `[import] 无法连接 API`          | 后端没起。`pnpm dev:serve` 后重试，或核对 `FORGE_API_URL`                                                                                          |
 | `[import] 视频不是 mp4`          | 部分浏览器（Safari）不能播放 mkv/webm。用 ffmpeg 转成 H.264+AAC mp4 后重跑导入                                                                     |
 | 页面全播 TTS、没有原声           | 检查：① course.json 的 statement 是否有 `startTime`/`endTime`；② 视频输入时 `meta.json` 是否有 `videoPath`；③ 导入是否成功（日志有「视频已复制」） |
@@ -253,7 +261,7 @@ ASR 侧说明：
 
 ## 9. 测试
 
-流水线里转写解析 / LLM 输出校验 / 预检 / 时间戳对齐都是**纯函数单测**，不需要 Docker、ollama 或 ffmpeg：
+流水线里转写解析 / 预处理分组校验与碎片合并 / LLM 输出校验 / 预检 / 时间戳对齐都是**纯函数单测**，不需要 Docker、ollama 或 ffmpeg：
 
 ```bash
 pnpm -F @earthworm/course-forge test
@@ -267,4 +275,5 @@ pnpm -F @earthworm/course-forge test
 - 视频格式建议 mp4（H.264+AAC）；非 mp4 只警告不自动转码，Safari 等浏览器可能无法播放。
 - 原声切片能力已移除：`statements` 不再保留 `audio_url` 字段；当前视频同步播放已覆盖原声需求。
 - `phonetic` 由 LLM 生成，建议加词典校验器（待办）。
+- 断句由预处理 LLM 按语义完成（不局限于标点）；下游结构化/对齐以 segment 为句子单位，不再做代码拼句。人工校对（GUI）增删词后句子完整性由校对者负责。
 - 对齐失败（`startTime`/`endTime` 为 null）的句子在客户端回退 TTS，不影响整体流程。
