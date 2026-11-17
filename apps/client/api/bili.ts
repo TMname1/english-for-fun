@@ -59,7 +59,7 @@ export interface BiliDownloadView {
 
 function biliFetch(): $Fetch {
   const config = useRuntimeConfig();
-  return ofetch.create({ baseURL: config.public.apiBase as string });
+  return ofetch.create({ baseURL: config.public.apiBase as string, credentials: "include" });
 }
 
 export async function getBiliLoginStatus(): Promise<BiliLoginStatus> {

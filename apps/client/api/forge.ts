@@ -109,7 +109,7 @@ export interface UploadForgeJobParams {
  */
 function forgeFetch(): $Fetch {
   const config = useRuntimeConfig();
-  return ofetch.create({ baseURL: config.public.apiBase as string });
+  return ofetch.create({ baseURL: config.public.apiBase as string, credentials: "include" });
 }
 
 export async function uploadForgeJob(params: UploadForgeJobParams): Promise<{ jobId: string }> {

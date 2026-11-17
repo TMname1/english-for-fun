@@ -61,6 +61,27 @@
             />
             <span class="hidden sm:inline">{{ isDarkMode ? "深色" : "浅色" }}</span>
           </button>
+
+          <div
+            class="ml-1 flex items-center gap-2 border-l border-gray-200 pl-2 dark:border-gray-700 sm:ml-2 sm:pl-3"
+          >
+            <img
+              src="/avatar.png"
+              alt="用户头像"
+              class="h-8 w-8 rounded-full object-cover"
+            />
+            <span class="hidden text-sm font-medium sm:inline">{{ authUser?.username }}</span>
+            <button
+              aria-label="退出登录"
+              class="btn btn-ghost btn-sm"
+              @click="handleLogout"
+            >
+              <UIcon
+                name="i-ph-sign-out"
+                class="h-5 w-5"
+              />
+            </button>
+          </div>
         </nav>
       </div>
     </div>
@@ -69,10 +90,12 @@
 
 <script setup lang="ts">
 import { useWindowScroll } from "@vueuse/core";
-import { navigateTo, useRuntimeConfig } from "#imports";
+import { navigateTo, useRuntimeConfig, useState } from "#imports";
 import { computed } from "vue";
 import { useRoute } from "vue-router";
 
+import type { AuthUser } from "~/api/auth";
+import { logout } from "~/api/auth";
 import { Theme, useDarkMode } from "~/composables/darkMode";
 
 const route = useRoute();
@@ -93,5 +116,16 @@ const allowForge = computed(() => runtimeConfig.public.allowForge !== false);
 
 function handleGoToCoursePackManage() {
   navigateTo("/course-pack/manage");
+}
+
+const authUser = useState<AuthUser | null>("authUser", () => null);
+
+async function handleLogout() {
+  try {
+    await logout();
+  } finally {
+    authUser.value = null;
+    navigateTo("/login");
+  }
 }
 </script>

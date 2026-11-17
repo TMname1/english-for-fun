@@ -80,8 +80,8 @@
           <span class="ml-auto text-sm opacity-70">已用 {{ forge.elapsedSeconds.value }}s</span>
         </div>
         <p class="text-xs opacity-70">
-          只转写勾选的 {{ submittedClipCount }} 个片段（首次启动本地 ASR 容器可能需数分钟）。
-          转录完成后会暂停让你校对文字，之后自动继续 LLM 结构化与时间戳对齐。请勿关闭页面。
+          只转写勾选的 {{ submittedClipCount }} 个片段。 转录完成后会暂停让你校对文字，之后自动继续
+          LLM 结构化与时间戳对齐。请勿关闭页面。
         </p>
         <div class="flex justify-end">
           <UButton

@@ -177,7 +177,7 @@ export async function updateCoursePack(coursePackId: string, payload: CreateCour
  */
 function coursePackFetch(): $Fetch {
   const config = useRuntimeConfig();
-  return ofetch.create({ baseURL: config.public.apiBase as string });
+  return ofetch.create({ baseURL: config.public.apiBase as string, credentials: "include" });
 }
 
 export async function uploadCoursePackVideo(file: File): Promise<{ video: string }> {
