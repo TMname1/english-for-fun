@@ -27,10 +27,12 @@
 | `COURSE_AUDIO_DIR` | 否    | `apps/api/storage/course-audio` | 挂载到 `/course-audio` 前缀的真实音频目录。                                                                    |
 | `COURSE_VIDEO_DIR` | 否    | `apps/api/storage/course-video` | 课程视频（上传 / B 站下载 / Forge 产物）存放目录，挂载到 `/course-video`。                                     |
 | `FORGE_REPO_ROOT`  | 否    | 自动推断                        | 覆盖仓库根目录定位，供 Forge runner 子进程使用。一般无需设置。                                                 |
+| `AUTH_USERNAME`    | ✅ 是 | 无                              | 单用户登录的用户名。详见根目录 `README.login.md`。                                                             |
+| `AUTH_PASSWORD`    | ✅ 是 | 无                              | 单用户登录的密码。详见根目录 `README.login.md`。                                                               |
+| `SECRET`           | ✅ 是 | 无                              | 登录 Cookie 的 HMAC 签名密钥；修改它会使所有已发放的登录凭证失效。                                             |
 
 **遗留 / 未被代码读取的变量（可忽略，无需填写）：**
 
-- `SECRET`：出现在 `.env.example` / `.env`，源自上游 earthworm 的 JWT 鉴权，**当前后端代码没有任何地方读取它**。
 - `BACKEND_ENDPOINT`：出现在本地 `apps/api/.env`，**代码中无引用**。
 
 ### 测试环境（`apps/api/.env.test`，模板 `.env.test.example`）
@@ -41,7 +43,7 @@
 DATABASE_URL="postgres://test:password@localhost:5480/earthworm_test"
 ```
 
-（同样可带 `SECRET`，但当前未被使用。）
+（还需 `SECRET`、`AUTH_USERNAME`、`AUTH_PASSWORD`：e2e 测试用它们自动登录，模板默认 `test / test-password`。）
 
 ---
 
@@ -90,10 +92,12 @@ DATABASE_URL="postgres://test:password@localhost:5480/earthworm_test"
 
 ### 3.3 导入后端
 
-| 变量                     | 必填 | 默认值                           | 用途                                                       |
-| ------------------------ | ---- | -------------------------------- | ---------------------------------------------------------- |
-| `FORGE_API_URL`          | 否   | `http://localhost:3001`          | 课程导入目标 API 地址。                                    |
-| `FORGE_COURSE_VIDEO_DIR` | 否   | `apps/api/storage/course-video/` | 导入时视频复制目标目录（API 静态挂载到 `/course-video`）。 |
+| 变量                     | 必填   | 默认值                           | 用途                                                                                                                                    |
+| ------------------------ | ------ | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `FORGE_API_URL`          | 否     | `http://localhost:3001`          | 课程导入目标 API 地址。                                                                                                                 |
+| `FORGE_COURSE_VIDEO_DIR` | 否     | `apps/api/storage/course-video/` | 导入时视频复制目标目录（API 静态挂载到 `/course-video`）。                                                                              |
+| `AUTH_USERNAME`          | 视情况 | 空                               | API 单用户登录用户名，`forge:import` 导入前自动登录用；与 `apps/api/.env` 一致。后端发起的流水线子进程自动继承，手动跑 CLI 时才需配置。 |
+| `AUTH_PASSWORD`          | 视情况 | 空                               | 同上，登录密码。详见根目录 `README.login.md`。                                                                                          |
 
 ### 3.4 流水线运行时变量（由后端自动注入，**无需手动配置**）
 
@@ -107,6 +111,9 @@ DATABASE_URL="postgres://test:password@localhost:5480/earthworm_test"
 
 ```
 DATABASE_URL="postgres://postgres:password@localhost:5433/earthworm"
+SECRET="换成一个长随机字符串"
+AUTH_USERNAME="admin"
+AUTH_PASSWORD="换成你的密码"
 # PORT=3001
 # TTS_PROXY_URL="http://127.0.0.1:10809"   # 国内访问 Edge TTS 时再开
 ```

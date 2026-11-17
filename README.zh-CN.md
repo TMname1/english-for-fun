@@ -2,6 +2,30 @@
 
 通过连词构句的方式让你更好的学习英语~ 😊
 
+## 📦 项目结构
+
+pnpm monorepo：两个应用（`apps/`）+ 六个共享包（`packages/`）。各包详细文档见对应 README。
+
+### 应用（apps/）
+
+| 目录          | 说明                                                                                                                                                            | 文档                              |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
+| `apps/api`    | 后端服务（NestJS + Drizzle/Postgres，默认 3001 端口）：课程包 CRUD、学习进度/时长统计、已掌握词、Edge TTS、每日一句、B 站扫码下载、forge 课程制作流水线 job API | [README](./apps/api/README.md)    |
+| `apps/client` | 前端（Nuxt 3 SPA + Nuxt UI + Pinia）：打字输入式学习游戏（中译英/听写）、课程包管理、视频原声 seek 播放、「导入视频」流水线 GUI（切片→转写→校对→导入）          | [README](./apps/client/README.md) |
+
+### 共享包（packages/）
+
+| 目录                        | 说明                                                                                                                        | 文档                                            |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
+| `packages/schema`           | 全部 Drizzle 表定义的单一事实来源（课程包/句子/进度/学习时长/已掌握词/历史），tsup 构建                                     | [README](./packages/schema/README.md)           |
+| `packages/db`               | Postgres 连接实例与建表/迁移脚本（`pnpm db:init` 等命令的底层）                                                             | [README](./packages/db/README.md)               |
+| `packages/game-data-sdk`    | 课程包数据访问层：`createCoursePack` / `updateCoursePack` / `deleteCoursePack`（事务写库，含视频时间戳），供 API 与脚本复用 | [README](./packages/game-data-sdk/README.md)    |
+| `packages/course-forge`     | 视频/音频 → 课程包流水线：百炼 ASR 转写 → LLM 拆句预处理 → LLM 结构化 → 时间戳对齐 → 校对导入；支持 CLI 与 Web GUI 两种用法 | [README](./packages/course-forge/README.md)     |
+| `packages/bilidown`         | B 站视频下载器（BiliDown 的 Node CLI 逆向复刻）：扫码登录 + DASH 取流 + ffmpeg 混流；也被 API 的 bili 模块复用              | [README](./packages/bilidown/README.md)         |
+| `packages/xingrong-courses` | 内置示例课程「星荣零基础学英语」的数据与导入脚本（`pnpm db:upload`，仅首次初始化用）                                        | [README](./packages/xingrong-courses/README.md) |
+
+依赖关系大致为：`client → api → game-data-sdk / db → schema`；`course-forge` 独立跑流水线、通过 HTTP 导入 api；`bilidown` 被 api 桥接调用。
+
 ## 🚀 如何开始？
 
 **以下所有相关操作都基于项目根目录位置，请注意检查不要出错！**
