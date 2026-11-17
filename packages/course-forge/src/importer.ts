@@ -33,6 +33,32 @@ async function publishVideo(meta: ForgeMeta): Promise<string | null> {
   return `/course-video/${fileName}`;
 }
 
+/** API 已启用单用户登录：导入前先 POST /auth/login 换取 Cookie */
+async function loginToApi(): Promise<string> {
+  if (!config.authUsername || !config.authPassword) {
+    throw new Error(
+      "[import] 未配置 AUTH_USERNAME/AUTH_PASSWORD（packages/course-forge/.env 或进程环境变量），无法登录 API",
+    );
+  }
+  const url = `${config.apiBaseUrl.replace(/\/$/, "")}/auth/login`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ username: config.authUsername, password: config.authPassword }),
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!res.ok) {
+    throw new Error(
+      `[import] 登录 API 失败（HTTP ${res.status}）：请检查 AUTH_USERNAME/AUTH_PASSWORD`,
+    );
+  }
+  const setCookie = res.headers.get("set-cookie");
+  if (!setCookie) {
+    throw new Error("[import] 登录 API 成功但未返回 Cookie");
+  }
+  return setCookie.split(";")[0];
+}
+
 /**
  * 导入产物：course.json -> POST /course-pack。
  * statement 携带视频时间戳（startTime/endTime/words，由 forge 的对齐步骤产出）；
@@ -68,11 +94,12 @@ export async function forgeImport(outDir: string): Promise<CreateCoursePackRespo
   };
 
   const url = `${config.apiBaseUrl.replace(/\/$/, "")}/course-pack`;
+  const cookie = await loginToApi();
   let res: Response;
   try {
     res = await fetch(url, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", cookie },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(60_000),
     });
