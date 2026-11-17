@@ -5,6 +5,12 @@ export interface TranscriptWord {
   end: number;
 }
 
+/** 用户选中的视频时间区间（秒，相对原视频绝对时间） */
+export interface ClipRange {
+  start: number;
+  end: number;
+}
+
 /** ASR 段（utterance） */
 export interface TranscriptSegment {
   id: number;
@@ -12,6 +18,8 @@ export interface TranscriptSegment {
   end: number;
   text: string;
   words?: TranscriptWord[];
+  /** 所属 clip 序号；仅切片转写流程存在，用于禁止跨 clip 拼句 */
+  clipIndex?: number;
 }
 
 export interface Transcript {
@@ -36,7 +44,7 @@ export interface DraftStatement {
 
 /**
  * LLM 单次调用产出的单一课程。
- * "分课程"功能已删除：一个课程包只有一门课程，长音频分块产出的 statements 会合并进这一门课。
+ * "分课程"功能已删除：一个课程包只有一门课程，逐句并发生成的 statements 会合并进这一门课。
  */
 export interface DraftCourse {
   title: string;

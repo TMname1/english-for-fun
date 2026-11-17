@@ -37,6 +37,8 @@ export interface ForgeRunnerParams {
   description?: string;
   language?: string;
   outDir: string;
+  /** 选中的时间区间（秒）；缺省转写整段 */
+  clips?: { start: number; end: number }[];
 }
 
 export interface ForgeRunnerEvents {
@@ -77,6 +79,7 @@ export function spawnForgeRunner(
     env.FORGE_TYPE = params.type;
     if (params.description) env.FORGE_DESC = params.description;
     if (params.language) env.FORGE_LANGUAGE = params.language;
+    if (params.clips?.length) env.FORGE_CLIPS = JSON.stringify(params.clips);
   }
 
   const child = spawn("pnpm", ["exec", "tsx", "src/pipeline-runner.ts"], {

@@ -93,12 +93,18 @@ describe("alignStatements", () => {
     expect(timings[3]!.startTime).toBe(3); // 锚点单调对齐到第二次出现
   });
 
-  it("跨 segment 的句子能对齐", () => {
+  it("预处理后一个 segment 即一个完整句：各段独立成锚点，不再跨段拼句", () => {
     const transcript = wordTranscript([{ text: "I like" }, { text: "apples very much." }]);
-    const { timings } = alignStatements(transcript, [stmt("I like apples very much")]);
-    expect(timings[0]).not.toBeNull();
+    const { timings, report } = alignStatements(transcript, [
+      stmt("I like"),
+      stmt("apples very much"),
+    ]);
+    expect(report.entries[0].kind).toBe("anchor");
+    expect(report.entries[1].kind).toBe("anchor");
     expect(timings[0]!.startTime).toBe(0);
-    expect(timings[0]!.endTime).toBe(2.5);
+    expect(timings[0]!.endTime).toBe(1);
+    expect(timings[1]!.startTime).toBe(1);
+    expect(timings[1]!.endTime).toBe(2.5);
   });
 
   it("whisper 撇号粘连切分（don + 't）合并后匹配", () => {

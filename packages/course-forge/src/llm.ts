@@ -1,20 +1,21 @@
 import { z } from "zod";
 
-import type { DraftCourse, DraftStatement, Transcript, TranscriptSegment } from "./types";
+import type { DraftCourse, DraftStatement, Transcript } from "./types";
+import { normalizeToken } from "./align";
 import { config } from "./config";
 import { buildMessages } from "./prompt";
 
 /**
- * LLM 输出的代码侧约束（不依赖提示词），按顺序四层：
+ * LLM 输出的代码侧约束（不依赖提示词），按顺序：
  * 1. response_format：请求携带 json_schema（strict），字段名/必填/类型由服务端保证；
  *    服务端不支持时逐级降级 json_object -> 纯文本 + 括号配对提取（callLlmJson）。
  * 2. zod 结构校验（draftSchema）：兜底降级模式，并清洗 {"courses":[...]} 旧包裹。
  * 3. english 标点清理（normalizeStatementsEnglish）：见下方说明。
- * 4. 课程质量校验（evaluateCourseQuality）：组装链形态劣化时带问题说明重试。
+ * 4. 完整原句锚点校验（containsFullSentence）：保证模型没有把这一句丢弃或改写。
+ *
+ * 一次调用只处理一个句子（一句一调用，多句并发），因此输出就是一条 statement 组装链。
  */
 export const draftSchema = z.object({
-  title: z.string().min(1),
-  description: z.string().optional(),
   statements: z
     .array(
       z.object({
@@ -75,14 +76,12 @@ export function normalizeStatementsEnglish(statements: DraftStatement[]): {
   return { changes, emptyIndexes };
 }
 
-/** 结构化输出的 JSON Schema（strict 风格：全字段 required，可选用空串表达）；顶层是单个课程对象，一次调用生成一门课 */
+/** 结构化输出的 JSON Schema（strict 风格：全字段 required，可选用空串表达）；一次调用产出一条 statement 组装链 */
 export const courseJsonSchema = {
   type: "object",
   additionalProperties: false,
-  required: ["title", "description", "statements"],
+  required: ["statements"],
   properties: {
-    title: { type: "string" },
-    description: { type: "string" },
     statements: {
       type: "array",
       items: {
@@ -248,9 +247,10 @@ export function extractJsonObject(text: string): unknown {
 async function chatCompletion(
   messages: ChatMessage[],
   responseFormat: Record<string, unknown> | undefined,
+  model: string,
 ): Promise<string> {
   const body = buildChatBody({
-    model: config.llmModel,
+    model,
     maxTokens: config.llmMaxTokens,
     reasoningEffort: config.llmReasoningEffort,
     enableThinking: config.llmEnableThinking,
@@ -331,15 +331,19 @@ export function messagesWithJsonKeyword(
 }
 
 /**
- * 调 LLM 并校验结构。优先 strict json_schema；服务端不支持时逐级降级：
- * json_object -> 纯文本（配合括号配对提取）。
+ * 调 LLM 并校验结构。优先 strict json_schema（schema 可传入，默认课程组装链）；
+ * 服务端不支持时逐级降级：json_object -> 纯文本（配合括号配对提取）。
  * 云端内容审核拦截（moderation）不属端点能力问题，降级重试无意义，立即失败。
  */
-export async function callLlmJson(messages: ChatMessage[]): Promise<unknown> {
+export async function callLlmJson(
+  messages: ChatMessage[],
+  schema: Record<string, unknown> = courseJsonSchema,
+  model: string = config.llmModel,
+): Promise<unknown> {
   const formats: Array<Record<string, unknown> | undefined> = [
     {
       type: "json_schema",
-      json_schema: { name: "course_pack", strict: true, schema: courseJsonSchema },
+      json_schema: { name: "structured_output", strict: true, schema },
     },
     { type: "json_object" },
     undefined,
@@ -348,7 +352,11 @@ export async function callLlmJson(messages: ChatMessage[]): Promise<unknown> {
   let lastError: unknown;
   for (const format of formats) {
     try {
-      const content = await chatCompletion(messagesWithJsonKeyword(messages, format), format);
+      const content = await chatCompletion(
+        messagesWithJsonKeyword(messages, format),
+        format,
+        model,
+      );
       return extractJsonObject(content);
     } catch (error) {
       lastError = error;
@@ -361,7 +369,7 @@ export async function callLlmJson(messages: ChatMessage[]): Promise<unknown> {
       }
       if (kind === "unreachable") {
         throw new Error(
-          `[llm] 无法连接 ${config.llmBaseUrl}。请确认服务已启动（Ollama 桌面托盘版会自动拉起服务，无需手动 \`ollama serve\`；纯命令行安装才需要）且模型已 \`ollama pull ${config.llmModel}\`。错误链: ${detail}`,
+          `[llm] 无法连接 ${config.llmBaseUrl}。请确认服务已启动（Ollama 桌面托盘版会自动拉起服务，无需手动 \`ollama serve\`；纯命令行安装才需要）且模型已 \`ollama pull ${model}\`。错误链: ${detail}`,
         );
       }
       if (kind === "network") {
@@ -371,8 +379,8 @@ export async function callLlmJson(messages: ChatMessage[]): Promise<unknown> {
       }
       if (kind === "moderation") {
         throw new Error(
-          `[llm] 云端内容审核拦截：${config.llmBaseUrl} 判定 ${config.llmModel} 的输出不合规并中断生成。` +
-            `这是云端安全策略而非调用方式问题，重试/降级无效——可改用本地 ollama 端点重跑该分块，` +
+          `[llm] 云端内容审核拦截：${config.llmBaseUrl} 判定 ${model} 的输出不合规并中断生成。` +
+            `这是云端安全策略而非调用方式问题，重试/降级无效——可改用本地 ollama 端点重跑该句，` +
             `或人工处理该段转写的敏感内容。错误链: ${detail}`,
         );
       }
@@ -384,125 +392,60 @@ export async function callLlmJson(messages: ChatMessage[]): Promise<unknown> {
   throw new Error(`[llm] 结构化输出失败（已尝试全部降级方式）: ${(lastError as Error)?.message}`);
 }
 
-/** 把转写段落按累计词数分成多块，长音频逐块调用 LLM */
-export function chunkTranscript(transcript: Transcript, maxWords: number): Transcript[] {
-  const chunks: Transcript[] = [];
-  let current: Transcript["segments"] = [];
-  let words = 0;
-
-  const flush = () => {
-    if (current.length > 0) {
-      chunks.push({ ...transcript, segments: current });
-      current = [];
-      words = 0;
+/**
+ * 并发上限内对每个句子执行 worker，结果按输入顺序返回。
+ * 任一 worker 抛错即整体 reject（用于"某句最终失败 -> 整体中止"），并停止派发后续任务。
+ */
+export async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  worker: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  let failed = false;
+  const size = Math.max(1, Math.min(limit, items.length));
+  const runners = Array.from({ length: size }, async () => {
+    while (!failed) {
+      const index = next++;
+      if (index >= items.length) return;
+      try {
+        results[index] = await worker(items[index], index);
+      } catch (error) {
+        failed = true;
+        throw error;
+      }
     }
-  };
-
-  for (const seg of transcript.segments) {
-    const segWords = (seg.words?.length ?? 0) || seg.text.split(/\s+/).filter(Boolean).length;
-    if (words + segWords > maxWords && current.length > 0) {
-      flush();
-    }
-    current.push(seg);
-    words += segWords;
-  }
-  flush();
-  return chunks;
+  });
+  await Promise.all(runners);
+  return results;
 }
 
-/** 句末判定：以 . ! ? 结尾（允许可见引号/括号收尾） */
-const SENTENCE_END = /[.!?]["'”’)\]]*$/;
-
-function countWords(text: string): number {
-  return text.split(/\s+/).filter(Boolean).length;
+/** 归一化为可逐字比对的词序列（小写、去标点），与 align 的口径一致 */
+function tokenSequence(text: string): string {
+  return text.split(/\s+/).map(normalizeToken).filter(Boolean).join(" ");
 }
 
 /**
- * 把 whisper 的断句碎片（词级时间戳切段导致句子被拦腰截断）拼回完整句：
- * 累积到句末标点才成句。不再按词数强制断开，长难句（含多个从句、只在末尾有句号）
- * 会作为完整一句保留下来。
- * 返回仍复用 TranscriptSegment（id/start 取该句第一个碎片，end 取收尾碎片），
- * 可直接进 chunkTranscript / formatTranscript。
+ * 组装链里是否存在逐字等于原句完整形式的一行（仅大小写/标点差异）。
+ * 这是"模型没有把这一句丢弃或改写"的硬性校验：缩写被展开、漏词、换词都会失配。
  */
-export function mergeSegments(segments: TranscriptSegment[]): TranscriptSegment[] {
-  const sentences: TranscriptSegment[] = [];
-  let pending = "";
-  let pendingId = 0;
-  let pendingStart = 0;
-
-  const push = (text: string, end: number): void => {
-    const trimmed = text.replace(/\s+/g, " ").trim();
-    if (!trimmed) return;
-    sentences.push({ id: pendingId, start: pendingStart, end, text: trimmed });
-  };
-
-  for (const seg of segments) {
-    const text = seg.text.trim();
-    if (!text) continue;
-    if (!pending) {
-      pendingId = seg.id;
-      pendingStart = seg.start;
-    }
-    pending = pending ? `${pending} ${text}` : text;
-
-    if (SENTENCE_END.test(pending)) {
-      push(pending, seg.end);
-      pending = "";
-      continue;
-    }
-  }
-  if (pending) {
-    push(pending, segments.length > 0 ? segments[segments.length - 1].end : 0);
-  }
-  return sentences;
+export function containsFullSentence(statements: DraftStatement[], sentence: string): boolean {
+  const target = tokenSequence(sentence);
+  if (!target) return false;
+  return statements.some((s) => tokenSequence(s.english) === target);
 }
 
-/** 质量判定阈值（见 evaluateCourseQuality） */
-export const QUALITY_COMBO_RATIO = 0.25;
-export const QUALITY_LONG_WORDS = 5;
+/** 单句组装链失败时的最大尝试次数（含首次） */
+const LLM_ATTEMPTS_PER_SENTENCE = 2;
 
-/**
- * 课程质量校验（纯函数）：针对小模型两类劣化签名——
- * 1. 单词课：≥3 词的行占比不足 25%（只列碎片、没有组装链）；
- * 2. 句子太少：≥5 词的行数 < min(3, ⌈句数/2⌉)（几乎没走到完整句）。
- * 不再限制单行长度——长难句是有意保留的教学内容。
- * sentenceCount 为该分块预拼后的完整句数。
- */
-export function evaluateCourseQuality(
-  course: DraftCourse,
-  sentenceCount: number,
-): { ok: true } | { ok: false; problems: string[] } {
-  const counts = course.statements.map((s) => countWords(s.english));
-  if (counts.length === 0) {
-    return { ok: false, problems: ["课程没有任何 statement"] };
-  }
-  const problems: string[] = [];
-
-  const combo = counts.filter((n) => n >= 3).length;
-  if (combo < counts.length * QUALITY_COMBO_RATIO) {
-    problems.push(
-      `疑似单词列表课：仅 ${combo}/${counts.length} 行达到 ≥3 词（占比不足 25%），必须给出「单词→短语→整句」逐级组装链`,
-    );
-  }
-  const longRows = counts.filter((n) => n >= QUALITY_LONG_WORDS).length;
-  const needLong = Math.min(3, Math.ceil(sentenceCount / 2));
-  if (longRows < needLong) {
-    problems.push(
-      `完整句太少：仅 ${longRows} 行达到 ≥${QUALITY_LONG_WORDS} 词，本部分 ${sentenceCount} 个句子至少需要 ${needLong} 行`,
-    );
-  }
-  return problems.length > 0 ? { ok: false, problems } : { ok: true };
-}
-
-/** 单分块：调用 LLM + 结构校验，产出 DraftCourse */
-async function generateCourseForChunk(
-  chunk: Transcript,
-  type: "dialogue" | "music",
-  packTitle: string,
-  note: string | undefined,
+/** 单句：调用 LLM + 结构校验 + 完整原句锚点校验，产出一条 statement 组装链 */
+async function generateChainForSentence(
+  sentence: string,
   label: string,
-): Promise<DraftCourse> {
-  const raw = await callLlmJson(buildMessages(chunk, type, packTitle, note) as ChatMessage[]);
+  note: string | undefined,
+): Promise<DraftStatement[]> {
+  const raw = await callLlmJson(buildMessages(sentence, note) as ChatMessage[]);
   const parsed = draftSchema.safeParse(coerceCourseOutput(raw));
   if (!parsed.success) {
     throw new Error(
@@ -525,63 +468,56 @@ async function generateCourseForChunk(
       `[llm] 输出结构校验失败（${label}）：第 ${emptyIndexes.join(", ")} 行 english 去掉标点后为空`,
     );
   }
-  return parsed.data;
+  if (!containsFullSentence(parsed.data.statements, sentence)) {
+    throw new Error(
+      `[llm] 完整原句缺失（${label}）：输出里没有逐字等于「${sentence}」的行（可能被丢弃、漏词或把缩写展开如 don't→do not）`,
+    );
+  }
+  return parsed.data.statements;
 }
 
 /**
- * 生成课程包内唯一的课程：
- * 长音频仍按词数分块逐块调 LLM（每块产出一份 statement 链），最后按块序合并成单一课程；
- * title/description 取第一块。"分课程"功能已删除，不再产出 courses 数组。
+ * 生成课程包内唯一的课程：一句一调用，多个句子并发处理（并发数 config.llmConcurrency）。
+ * 预处理已把转写拆成完整句（一个 segment 即一句），这里直接逐句生成组装链，
+ * 按原句顺序拼接成单一课程；标题用课程包标题。
+ * 任一句子在重试后仍失败（结构不合法 / 完整原句缺失）则整体中止抛错——绝不让某一句被悄悄丢弃。
  */
 export async function generateDraft(
   transcript: Transcript,
-  type: "dialogue" | "music",
   packTitle: string,
 ): Promise<DraftCourse> {
-  const merged = mergeSegments(transcript.segments);
-  if (merged.length !== transcript.segments.length) {
-    console.log(
-      `[llm] 句子预拼：${transcript.segments.length} 个转写碎片 -> ${merged.length} 个完整句`,
-    );
-  }
-  const chunks = chunkTranscript({ ...transcript, segments: merged }, config.llmMaxWordsPerCall);
-  const statements: DraftCourse["statements"] = [];
-  let firstCourse: DraftCourse | undefined;
+  const sentences = transcript.segments.map((seg) => seg.text.trim()).filter(Boolean);
+  const limit = config.llmConcurrency;
+  console.log(
+    `[llm] ${sentences.length} 个句子，一句一调用，并发 ${limit}（模型 ${config.llmModel}）...`,
+  );
 
-  for (const [index, chunk] of chunks.entries()) {
-    const label = chunks.length > 1 ? `分块 ${index + 1}/${chunks.length}` : "整段";
-    const baseNote =
-      chunks.length > 1
-        ? `注意：这是整段音频的第 ${index + 1}/${chunks.length} 部分，请只为这部分生成 statement 链（最终会与其他部分合并成一门课程）。`
-        : undefined;
-    console.log(`[llm] 结构化分析 ${label}（模型 ${config.llmModel}）...`);
-    const sentenceCount = chunk.segments.length;
-
-    let course = await generateCourseForChunk(chunk, type, packTitle, baseNote, label);
-    let verdict = evaluateCourseQuality(course, sentenceCount);
-    if (!verdict.ok) {
-      console.warn(`[llm] 课程质量不达标（${label}）：${verdict.problems.join("；")}，重试一次`);
-      const correction =
-        `上一次输出不合格：${verdict.problems.join("；")}。` +
-        `请重做：本部分共 ${sentenceCount} 个完整句，每个目标句都要从碎片逐级组装出完整句行，` +
-        `覆盖所有有教学价值的句子；不要只列单词碎片。`;
-      const note = baseNote ? `${baseNote}\n${correction}` : correction;
-      course = await generateCourseForChunk(chunk, type, packTitle, note, label);
-      verdict = evaluateCourseQuality(course, sentenceCount);
-      if (!verdict.ok) {
-        throw new Error(
-          `[llm] 课程质量仍不达标（${label}，已重试 1 次）：${verdict.problems.join("；")}`,
-        );
+  const chains = await mapWithConcurrency(sentences, limit, async (sentence, index) => {
+    const label = `句 ${index + 1}/${sentences.length}`;
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= LLM_ATTEMPTS_PER_SENTENCE; attempt++) {
+      try {
+        const note =
+          attempt > 1
+            ? `上一次输出不合格：${(lastError as Error).message}。请修正上述问题重新输出，并确保有一行 english 恰好是这句的全部词（保留缩写、不增删换词）：${sentence}`
+            : undefined;
+        const chain = await generateChainForSentence(sentence, label, note);
+        if (index === 0 || (index + 1) % 10 === 0) {
+          console.log(`[llm] ${label} 完成（${chain.length} 行）`);
+        }
+        return chain;
+      } catch (error) {
+        lastError = error;
+        if (attempt < LLM_ATTEMPTS_PER_SENTENCE) {
+          console.warn(`[llm] ${label} 失败，重试一次：${(error as Error).message}`);
+        }
       }
     }
-    firstCourse ??= course;
-    statements.push(...course.statements);
-  }
+    throw new Error(
+      `[llm] ${label} 最终失败（已尝试 ${LLM_ATTEMPTS_PER_SENTENCE} 次）：${(lastError as Error).message}`,
+    );
+  });
 
-  return {
-    // 多块合并后"第 X 部分"式的课内标题已失真，直接用课程包标题
-    title: chunks.length > 1 ? packTitle : firstCourse?.title ?? packTitle,
-    description: firstCourse?.description,
-    statements,
-  };
+  const statements = chains.flat();
+  return { title: packTitle, description: "", statements };
 }

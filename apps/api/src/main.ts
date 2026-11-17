@@ -1,5 +1,5 @@
 import { Logger } from "@nestjs/common";
-import { NestFactory } from "@nestjs/core";
+import { NestApplication, NestFactory } from "@nestjs/core";
 import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
 
 import { AppModule } from "./app/app.module";
@@ -7,6 +7,9 @@ import { appGlobalMiddleware } from "./app/useGlobal";
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+  // 默认 json body 上限 100kb；课程包导入携带逐词时间戳，长视频产物可达数百 KB。
+  // useBodyParser 在运行时的 NestApplication 上存在，但当前版本 INestApplication 接口未声明，故按具体类断言。
+  (app as NestApplication).useBodyParser("json", { limit: "10mb" });
   app.enableCors({
     origin: [/^http:\/\/localhost(:\d+)?$/, /^http:\/\/earthworm\.cuixueshe\.com(:81)?$/],
   });

@@ -66,24 +66,31 @@ export const config = {
   packageDir,
   defaultOutRoot: join(packageDir, "output"),
 
-  /** ASR（docker-compose 的 asr 服务，OpenAI 兼容接口） */
-  asrBaseUrl: env("FORGE_ASR_URL", "http://localhost:9000"),
-  /** docker compose 拉起 asr 服务后的等待上限（首次要拉镜像 + 下载模型） */
-  asrWaitMs: envInt("FORGE_ASR_WAIT_MS", 15 * 60 * 1000),
+  /** ASR（阿里云百炼 DashScope 非实时语音识别 Qwen-Audio-ASR：原生 multimodal-generation 接口，同步返回句/词级毫秒时间戳） */
+  asrBaseUrl: env(
+    "FORGE_ASR_BASE_URL",
+    "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
+  ),
+  asrModel: env("FORGE_ASR_MODEL", "qwen-audio-3.1-asr-flash"),
+  /** 百炼 DashScope API Key（sk- 开头）；与 LLM 解耦，单独配置 */
+  asrApiKey: env("FORGE_ASR_API_KEY", ""),
+  /** 单次转写请求超时（毫秒）；同步等待完整结果，长音频耗时较长，默认 3 分钟 */
+  asrTimeoutMs: envInt("FORGE_ASR_TIMEOUT_MS", 3 * 60 * 1000),
 
   /** LLM（OpenAI 兼容 chat completions；默认本地 ollama） */
   llmBaseUrl: env("FORGE_LLM_BASE_URL", "http://localhost:11434/v1"),
-  llmModel: env("FORGE_LLM_MODEL", "qwen3:4b"),
+  /** 句子分析（结构化组装链）模型 */
+  llmModel: env("FORGE_LLM_MODEL", "tongyi-xiaomi-analysis-flash"),
+  /** 预处理（拆句）模型；与句子分析模型分开配置，共用 base URL / API Key */
+  preprocessModel: env("FORGE_PREPROCESS_MODEL", "qwen3.8-flash"),
   llmApiKey: env("FORGE_LLM_API_KEY", "ollama"),
   llmMaxTokens: envInt("FORGE_LLM_MAX_TOKENS", 16000),
   /** OpenAI 兼容端点的 reasoning_effort；ollama 上 "none" 可关闭 qwen3 思考（思考会吃光 max_tokens 并把生成拖过 undici 300s 超时）。设为空串（如 .env 里 `FORGE_LLM_REASONING_EFFORT=`）则不发送该字段——DashScope 等非 ollama 服务必须置空 */
   llmReasoningEffort: env("FORGE_LLM_REASONING_EFFORT", "none"),
   /** DashScope 等端点的思考开关（enable_thinking）：qwen3.8-flash 等新模型默认开思考，思考文本不计入正文却吃 max_tokens，会把结构化拖成"假卡死"。未设置/空串 = 不发送该字段（ollama 等不认识它的服务保持兼容） */
   llmEnableThinking: parseEnableThinking(env("FORGE_LLM_ENABLE_THINKING", "")),
-  /** 单次 LLM 调用携带的最大转写词数：一个分块恰好生成一门课，分块大小≈课程规模（约 5~15 个目标句） */
-  llmMaxWordsPerCall: envInt("FORGE_LLM_MAX_WORDS", 250),
-  /** 转写结束后自动停止 asr 容器，把显存让给 LLM（0 = 保持常驻，可加快下次转写） */
-  asrStopAfterTranscribe: env("FORGE_ASR_STOP_AFTER", "1") !== "0",
+  /** 一句一调用的并发上限：同时发起多少个句子的模型调用（不是把多少句丢给一次调用） */
+  llmConcurrency: envInt("FORGE_LLM_CONCURRENCY", 10),
   /** LLM 调用前是否预检（服务连通 / 模型存在 / 显存余量） */
   llmPreflight: env("FORGE_LLM_PREFLIGHT", "1") !== "0",
   /** 显存估算不足时是否直接拦停（0 = 仅警告，接受 CPU 卸载慢跑） */

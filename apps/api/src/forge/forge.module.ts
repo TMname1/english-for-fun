@@ -7,5 +7,6 @@ import { JobStore } from "./job-store";
 @Module({
   controllers: [ForgeController],
   providers: [ForgeService, JobStore],
+  exports: [ForgeService],
 })
 export class ForgeModule {}

@@ -1,3 +1,5 @@
+import { rm } from "node:fs/promises";
+
 import { Injectable, OnModuleDestroy } from "@nestjs/common";
 
 export type ForgeJobStatus =
@@ -40,10 +42,14 @@ export interface ForgeJobRecord {
   description?: string;
   /** 两段式流程当前所处阶段：transcribe（转录后暂停）/ structure（校对后续跑） */
   phase: ForgePhase;
+  /** 视频切片流程：用户选中的时间区间（秒，相对原视频绝对时间） */
+  clips?: { start: number; end: number }[];
 }
 
 const STALE_AFTER_MS = 4 * 60 * 60 * 1000;
 const CLEANUP_INTERVAL_MS = 30 * 60 * 1000;
+/** defer 上传后迟迟不 start 的孤儿任务：2 小时后连视频文件一起清掉 */
+const PENDING_EXPIRE_MS = 2 * 60 * 60 * 1000;
 
 @Injectable()
 export class JobStore implements OnModuleDestroy {
@@ -79,7 +85,14 @@ export class JobStore implements OnModuleDestroy {
   private cleanupStale(): void {
     const now = Date.now();
     for (const [id, record] of this.records) {
-      if (record.status === "pending" || record.status === "running") continue;
+      if (record.status === "running") continue;
+      if (record.status === "pending") {
+        if (now - record.startedAt > PENDING_EXPIRE_MS) {
+          this.records.delete(id);
+          void rm(record.videoFsPath, { force: true }).catch(() => {});
+        }
+        continue;
+      }
       if (record.finishedAt && now - record.finishedAt > STALE_AFTER_MS) {
         this.records.delete(id);
       }

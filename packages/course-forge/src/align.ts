@@ -1,4 +1,4 @@
-import type { DraftStatement, Transcript, TranscriptSegment } from "./types";
+import type { DraftStatement, Transcript } from "./types";
 
 export interface WordTiming {
   word: string;
@@ -52,7 +52,7 @@ interface WordRef {
   end: number;
 }
 
-/** 完整句（mergeSegments 同款断句逻辑）在 WordRef 序列上的跨度 */
+/** 完整句（预处理后一个 segment 即一句）在 WordRef 序列上的跨度 */
 interface SentenceSpan {
   wordStart: number;
   wordEnd: number;
@@ -111,47 +111,22 @@ function buildWordRefs(transcript: Transcript): {
   return { refs, segmentRanges };
 }
 
-/** 句末判定与 llm.ts mergeSegments 保持一致 */
-const SENTENCE_END = /[.!?]["'”’)\]]*$/;
-
 /**
- * 在原始 segment 上重放 mergeSegments 的拼句逻辑，
- * 额外记录每个完整句覆盖的 WordRef 区间（mergeSegments 本身丢弃了 words）。
+ * 预处理已把转写拆成完整句（一个 segment 即一句），
+ * 每个非空 segment 的词区间就是一个句子跨度。
  */
 function buildSentenceSpans(
-  segments: TranscriptSegment[],
   segmentRanges: Array<{ start: number; end: number }>,
   refs: WordRef[],
 ): SentenceSpan[] {
   const spans: SentenceSpan[] = [];
-  let pending = "";
-  let pendingSegStart = -1;
-
-  const flush = (lastSegIdx: number, force: boolean): void => {
-    if (!pending.trim()) return;
-    if (!force && !SENTENCE_END.test(pending)) return;
-    const wordStart = segmentRanges[pendingSegStart]?.start ?? 0;
-    const wordEnd = segmentRanges[lastSegIdx]?.end ?? refs.length;
+  for (const { start, end } of segmentRanges) {
+    if (end <= start) continue;
     spans.push({
-      wordStart,
-      wordEnd,
-      norms: refs.slice(wordStart, wordEnd).map((r) => r.norm),
+      wordStart: start,
+      wordEnd: end,
+      norms: refs.slice(start, end).map((r) => r.norm),
     });
-    pending = "";
-    pendingSegStart = -1;
-  };
-
-  segments.forEach((seg, i) => {
-    const text = seg.text.trim();
-    if (!text) return;
-    if (!pending) pendingSegStart = i;
-    pending = pending ? `${pending} ${text}` : text;
-    if (SENTENCE_END.test(pending)) {
-      flush(i, false);
-    }
-  });
-  if (pending && pendingSegStart >= 0) {
-    flush(segments.length - 1, true);
   }
   return spans;
 }
@@ -229,7 +204,7 @@ function findFuzzyOccurrences(
  */
 export function alignStatements(transcript: Transcript, statements: DraftStatement[]): AlignResult {
   const { refs, segmentRanges } = buildWordRefs(transcript);
-  const sentences = buildSentenceSpans(transcript.segments, segmentRanges, refs);
+  const sentences = buildSentenceSpans(segmentRanges, refs);
 
   const statementTokens = statements.map((s) => tokenize(s.english));
   const timings: (AlignedTiming | null)[] = new Array(statements.length).fill(null);

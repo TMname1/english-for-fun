@@ -19,7 +19,7 @@ export interface EditedSegmentInput {
  * 把人工校对（word 级改文字 + 删整段）后的转录数据规整回流水线可用的 Transcript。
  *
  * 规则：
- * - 每个 word 校验 start/end 为有限数、文字非空，与 parseTranscription 对齐口径一致；
+ * - 每个 word 校验 start/end 为有限数、文字非空，与 buildTranscriptFromSentences 对齐口径一致；
  * - 段的 text 由编辑后的 words 重新拼接（`words.map(w => w.word).join(" ")`），
  *   因为 LLM 结构化读 segment.text、对齐读 segment.words，二者必须同步反映修正文本；
  * - 无有效 words 的段，若有 text 则保留为段级；否则整段丢弃；
