@@ -70,23 +70,23 @@ DATABASE_URL="postgres://test:password@localhost:5480/earthworm_test"
 | ---------------------- | ----- | -------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
 | `FORGE_ASR_API_KEY`    | ✅ 是 | 空                                                                                     | 百炼 DashScope API Key（`sk-` 开头）。未配置会直接报 `[asr] 未配置 FORGE_ASR_API_KEY`。 |
 | `FORGE_ASR_BASE_URL`   | 否    | `https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation` | ASR 端点（DashScope 原生 multimodal-generation，非 OpenAI 兼容）。                      |
-| `FORGE_ASR_MODEL`      | 否    | `qwen-audio-3.1-asr-flash`                                                             | ASR 模型；SSE 流式返回句/词级毫秒时间戳。                                               |
+| `FORGE_ASR_MODEL`      | 否    | `qwen-audio-3.1-asr-flash`                                                             | ASR 模型；同步返回整段 text + 句/词级毫秒时间戳。                                       |
 | `FORGE_ASR_TIMEOUT_MS` | 否    | `180000`（3 分钟）                                                                     | 单次转写请求超时。长音频可调大；flash 同步版单段建议 ≤5 分钟，超长用切片分段。          |
 
-### 3.2 LLM（课程结构化）
+### 3.2 LLM（预处理拆句与课程结构化）
 
-| 变量                         | 必填   | 默认值                      | 用途                                                                                                                                              |
-| ---------------------------- | ------ | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `FORGE_LLM_BASE_URL`         | 否     | `http://localhost:11434/v1` | OpenAI 兼容 chat 端点（ollama / DashScope / DeepSeek / OpenAI…）。                                                                                |
-| `FORGE_LLM_MODEL`            | 否     | `qwen3:4b`                  | 结构化模型。本地 4B 质量不足，推荐云端 `qwen-plus` 等。                                                                                           |
-| `FORGE_LLM_API_KEY`          | 视服务 | `ollama`                    | 云端服务必须填真实 Key；本地 ollama 可留默认。                                                                                                    |
-| `FORGE_LLM_REASONING_EFFORT` | 否     | `none`                      | ollama 专用参数（`none` 关闭思考）。**非 ollama（如 DashScope）必须置空**（`FORGE_LLM_REASONING_EFFORT=`），否则请求被拒。置空即不发送该字段。    |
-| `FORGE_LLM_ENABLE_THINKING`  | 否     | 空（不发送）                | 思考开关（`enable_thinking`）。`qwen3.8-flash` 等默认开思考的云端模型设 `false`，否则思考吃光 `max_tokens`、看似卡死。ollama 不识别该字段时留空。 |
-| `FORGE_LLM_MAX_TOKENS`       | 否     | `16000`                     | 单次 LLM 输出上限（qwen-plus 上限 32768）。                                                                                                       |
-| `FORGE_LLM_MAX_WORDS`        | 否     | `250`                       | 单次调用携带的最大转写词数（一个分块生成一门课）。                                                                                                |
-| `FORGE_LLM_PREFLIGHT`        | 否     | `1`                         | 调用前是否预检（连通 / 模型存在 / 显存）。`0` 跳过。                                                                                              |
-| `FORGE_LLM_VRAM_STRICT`      | 否     | `1`                         | 显存估算不足时是否直接拦停。`0` 仅警告（接受 CPU 卸载慢跑）。仅本地 ollama/GPU 场景相关。                                                         |
-| `FORGE_LLM_VRAM_MARGIN_MB`   | 否     | `512`                       | 显存估算余量（MB，KV cache + CUDA 上下文）。                                                                                                      |
+| 变量                         | 必填   | 默认值                         | 用途                                                                                                                                              |
+| ---------------------------- | ------ | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `FORGE_LLM_BASE_URL`         | 否     | `http://localhost:11434/v1`    | OpenAI 兼容 chat 端点（ollama / DashScope / DeepSeek / OpenAI…）。                                                                                |
+| `FORGE_LLM_MODEL`            | 否     | `tongyi-xiaomi-analysis-flash` | 句子分析（结构化组装链）模型。与预处理模型分开配置，共用 base URL / API Key。                                                                     |
+| `FORGE_PREPROCESS_MODEL`     | 否     | `qwen3.8-flash`                | 预处理（拆句）模型。本地 ollama 时两个变量可设同一模型。                                                                                          |
+| `FORGE_LLM_API_KEY`          | 视服务 | `ollama`                       | 云端服务必须填真实 Key；本地 ollama 可留默认。                                                                                                    |
+| `FORGE_LLM_REASONING_EFFORT` | 否     | `none`                         | ollama 专用参数（`none` 关闭思考）。**非 ollama（如 DashScope）必须置空**（`FORGE_LLM_REASONING_EFFORT=`），否则请求被拒。置空即不发送该字段。    |
+| `FORGE_LLM_ENABLE_THINKING`  | 否     | 空（不发送）                   | 思考开关（`enable_thinking`）。`qwen3.8-flash` 等默认开思考的云端模型设 `false`，否则思考吃光 `max_tokens`、看似卡死。ollama 不识别该字段时留空。 |
+| `FORGE_LLM_MAX_TOKENS`       | 否     | `16000`                        | 单次 LLM 输出上限（qwen-plus 上限 32768）。                                                                                                       |
+| `FORGE_LLM_PREFLIGHT`        | 否     | `1`                            | 调用前是否预检（连通 / 模型存在 / 显存）。`0` 跳过。                                                                                              |
+| `FORGE_LLM_VRAM_STRICT`      | 否     | `1`                            | 显存估算不足时是否直接拦停。`0` 仅警告（接受 CPU 卸载慢跑）。仅本地 ollama/GPU 场景相关。                                                         |
+| `FORGE_LLM_VRAM_MARGIN_MB`   | 否     | `512`                          | 显存估算余量（MB，KV cache + CUDA 上下文）。                                                                                                      |
 
 ### 3.3 导入后端
 
@@ -124,7 +124,8 @@ API_BASE="http://localhost:3001"
 ```
 FORGE_ASR_API_KEY=sk-你的百炼Key
 FORGE_LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-FORGE_LLM_MODEL=qwen-plus
+FORGE_LLM_MODEL=tongyi-xiaomi-analysis-flash
+FORGE_PREPROCESS_MODEL=qwen3.8-flash
 FORGE_LLM_API_KEY=sk-你的百炼Key
 FORGE_LLM_REASONING_EFFORT=
 FORGE_LLM_ENABLE_THINKING=false
