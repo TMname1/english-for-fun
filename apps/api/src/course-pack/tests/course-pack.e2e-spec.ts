@@ -14,7 +14,7 @@ import {
   insertStatement,
   insertUserCourseProgress,
 } from "../../../test/fixture/db";
-import { cleanDB } from "../../../test/helper/utils";
+import { cleanDB, createAuthedAgent } from "../../../test/helper/utils";
 import { AppModule } from "../../app/app.module";
 import { appGlobalMiddleware } from "../../app/useGlobal";
 import { endDB } from "../../common/db";
@@ -27,6 +27,7 @@ process.env.COURSE_AUDIO_DIR = testCourseAudioDir;
 describe("course-pack e2e", () => {
   let app: INestApplication;
   let db: DbType;
+  let agent: ReturnType<typeof request.agent>;
 
   beforeEach(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
@@ -38,6 +39,7 @@ describe("course-pack e2e", () => {
     db = moduleFixture.get<DbType>(DB);
 
     await app.init();
+    agent = await createAuthedAgent(app);
 
     await cleanDB(db);
   });
@@ -50,7 +52,7 @@ describe("course-pack e2e", () => {
 
   it("get: /course-pack", async () => {
     await insertCoursePack(db);
-    return request(app.getHttpServer())
+    return agent
       .get("/course-pack")
       .expect(200)
       .expect(({ body }) => {
@@ -59,7 +61,7 @@ describe("course-pack e2e", () => {
   });
 
   it("post: /course-pack", async () => {
-    return request(app.getHttpServer())
+    return agent
       .post("/course-pack")
       .send({
         title: "新对话课程",
@@ -94,7 +96,7 @@ describe("course-pack e2e", () => {
   });
 
   it("post: /course-pack with invalid payload returns 400", async () => {
-    return request(app.getHttpServer())
+    return agent
       .post("/course-pack")
       .send({ title: "", courses: { statements: [] } })
       .expect(400);
@@ -106,7 +108,7 @@ describe("course-pack e2e", () => {
       { word: "are", start: 1.3, end: 1.6 },
       { word: "you", start: 1.6, end: 2 },
     ];
-    const { body } = await request(app.getHttpServer())
+    const { body } = await agent
       .post("/course-pack")
       .send({
         title: "视频课程",
@@ -136,7 +138,7 @@ describe("course-pack e2e", () => {
     expect(statements[1]!.words).toBeNull();
 
     // learning 接口原样带出新字段
-    await request(app.getHttpServer())
+    await agent
       .get(`/course-pack/${body.coursePackId}/learning`)
       .expect(200)
       .expect(({ body: learning }) => {
@@ -162,7 +164,7 @@ describe("course-pack e2e", () => {
       words,
     });
 
-    await request(app.getHttpServer())
+    await agent
       .patch(`/course-pack/${coursePackId}`)
       .send({
         title: "编辑后",
@@ -197,12 +199,12 @@ describe("course-pack e2e", () => {
     const clipBytes = Buffer.from("fake-mp3-bytes-for-e2e");
     const fileName = "e2e-clip.mp3";
     try {
-      await request(app.getHttpServer()).get(`/course-audio/${fileName}`).expect(404);
+      await agent.get(`/course-audio/${fileName}`).expect(404);
 
       await mkdir(testCourseAudioDir, { recursive: true });
       await writeFile(join(testCourseAudioDir, fileName), clipBytes);
 
-      await request(app.getHttpServer())
+      await agent
         .get(`/course-audio/${fileName}`)
         .expect(200)
         .expect((res) => {
@@ -220,7 +222,7 @@ describe("course-pack e2e", () => {
     await insertUserCourseProgress(db, coursePackId, 0);
     await db.insert(courseHistory).values({ coursePackId, completionCount: 1 });
 
-    return request(app.getHttpServer())
+    return agent
       .delete(`/course-pack/${coursePackId}`)
       .expect(200)
       .expect(async ({ body }) => {
@@ -241,7 +243,7 @@ describe("course-pack e2e", () => {
   });
 
   it("delete: /course-pack/:coursePackId with unknown id returns 404", async () => {
-    return request(app.getHttpServer()).delete(`/course-pack/${createId()}`).expect(404);
+    return agent.delete(`/course-pack/${createId()}`).expect(404);
   });
 
   it("get: /course-pack/:coursePackId/edit returns video, statements and timings (no progress)", async () => {
@@ -260,7 +262,7 @@ describe("course-pack e2e", () => {
     });
     await insertStatement(db, coursePackId, 1, { english: "one", chinese: "一", soundmark: "/1/" });
 
-    return request(app.getHttpServer())
+    return agent
       .get(`/course-pack/${coursePackId}/edit`)
       .expect(200)
       .expect(({ body }) => {
@@ -279,11 +281,11 @@ describe("course-pack e2e", () => {
   });
 
   it("post: /course-pack/video without a file returns 400", async () => {
-    return request(app.getHttpServer()).post("/course-pack/video").expect(400);
+    return agent.post("/course-pack/video").expect(400);
   });
 
   it("post: /course-pack/video with unsupported extension returns 400", async () => {
-    return request(app.getHttpServer())
+    return agent
       .post("/course-pack/video")
       .attach("videoFile", Buffer.from("not-a-video"), "notes.txt")
       .expect(400);
@@ -296,7 +298,7 @@ describe("course-pack e2e", () => {
     });
     await insertStatement(db, coursePackId, 2, { english: "to-delete" });
 
-    return request(app.getHttpServer())
+    return agent
       .patch(`/course-pack/${coursePackId}`)
       .send({
         title: "新标题",
@@ -334,7 +336,7 @@ describe("course-pack e2e", () => {
   });
 
   it("patch: /course-pack/:coursePackId with unknown id returns 404", async () => {
-    return request(app.getHttpServer())
+    return agent
       .patch(`/course-pack/${createId()}`)
       .send({ title: "x", courses: { statements: [{ english: "a", chinese: "甲" }] } })
       .expect(404);
@@ -342,7 +344,7 @@ describe("course-pack e2e", () => {
 
   it("patch: /course-pack/:coursePackId with invalid payload returns 400", async () => {
     const { id: coursePackId } = await insertCoursePack(db);
-    return request(app.getHttpServer())
+    return agent
       .patch(`/course-pack/${coursePackId}`)
       .send({ title: "", courses: { statements: [] } })
       .expect(400);
@@ -352,7 +354,7 @@ describe("course-pack e2e", () => {
     const { id: coursePackId } = await insertCoursePack(db);
     await db.insert(courseHistory).values({ coursePackId, completionCount: 3 });
 
-    return request(app.getHttpServer())
+    return agent
       .get(`/course-pack/${coursePackId}`)
       .expect(200)
       .expect(({ body }) => {
@@ -370,7 +372,7 @@ describe("course-pack e2e", () => {
     await insertStatement(db, coursePackId, 2);
     await insertUserCourseProgress(db, coursePackId, 1);
 
-    return request(app.getHttpServer())
+    return agent
       .get(`/course-pack/${coursePackId}/learning`)
       .expect(200)
       .expect(({ body }) => {
@@ -383,7 +385,7 @@ describe("course-pack e2e", () => {
   it("post: /course-pack/:coursePackId/complete records a pack completion", async () => {
     const { id: coursePackId } = await insertCoursePack(db);
 
-    return request(app.getHttpServer())
+    return agent
       .post(`/course-pack/${coursePackId}/complete`)
       .expect(201)
       .expect(async () => {
@@ -395,6 +397,6 @@ describe("course-pack e2e", () => {
   });
 
   it("post: /course-pack/:coursePackId/complete with unknown id returns 404", async () => {
-    return request(app.getHttpServer()).post(`/course-pack/${createId()}/complete`).expect(404);
+    return agent.post(`/course-pack/${createId()}/complete`).expect(404);
   });
 });
