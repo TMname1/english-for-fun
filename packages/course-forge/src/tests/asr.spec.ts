@@ -1,8 +1,77 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { buildTranscriptFromSentences, transcodeToWav } from "../asr";
+import {
+  asrSegmentParts,
+  buildTranscriptFromSentences,
+  parseSyncSentence,
+  transcodeToWav,
+} from "../asr";
 
 vi.mock("../util", () => ({ runFfmpeg: vi.fn().mockResolvedValue(undefined) }));
+
+describe("parseSyncSentence", () => {
+  it("同步响应 output.sentence 为单句对象时包成数组", () => {
+    const sentence = {
+      sentence_id: 36,
+      begin_time: 600,
+      end_time: 104440,
+      text: "Hello.",
+      sentence_end: true,
+    };
+    expect(parseSyncSentence({ output: { sentence } })).toEqual([sentence]);
+  });
+
+  it("防御性兼容数组写法", () => {
+    const sentences = [
+      { begin_time: 0, end_time: 1000, text: "a", sentence_end: true },
+      { begin_time: 1000, end_time: 2000, text: "b", sentence_end: true },
+    ];
+    expect(parseSyncSentence({ output: { sentence: sentences } })).toEqual(sentences);
+  });
+
+  it("错误载荷（code 且无 output）抛错", () => {
+    expect(() => parseSyncSentence({ code: "InvalidApiKey", message: "bad key" })).toThrow(
+      /服务返回错误: InvalidApiKey bad key/,
+    );
+  });
+
+  it("缺少 output.sentence 抛错", () => {
+    expect(() => parseSyncSentence({ output: { text: "no sentence" } })).toThrow(
+      /缺少 output.sentence/,
+    );
+    expect(() => parseSyncSentence({})).toThrow(/缺少 output.sentence/);
+  });
+});
+
+describe("asrSegmentParts", () => {
+  it("碎片词标记 attachToPrev：相邻无前导空格碎片可拼，纯空格占位词打破相邻", () => {
+    const parts = asrSegmentParts({
+      begin_time: 0,
+      end_time: 2000,
+      text: "I've Genuinely",
+      sentence_end: true,
+      words: [
+        { text: "I", begin_time: 0, end_time: 100 },
+        { text: "'", begin_time: 100, end_time: 150 },
+        { text: "ve", begin_time: 150, end_time: 300 },
+        { text: " ", begin_time: 300, end_time: 310 },
+        { text: "Genu", begin_time: 310, end_time: 500 },
+        { text: "inely", begin_time: 500, end_time: 800 },
+        { text: " fun", begin_time: 800, end_time: 1500 },
+      ],
+    })!;
+    // 纯空格 token 被过滤；I/'/ve/Genu/inely/fun 共 6 个有效词
+    expect(parts.words.map((w) => w.word.word)).toEqual(["I", "'", "ve", "Genu", "inely", "fun"]);
+    expect(parts.words.map((w) => w.attachToPrev)).toEqual([
+      false, // 句首
+      true, // ' 紧邻 I
+      true, // ve 紧邻 '
+      false, // Genu 前是空格占位词
+      true, // inely 紧邻 Genu
+      false, // fun 带前导空格
+    ]);
+  });
+});
 
 describe("buildTranscriptFromSentences", () => {
   it("换算毫秒为秒，保留词级时间戳并把标点并入词尾", () => {

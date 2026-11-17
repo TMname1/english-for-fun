@@ -1,16 +1,15 @@
 import { describe, expect, it } from "vitest";
 
-import type { DraftCourse, DraftStatement, Transcript, TranscriptSegment } from "../types";
+import type { DraftStatement } from "../types";
 import {
   buildChatBody,
-  chunkTranscript,
   classifyLlmFailure,
   coerceCourseOutput,
   collectSseContent,
+  containsFullSentence,
   draftSchema,
-  evaluateCourseQuality,
   extractJsonObject,
-  mergeSegments,
+  mapWithConcurrency,
   messagesWithJsonKeyword,
   normalizeStatementsEnglish,
   stripEnglishPunctuation,
@@ -38,22 +37,74 @@ describe("extractJsonObject", () => {
 });
 
 describe("draftSchema", () => {
-  const ok = {
-    title: "T",
-    description: "",
-    statements: [{ english: "I", chinese: "我", phonetic: "/aɪ/" }],
-  };
-
-  it("accepts a single course object", () => {
-    expect(draftSchema.safeParse(ok).success).toBe(true);
+  it("接受只含 statements 的单句组装链", () => {
+    expect(
+      draftSchema.safeParse({
+        statements: [{ english: "I", chinese: "我", phonetic: "/aɪ/" }],
+      }).success,
+    ).toBe(true);
   });
 
-  it("rejects missing chinese / empty statements / wrapped courses array", () => {
-    expect(draftSchema.safeParse({ title: "T", statements: [{ english: "I" }] }).success).toBe(
-      false,
+  it("拒绝缺 chinese / 空 statements / 缺 statements", () => {
+    expect(draftSchema.safeParse({ statements: [{ english: "I" }] }).success).toBe(false);
+    expect(draftSchema.safeParse({ statements: [] }).success).toBe(false);
+    expect(draftSchema.safeParse({}).success).toBe(false);
+  });
+});
+
+describe("containsFullSentence", () => {
+  const chain = (lines: string[]): DraftStatement[] =>
+    lines.map((english) => ({ english, chinese: "译" }));
+
+  it("链里有逐字等于原句的行（忽略大小写/标点）判定为存在", () => {
+    expect(containsFullSentence(chain(["I", "like", "I like the food."]), "I like the food!")).toBe(
+      true,
     );
-    expect(draftSchema.safeParse({ title: "T", statements: [] }).success).toBe(false);
-    expect(draftSchema.safeParse({ courses: [ok] }).success).toBe(false);
+  });
+
+  it("缩写被展开判为不存在（don't -> do not 失配）", () => {
+    expect(containsFullSentence(chain(["I", "do not like it"]), "I don't like it.")).toBe(false);
+  });
+
+  it("漏词 / 完全没有完整行判为不存在", () => {
+    expect(containsFullSentence(chain(["I", "like", "the food"]), "I like the food.")).toBe(false);
+  });
+
+  it("空原句不存在", () => {
+    expect(containsFullSentence(chain(["I"]), "   ")).toBe(false);
+  });
+});
+
+describe("mapWithConcurrency", () => {
+  it("按输入顺序返回结果", async () => {
+    const out = await mapWithConcurrency([1, 2, 3, 4, 5], 2, async (n) => n * 10);
+    expect(out).toEqual([10, 20, 30, 40, 50]);
+  });
+
+  it("并发上限被遵守", async () => {
+    let active = 0;
+    let peak = 0;
+    await mapWithConcurrency(
+      Array.from({ length: 12 }, (_, i) => i),
+      3,
+      async (n) => {
+        active++;
+        peak = Math.max(peak, active);
+        await new Promise((r) => setTimeout(r, 5 + (n % 3)));
+        active--;
+        return n;
+      },
+    );
+    expect(peak).toBeLessThanOrEqual(3);
+  });
+
+  it("任一任务失败即整体 reject", async () => {
+    await expect(
+      mapWithConcurrency([0, 1, 2], 2, async (n) => {
+        if (n === 1) throw new Error("boom");
+        return n;
+      }),
+    ).rejects.toThrow("boom");
   });
 });
 
@@ -105,162 +156,6 @@ describe("normalizeStatementsEnglish", () => {
   it("整行只有标点时记入 emptyIndexes", () => {
     const statements: DraftStatement[] = [{ english: "...", chinese: "……" }];
     expect(normalizeStatementsEnglish(statements).emptyIndexes).toEqual([1]);
-  });
-});
-
-describe("chunkTranscript", () => {
-  function makeTranscript(wordsPerSeg: number, segs: number): Transcript {
-    return {
-      wordLevel: true,
-      language: "en",
-      segments: Array.from({ length: segs }, (_, i) => ({
-        id: i,
-        start: i * 2,
-        end: i * 2 + 1.9,
-        text: "a b",
-        words: Array.from({ length: wordsPerSeg }, (_, k) => ({
-          word: `w${k}`,
-          start: i * 2 + k * 0.1,
-          end: i * 2 + k * 0.1 + 0.05,
-        })),
-      })),
-    };
-  }
-
-  it("keeps everything in one chunk under the limit", () => {
-    const chunks = chunkTranscript(makeTranscript(10, 5), 100);
-    expect(chunks).toHaveLength(1);
-    expect(chunks[0].segments).toHaveLength(5);
-  });
-
-  it("splits on word budget and preserves order/ids", () => {
-    const chunks = chunkTranscript(makeTranscript(10, 5), 25);
-    expect(chunks.length).toBeGreaterThan(1);
-    const flat = chunks.flatMap((c) => c.segments.map((s) => s.id));
-    expect(flat).toEqual([0, 1, 2, 3, 4]);
-  });
-});
-
-describe("mergeSegments", () => {
-  const seg = (id: number, text: string): TranscriptSegment => ({
-    id,
-    start: id,
-    end: id + 0.9,
-    text,
-  });
-
-  it("拼接碎片直到句末标点，id 取该句首个碎片", () => {
-    const out = mergeSegments([
-      seg(
-        0,
-        "I know a lot of guys have trouble picking up on the signs of whether or not a girl is",
-      ),
-      seg(1, "into them, so today I want to do a little quiz."),
-      seg(2, "Okay."),
-    ]);
-    expect(out.map((s) => s.text)).toEqual([
-      "I know a lot of guys have trouble picking up on the signs of whether or not a girl is into them, so today I want to do a little quiz.",
-      "Okay.",
-    ]);
-    expect(out[0].id).toBe(0);
-    expect(out[1].id).toBe(2);
-    expect(out[1].end).toBeCloseTo(2.9);
-  });
-
-  it("引号收尾的句子照常断句", () => {
-    const out = mergeSegments([
-      seg(0, "she says, wow, do you think you could"),
-      seg(1, 'give me a hand?"'),
-    ]);
-    expect(out).toHaveLength(1);
-    expect(out[0].text.endsWith('hand?"')).toBe(true);
-  });
-
-  it("超长无句末的碎片保留为完整一句，不再按词数强制断开", () => {
-    const words = Array.from({ length: 42 }, (_, i) => `w${i}`);
-    const out = mergeSegments([
-      seg(0, `${words.slice(0, 22).join(" ")},`),
-      seg(1, words.slice(22).join(" ")),
-    ]);
-    expect(out).toHaveLength(1);
-    expect(out[0].text).toBe(`${words.slice(0, 22).join(" ")}, ${words.slice(22).join(" ")}`);
-    expect(out[0].text.split(/\s+/).filter(Boolean).length).toBe(42);
-  });
-
-  it("末尾未闭合文本照常输出，空文本段跳过", () => {
-    expect(mergeSegments([seg(0, "trailing words without end punctuation")])).toHaveLength(1);
-    expect(mergeSegments([seg(0, "   "), seg(1, "Hi.")])).toHaveLength(1);
-  });
-
-  it("clipIndex 变化时强制断句，禁止跨 clip 拼句", () => {
-    const out = mergeSegments([
-      { ...seg(0, "the first clip ends without"), clipIndex: 0 },
-      { ...seg(1, "punctuation"), clipIndex: 0 },
-      { ...seg(2, "and the second clip starts here."), clipIndex: 1 },
-    ]);
-    expect(out.map((s) => s.text)).toEqual([
-      "the first clip ends without punctuation",
-      "and the second clip starts here.",
-    ]);
-    expect(out[0].end).toBeCloseTo(1.9);
-    expect(out[1].start).toBe(2);
-  });
-
-  it("无 clipIndex 时行为不变（同一 undefined 不触发断句）", () => {
-    const out = mergeSegments([seg(0, "hello there"), seg(1, "general kenobi.")]);
-    expect(out).toHaveLength(1);
-  });
-});
-
-describe("evaluateCourseQuality", () => {
-  const course = (lines: string[]): DraftCourse => ({
-    title: "t",
-    statements: lines.map((english) => ({ english, chinese: "译" })),
-  });
-
-  it("正常逐级组装课通过", () => {
-    const c = course([
-      "I",
-      "like",
-      "food",
-      "today",
-      "I like the food",
-      "I like the food today",
-      "she",
-      "she likes him a lot",
-      "she likes him a lot today",
-    ]);
-    expect(evaluateCourseQuality(c, 5).ok).toBe(true);
-  });
-
-  it("单词列表课（qwen3:4b 第 2/3 分块的劣化形态）拒绝", () => {
-    const c = course([
-      "And",
-      "then",
-      "after",
-      "five",
-      "minutes",
-      "she",
-      "looks",
-      "back",
-      "says",
-      "wow",
-      "sweaty",
-      "already",
-    ]);
-    const v = evaluateCourseQuality(c, 12);
-    expect(v.ok).toBe(false);
-    if (!v.ok) expect(v.problems.join()).toMatch(/单词/);
-  });
-
-  it("只有短语、没有完整句拒绝", () => {
-    const v = evaluateCourseQuality(course(["a b c", "d e f", "g h i", "j k l"]), 6);
-    expect(v.ok).toBe(false);
-    if (!v.ok) expect(v.problems.join()).toMatch(/完整句/);
-  });
-
-  it("空课程拒绝", () => {
-    expect(evaluateCourseQuality({ title: "t", statements: [] }, 3).ok).toBe(false);
   });
 });
 
