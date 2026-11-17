@@ -108,13 +108,13 @@ export function parseOllamaListModelMb(listOutput: string, model: string): numbe
   return null;
 }
 
-function readModelSizeMbViaCli(): number | null {
+function readModelSizeMbViaCli(model: string): number | null {
   try {
     const result = spawnSync("ollama", ["list"], { encoding: "utf-8", timeout: 15000 });
     if (result.status !== 0 || !result.stdout) {
       return null;
     }
-    return parseOllamaListModelMb(result.stdout, config.llmModel);
+    return parseOllamaListModelMb(result.stdout, model);
   } catch {
     // ollama CLI 不在 PATH（远端 LLM 服务等场景）：跳过体积估算
     return null;
@@ -202,16 +202,20 @@ export async function preflightLlm(): Promise<void> {
     );
   }
 
-  // 2. 目标模型存在
-  if (!modelListed(ids, config.llmModel)) {
-    throw new Error(
-      `[llm] 预检失败：服务上没有模型 ${config.llmModel}（现有 ${ids.length} 个：${ids.slice(0, 5).join(", ") || "无"}）。` +
-        `请先执行：ollama pull ${config.llmModel}`,
-    );
+  // 2. 目标模型存在（预处理与句子分析各用一个模型，相同则只查一次）
+  const models = [...new Set([config.preprocessModel, config.llmModel])];
+  for (const model of models) {
+    if (!modelListed(ids, model)) {
+      throw new Error(
+        `[llm] 预检失败：服务上没有模型 ${model}（现有 ${ids.length} 个：${ids.slice(0, 5).join(", ") || "无"}）。` +
+          `请先执行：ollama pull ${model}`,
+      );
+    }
   }
 
-  // 3. 模型体积（ollama list 的 SIZE 列；拿不到则只做健康检查，不拦路）
-  const modelMb = readModelSizeMbViaCli();
+  // 3. 模型体积（ollama list 的 SIZE 列；两阶段先后运行、ollama 按需换载，按较大模型估算；拿不到则只做健康检查，不拦路）
+  const sizes = models.map(readModelSizeMbViaCli);
+  const modelMb = sizes.every((s) => s !== null) ? Math.max(...(sizes as number[])) : null;
 
   // 4. 显存余量
   const verdict = evaluateVram({
@@ -222,7 +226,7 @@ export async function preflightLlm(): Promise<void> {
   });
   if (verdict.level === "fail") {
     throw new Error(
-      `[llm] 预检失败：显存余量不足（空闲 ${verdict.freeMb}MB < 所需约 ${verdict.requiredMb}MB；${config.llmModel} 权重约 ${modelMb}MB）。` +
+      `[llm] 预检失败：显存余量不足（空闲 ${verdict.freeMb}MB < 所需约 ${verdict.requiredMb}MB；${models.join(" / ")} 中较大模型权重约 ${modelMb}MB）。` +
         `处置：关闭占显存的应用；` +
         `接受 CPU 卸载慢跑则设 FORGE_LLM_VRAM_STRICT=0 重跑`,
     );

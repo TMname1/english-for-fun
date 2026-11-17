@@ -4,11 +4,12 @@ import { resolve } from "node:path";
 
 import type { ClipRange, ForgeMeta, ForgePayload, Transcript } from "./types";
 import { alignStatements, formatAlignmentSummary } from "./align";
-import { transcodeToWav, transcribe } from "./asr";
+import { transcodeToWav, transcribeWithRaw } from "./asr";
 import { mergeClipTranscripts, normalizeClips, offsetTranscript, tagClipBoundaries } from "./clips";
 import { config, createRunId } from "./config";
 import { generateDraft } from "./llm";
 import { preflightLlm } from "./preflight";
+import { preprocessTranscript } from "./preprocess";
 
 /** transcribed 表示「已转录、等待人工校对」，仅 GUI 两段式流程使用 */
 export type ForgeStage =
@@ -61,8 +62,9 @@ async function readJson<T>(file: string): Promise<T> {
 }
 
 /**
- * 第一段：提取音轨 + ASR 转写，写出 transcript.json（同时保留一份 transcript.raw.json 供回溯），
- * 随后停掉 asr 容器把显存让给 LLM。GUI 流程在此暂停等待人工校对。
+ * 第一段：提取音轨 + ASR 转写 + 预处理（LLM 拆句、代码合并碎片词），
+ * 写出 transcript.json（预处理后）与 transcript.raw.json（原始 ASR，供回溯）。
+ * GUI 流程在此暂停等待人工校对。
  */
 export async function forgeTranscribe(opts: MakeOptions): Promise<string> {
   const mediaPath = resolve(opts.mediaPath);
@@ -96,9 +98,11 @@ export async function forgeTranscribe(opts: MakeOptions): Promise<string> {
   }
 
   let transcript: Transcript;
+  let rawTranscript: Transcript;
   if (clips) {
     opts.onStage?.("transcribing");
     const parts: Transcript[] = [];
+    const rawParts: Transcript[] = [];
     for (const [i, clip] of clips.entries()) {
       console.log(
         `[forge] 转写 clip ${i + 1}/${clips.length}（${clip.start.toFixed(2)}s–${clip.end.toFixed(2)}s）`,
@@ -106,7 +110,10 @@ export async function forgeTranscribe(opts: MakeOptions): Promise<string> {
       const wav = resolve(paths.work(outDir), `clip-${i}.wav`);
       await transcodeToWav(mediaPath, wav, clip);
       try {
-        const part = await transcribe(wav, language);
+        const { transcript: rawPart, sentences } = await transcribeWithRaw(wav, language);
+        rawParts.push(offsetTranscript(rawPart, clip.start));
+        // 预处理在 clip 本地时间轴上进行，天然不跨 clip 拼句
+        const part = await preprocessTranscript(rawPart, sentences);
         parts.push(offsetTranscript(part, clip.start));
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
@@ -121,18 +128,21 @@ export async function forgeTranscribe(opts: MakeOptions): Promise<string> {
       throw new Error("[forge] 所有选中 clip 的转写结果均为空，未识别到英文语音");
     }
     transcript = mergeClipTranscripts(parts);
+    rawTranscript = mergeClipTranscripts(rawParts);
     await writeJson(paths.clips(outDir), clips);
   } else {
     const wav = resolve(paths.work(outDir), "audio-16k.wav");
     await transcodeToWav(mediaPath, wav);
     opts.onStage?.("transcribing");
-    transcript = await transcribe(wav, language);
+    const { transcript: raw, sentences } = await transcribeWithRaw(wav, language);
+    rawTranscript = raw;
+    transcript = await preprocessTranscript(raw, sentences);
   }
   await writeJson(paths.transcript(outDir), transcript);
-  await writeJson(paths.transcriptRaw(outDir), transcript);
+  await writeJson(paths.transcriptRaw(outDir), rawTranscript);
   await rm(paths.work(outDir), { recursive: true, force: true });
   console.log(
-    `[forge] 转写完成：${transcript.segments.length} 段（词级时间戳：${transcript.wordLevel ? "有" : "无，段级降级"}）`,
+    `[forge] 转写 + 预处理完成：${transcript.segments.length} 个完整句（词级时间戳：${transcript.wordLevel ? "有" : "无，段级降级"}）`,
   );
 
   return outDir;
@@ -158,9 +168,9 @@ export async function forgeFromTranscript(opts: FromTranscriptOptions): Promise<
   if (config.llmPreflight) {
     await preflightLlm();
   }
-  const draft = await generateDraft(transcript, meta.type, meta.title);
+  const draft = await generateDraft(transcript, meta.title);
   console.log(
-    `[forge] 结构化完成：1 课（单一课程，长音频分块已合并）/ ${draft.statements.length} 条 statement`,
+    `[forge] 结构化完成：1 课（单一课程，逐句并发生成的组装链已按句序合并）/ ${draft.statements.length} 条 statement`,
   );
 
   // 时间戳对齐：把转写的词级时间映射回每条 statement（视频同步播放的数据来源）
