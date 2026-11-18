@@ -10,6 +10,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@earthworm/storage": "workspace:^",
     "ffmpeg-static": "^5.2.0",
     "zod": "^3.22.4"
   },

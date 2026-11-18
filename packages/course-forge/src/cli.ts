@@ -71,13 +71,13 @@ const HELP = `Course Forge：视频/音频 -> 课程包流水线
 用法：
   pnpm forge         -- --video <视频文件> --title <课程包名> [--type dialogue|music] [--desc 描述] [--language en] [--out 目录]
   pnpm forge         -- --audio <音频文件> ...    # 无视频来源时用音频（statement 不产出可播放的视频时间戳）
-  pnpm forge:import  -- --out <目录>    # POST /course-pack 导入课程包（视频输入时会复制视频到 API 静态目录）
+  pnpm forge:import  -- --out <目录>    # POST /course-pack 导入课程包（视频与 JSON 产物上传对象存储）
 
 环境变量：
   FORGE_LLM_BASE_URL (默认 http://localhost:11434/v1)  FORGE_LLM_API_KEY
   FORGE_LLM_MODEL 句子分析模型 (默认 tongyi-xiaomi-analysis-flash)  FORGE_PREPROCESS_MODEL 预处理拆句模型 (默认 qwen3.8-flash)
   FORGE_ASR_BASE_URL / FORGE_ASR_MODEL / FORGE_ASR_API_KEY（百炼 Qwen-Audio-ASR）   FORGE_API_URL (默认 http://localhost:3001)
-  FORGE_COURSE_VIDEO_DIR (默认 apps/api/storage/course-video)  导入时视频复制目标目录
+  S3_ENDPOINT / S3_REGION / S3_ACCESS_KEY_ID / S3_SECRET_ACCESS_KEY / S3_BUCKET / S3_FORCE_PATH_STYLE（对象存储，dev 默认本地 MinIO）
   FORGE_ASR_TIMEOUT_MS 单次转写超时（默认 3 分钟）       FORGE_LLM_PREFLIGHT=0 关闭 LLM 调用前预检
   FORGE_LLM_VRAM_STRICT=0 显存不足仅警告（CPU 卸载慢跑）  FORGE_LLM_VRAM_MARGIN_MB 显存估算余量（默认 512）
   FORGE_LLM_REASONING_EFFORT (默认 none，关闭 ollama 思考模式；非 ollama 服务如 DashScope 必须置空串)

@@ -103,11 +103,6 @@ export const config = {
   /** API 单用户登录凭证（与 apps/api/.env 的 AUTH_USERNAME/AUTH_PASSWORD 一致），导入前自动登录 */
   authUsername: env("AUTH_USERNAME", ""),
   authPassword: env("AUTH_PASSWORD", ""),
-  /** API 的课程视频静态目录（挂到 /course-video）；导入时把视频复制到这里 */
-  courseVideoDir: env(
-    "FORGE_COURSE_VIDEO_DIR",
-    join(repoRoot, "apps", "api", "storage", "course-video"),
-  ),
 } as const;
 
 export function createRunId(date = new Date()): string {
