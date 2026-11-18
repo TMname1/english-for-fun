@@ -1,7 +1,8 @@
 import { existsSync } from "node:fs";
-import { copyFile, mkdir, readFile } from "node:fs/promises";
-import { extname, join, resolve } from "node:path";
+import { readFile } from "node:fs/promises";
+import { extname } from "node:path";
 
+import { ObjectStorage, storageConfigFromEnv } from "@earthworm/storage";
 import type { ForgeMeta, ForgePayload } from "./types";
 import { config } from "./config";
 import { paths } from "./forge";
@@ -11,11 +12,11 @@ interface CreateCoursePackResponse {
 }
 
 /**
- * 视频输入的运行：把视频复制到 API 的静态目录（/course-video），返回站内 URL。
- * 文件名带 runId 保证不可变语义（静态挂载是 maxAge 365d + immutable）。
+ * 视频输入的运行：把视频上传到对象存储 course-video/<runId><ext>，返回对象键（入库用）。
+ * 文件名带 runId 保证不可变语义。
  * 非 mp4 只警告不转码：Safari 等浏览器可能无法播放 mkv/webm，需要时手工转 H.264+AAC mp4。
  */
-async function publishVideo(meta: ForgeMeta): Promise<string | null> {
+async function publishVideo(meta: ForgeMeta, storage: ObjectStorage): Promise<string | null> {
   if (!meta.videoPath || !existsSync(meta.videoPath)) {
     return null;
   }
@@ -25,12 +26,27 @@ async function publishVideo(meta: ForgeMeta): Promise<string | null> {
       `[import] 警告：视频不是 mp4（${ext}），部分浏览器（Safari）可能无法播放；建议转成 H.264+AAC 的 mp4 再导入`,
     );
   }
-  const fileName = `${meta.runId}${ext}`;
-  const targetDir = resolve(config.courseVideoDir);
-  await mkdir(targetDir, { recursive: true });
-  await copyFile(meta.videoPath, join(targetDir, fileName));
-  console.log(`[import] 视频已复制到 ${join(targetDir, fileName)}`);
-  return `/course-video/${fileName}`;
+  const videoKey = `course-video/${meta.runId}${ext}`;
+  await storage.uploadFile(videoKey, meta.videoPath);
+  console.log(`[import] 视频已上传到对象存储：${videoKey}`);
+  return videoKey;
+}
+
+/** 把本地 outDir 的 JSON 产物持久化到 forge/<runId>/（与 GUI 流水线的对象布局一致） */
+async function publishArtifacts(outDir: string, runId: string, storage: ObjectStorage) {
+  const files = [
+    paths.meta(outDir),
+    paths.transcript(outDir),
+    paths.transcriptRaw(outDir),
+    paths.clips(outDir),
+    paths.alignment(outDir),
+    paths.course(outDir),
+  ];
+  for (const file of files) {
+    if (!existsSync(file)) continue;
+    const name = file.split(/[\\/]/).pop()!;
+    await storage.putBuffer(`forge/${runId}/${name}`, await readFile(file), "application/json");
+  }
 }
 
 /** API 已启用单用户登录：导入前先 POST /auth/login 换取 Cookie */
@@ -62,8 +78,8 @@ async function loginToApi(): Promise<string> {
 /**
  * 导入产物：course.json -> POST /course-pack。
  * statement 携带视频时间戳（startTime/endTime/words，由 forge 的对齐步骤产出）；
- * 视频输入时复制视频文件并写入 course_packs.video（播放走视频 seek 或 TTS）。
- * 前提：API 已启动，且与本机共享 storage 目录（默认 apps/api/storage/course-video）。
+ * 视频输入时上传视频到对象存储并把对象键写入 course_packs.video（播放走预签名 URL）。
+ * 前提：API 已启动；对象存储配置（S3_*）与 API 指向同一个桶。
  */
 export async function forgeImport(outDir: string): Promise<CreateCoursePackResponse> {
   const payload = JSON.parse(await readFile(paths.course(outDir), "utf-8")) as ForgePayload;
@@ -72,13 +88,17 @@ export async function forgeImport(outDir: string): Promise<CreateCoursePackRespo
     ? (JSON.parse(await readFile(metaFile, "utf-8")) as ForgeMeta)
     : null;
 
-  const videoUrl = meta ? await publishVideo(meta) : null;
+  const storage = new ObjectStorage(storageConfigFromEnv());
+  const videoKey = meta ? await publishVideo(meta, storage) : null;
+  if (meta) {
+    await publishArtifacts(outDir, meta.runId, storage);
+  }
 
   const body = {
     title: payload.title,
     description: payload.description ?? "",
     cover: payload.cover ?? "",
-    video: videoUrl ?? undefined,
+    video: videoKey ?? undefined,
     courses: {
       title: payload.courses.title,
       description: payload.courses.description ?? "",
