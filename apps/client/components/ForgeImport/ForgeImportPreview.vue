@@ -155,18 +155,14 @@ interface EditableStatement {
   words?: { word: string; start: number; end: number }[];
 }
 
-const runtimeConfig = useRuntimeConfig();
 const submitting = ref(false);
 const localTitle = ref("");
 const localDescription = ref("");
 const statements = ref<EditableStatement[]>([]);
 
 const courseJson = computed(() => props.job.courseJson);
-const videoSrc = computed(() => {
-  if (!props.job.videoPath) return "";
-  const base = (runtimeConfig.public.apiBase as string) ?? "";
-  return `${base.replace(/\/$/, "")}${props.job.videoPath}`;
-});
+// videoPath 是对象存储预签名 URL（绝对地址），直接播放
+const videoSrc = computed(() => props.job.videoPath || "");
 
 onMounted(() => {
   const data = courseJson.value;
@@ -219,7 +215,7 @@ function buildPayload(): CreateCoursePackPayload | null {
     title: localTitle.value.trim(),
     description: localDescription.value.trim(),
     cover: data?.cover ?? "",
-    video: props.job.videoPath || undefined,
+    video: props.job.videoKey || undefined,
     courses: {
       title: data?.courses?.title ?? localTitle.value.trim(),
       description: data?.courses?.description ?? "",

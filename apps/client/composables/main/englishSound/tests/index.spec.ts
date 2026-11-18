@@ -112,12 +112,13 @@ describe("video sync playback", () => {
   });
 
   it("playSound seeks the video instead of playing audio when timing exists", () => {
+    const presigned = "https://oss.test/earthworm/course-video/v.mp4?X-Amz-Signature=abc";
     const courseStore = useCourseStore();
     courseStore.currentLearning = {
       coursePackId: "p1",
       title: "t",
       description: "",
-      video: "/course-video/v.mp4",
+      video: presigned,
       statementIndex: 0,
       statements: [],
     };
@@ -136,7 +137,8 @@ describe("video sync playback", () => {
     const { playSound } = useCurrentStatementEnglishSound();
     const stop = playSound({ times: 2 });
 
-    expect(setVideoSource).toHaveBeenCalledWith("http://api.test/course-video/v.mp4");
+    // 预签名 URL 直连对象存储，不再拼 apiBase
+    expect(setVideoSource).toHaveBeenCalledWith(presigned);
     expect(playRange).toHaveBeenCalledWith(1.2, 2.5, { times: 2 });
     expect(play).not.toHaveBeenCalled();
     expect(stop).toBe(stopVideo);

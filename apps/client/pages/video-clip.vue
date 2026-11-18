@@ -156,7 +156,6 @@ import { useClipPlayer } from "~/composables/videoClip/useClipPlayer";
 
 type Step = "upload" | "edit" | "working" | "review" | "failed";
 
-const runtimeConfig = useRuntimeConfig();
 const step = ref<Step>("upload");
 const uploading = ref(false);
 const submitting = ref(false);
@@ -230,7 +229,7 @@ async function handleUpload(payload: ClipUploadPayload) {
     }
     jobId.value = id;
     const view = await fetchForgeJob(id);
-    videoUrl.value = `${runtimeConfig.public.apiBase}${view.videoPath}`;
+    videoUrl.value = view.videoPath;
     editor.reset();
     step.value = "edit";
   } catch (error) {

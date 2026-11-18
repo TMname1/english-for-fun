@@ -1,6 +1,6 @@
 <template>
   <NuxtLink
-    v-if="video && !isInternal"
+    v-if="video && isExternal"
     target="_blank"
     class="flex cursor-pointer items-center fill-current text-xl hover:text-fuchsia-500"
     :href="video"
@@ -15,12 +15,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
-
-const props = defineProps<{
+defineProps<{
   video?: string;
+  /** 对象存储视频由页内 VideoPlayer 播放，只有外部链接才渲染外链图标 */
+  isExternal?: boolean;
 }>();
-
-// 站内视频（/course-video/...）由页内 VideoPlayer 播放，不再渲染外链
-const isInternal = computed(() => (props.video ?? "").startsWith("/"));
 </script>

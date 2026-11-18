@@ -103,15 +103,11 @@ interface EditableRow {
   words: EditableWord[];
 }
 
-const runtimeConfig = useRuntimeConfig();
 const submitting = ref(false);
 const rows = ref<EditableRow[]>([]);
 
-const videoSrc = computed(() => {
-  if (!props.job.videoPath) return "";
-  const base = (runtimeConfig.public.apiBase as string) ?? "";
-  return `${base.replace(/\/$/, "")}${props.job.videoPath}`;
-});
+// videoPath 是对象存储预签名 URL（绝对地址），直接播放
+const videoSrc = computed(() => props.job.videoPath || "");
 
 const canSubmit = computed(
   () =>

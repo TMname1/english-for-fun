@@ -240,7 +240,7 @@ describe("parseCoursePackJsonImport", () => {
     const withTimings = JSON.stringify({
       title: "forge-2",
       cover: "",
-      video: "/course-video/x.mp4",
+      video: "course-video/x.mp4",
       courses: {
         statements: [
           {
@@ -262,7 +262,7 @@ describe("parseCoursePackJsonImport", () => {
     const built = buildCreateCoursePackPayload(result.pack, result.course);
     expect(built.ok).toBe(true);
     if (built.ok) {
-      expect(built.payload.video).toBe("/course-video/x.mp4");
+      expect(built.payload.video).toBe("course-video/x.mp4");
       expect(built.payload.courses.statements[0]).toEqual({
         english: "Hello",
         chinese: "你好",

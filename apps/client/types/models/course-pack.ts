@@ -23,7 +23,10 @@ export interface CoursePackLearning {
   coursePackId: string;
   title: string;
   description: string;
+  /** 对象存储预签名 URL（会过期）或外部 URL */
   video: string;
+  /** true = 外部链接；false = 对象存储视频（页内播放器 seek） */
+  videoIsExternal?: boolean;
   statements: Statement[];
   statementIndex: number;
 }

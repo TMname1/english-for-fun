@@ -68,7 +68,7 @@
             </div>
             <UInput
               v-model="packForm.video"
-              placeholder="或填写站内路径 /course-video/xxx.mp4 / 外部 URL（可选）"
+              placeholder="或填写对象键 course-video/xxx.mp4 / 外部 URL（可选）"
             />
           </div>
 
@@ -242,7 +242,7 @@
                     </div>
                     <UInput
                       v-model="editPackForm.video"
-                      placeholder="或填写站内路径 /course-video/xxx.mp4 / 外部 URL（可选）"
+                      placeholder="或填写对象键 course-video/xxx.mp4 / 外部 URL（可选）"
                     />
                   </div>
                   <div class="flex flex-col gap-3 rounded-lg border p-4 dark:border-gray-700">
@@ -421,8 +421,8 @@ function openVideoPicker(target: "add" | "edit") {
 function currentVideoLabel(video: string): string {
   const value = video?.trim();
   if (!value) return "未选择视频";
-  if (value.startsWith("/")) return `已上传：${value.split("/").pop()}`;
-  return `外部链接：${value}`;
+  if (/^https?:\/\//i.test(value)) return `外部链接：${value}`;
+  return `已上传：${value.split("/").pop()}`;
 }
 
 function clearVideo(target: "add" | "edit") {
