@@ -17,23 +17,42 @@
 
 ## 一、后端 API（`apps/api/.env`）
 
-| 变量               | 必填  | 默认值                          | 用途                                                                                                           |
-| ------------------ | ----- | ------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `DATABASE_URL`     | ✅ 是 | 无                              | Postgres 连接串，如 `postgres://postgres:password@localhost:5433/earthworm`。迁移（drizzle）与运行时都依赖它。 |
-| `NODE_ENV`         | 否    | 空                              | 选择加载哪个 env 文件并影响行为：`test` → `.env.test`，`prod` → `.env.prod`，其它 → `.env`。                   |
-| `PORT`             | 否    | `3001`                          | API 监听端口（`main.ts`）。                                                                                    |
-| `TTS_STORAGE_DIR`  | 否    | `apps/api/storage/tts`          | Edge TTS 生成的 mp3 缓存目录。                                                                                 |
-| `TTS_PROXY_URL`    | 否    | 空                              | 访问 Edge TTS 服务所用 HTTP 代理，如 `http://127.0.0.1:10809`。国内网络访问微软 TTS 时常用。                   |
-| `COURSE_AUDIO_DIR` | 否    | `apps/api/storage/course-audio` | 挂载到 `/course-audio` 前缀的真实音频目录。                                                                    |
-| `COURSE_VIDEO_DIR` | 否    | `apps/api/storage/course-video` | 课程视频（上传 / B 站下载 / Forge 产物）存放目录，挂载到 `/course-video`。                                     |
-| `FORGE_REPO_ROOT`  | 否    | 自动推断                        | 覆盖仓库根目录定位，供 Forge runner 子进程使用。一般无需设置。                                                 |
-| `AUTH_USERNAME`    | ✅ 是 | 无                              | 单用户登录的用户名。详见根目录 `README.login.md`。                                                             |
-| `AUTH_PASSWORD`    | ✅ 是 | 无                              | 单用户登录的密码。详见根目录 `README.login.md`。                                                               |
-| `SECRET`           | ✅ 是 | 无                              | 登录 Cookie 的 HMAC 签名密钥；修改它会使所有已发放的登录凭证失效。                                             |
+| 变量              | 必填  | 默认值   | 用途                                                                                                           |
+| ----------------- | ----- | -------- | -------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`    | ✅ 是 | 无       | Postgres 连接串，如 `postgres://postgres:password@localhost:5433/earthworm`。迁移（drizzle）与运行时都依赖它。 |
+| `NODE_ENV`        | 否    | 空       | 选择加载哪个 env 文件并影响行为：`test` → `.env.test`，`prod` → `.env.prod`，其它 → `.env`。                   |
+| `PORT`            | 否    | `3001`   | API 监听端口（`main.ts`）。                                                                                    |
+| `TTS_PROXY_URL`   | 否    | 空       | 访问 Edge TTS 服务所用 HTTP 代理，如 `http://127.0.0.1:10809`。国内网络访问微软 TTS 时常用。                   |
+| `FORGE_REPO_ROOT` | 否    | 自动推断 | 覆盖仓库根目录定位，供 Forge runner 子进程使用。一般无需设置。                                                 |
+| `AUTH_USERNAME`   | ✅ 是 | 无       | 单用户登录的用户名。详见根目录 `README.login.md`。                                                             |
+| `AUTH_PASSWORD`   | ✅ 是 | 无       | 单用户登录的密码。详见根目录 `README.login.md`。                                                               |
+| `SECRET`          | ✅ 是 | 无       | 登录 Cookie 的 HMAC 签名密钥；修改它会使所有已发放的登录凭证失效。                                             |
+
+### 对象存储（S3 协议，dev: MinIO / prod: 阿里云 OSS）
+
+视频、TTS 缓存、forge JSON 产物全部存对象存储（单桶 + 前缀：`course-video/`、`course-audio/`、`tts/`、`forge/`），
+前端通过**预签名 URL 直连**播放。统一走 `@earthworm/storage`（`packages/storage`），dev/prod 只改环境变量：
+
+| 变量                         | 必填 | 默认值（dev MinIO）     | 用途                                                                           |
+| ---------------------------- | ---- | ----------------------- | ------------------------------------------------------------------------------ |
+| `S3_ENDPOINT`                | 否   | `http://localhost:9000` | S3 端点。prod 填 OSS S3 兼容端点，如 `https://oss-cn-hangzhou.aliyuncs.com`。  |
+| `S3_REGION`                  | 否   | `us-east-1`             | 区域。MinIO 随意（默认即可）；OSS 填 `oss-cn-<region>`，如 `oss-cn-hangzhou`。 |
+| `S3_ACCESS_KEY_ID`           | 否   | `minioadmin`            | 访问密钥 ID。prod 填 RAM 子账号 AccessKey ID。                                 |
+| `S3_SECRET_ACCESS_KEY`       | 否   | `minioadmin`            | 访问密钥 Secret。prod 填 RAM 子账号 AccessKey Secret。                         |
+| `S3_BUCKET`                  | 否   | `earthworm`             | 桶名。dev 由 compose 的 `minio-init` 自动创建；prod 需先在 OSS 控制台建桶。    |
+| `S3_FORCE_PATH_STYLE`        | 否   | `true`                  | MinIO 必须 `true`（path-style）；OSS 必须 `false`（虚拟主机风格）。            |
+| `S3_PRESIGN_EXPIRES_SECONDS` | 否   | `21600`（6 小时）       | 预签名 URL 有效期（秒）。过期后前端重新请求 API 即可拿到新 URL。               |
+
+dev 时 `pnpm docker:start` 会一并启动 MinIO（API `localhost:9000`，控制台 `localhost:9001`，默认账号密码 minioadmin/minioadmin，
+可用根目录 `.env` 的 `MINIO_ROOT_USER`/`MINIO_ROOT_PASSWORD` 覆盖）并自动建私有桶 `earthworm`，
+同时给 `tts/` 前缀配置 30 天过期的生命周期规则（TTS 缓存自动清理；prod 需在 OSS 控制台配置同等规则）。
+删课程包时会级联删除不再被引用的视频对象与 `forge/<id>/` 产物。
+**dev → prod 的完整改动清单见根目录 `README.devToProd.md`。**
 
 **遗留 / 未被代码读取的变量（可忽略，无需填写）：**
 
 - `BACKEND_ENDPOINT`：出现在本地 `apps/api/.env`，**代码中无引用**。
+- `TTS_STORAGE_DIR` / `COURSE_AUDIO_DIR` / `COURSE_VIDEO_DIR`：本地静态目录方案已删除，代码不再读取（本地 `.env` 里若残留可删除）。
 
 ### 测试环境（`apps/api/.env.test`，模板 `.env.test.example`）
 
@@ -92,12 +111,12 @@ DATABASE_URL="postgres://test:password@localhost:5480/earthworm_test"
 
 ### 3.3 导入后端
 
-| 变量                     | 必填   | 默认值                           | 用途                                                                                                                                    |
-| ------------------------ | ------ | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `FORGE_API_URL`          | 否     | `http://localhost:3001`          | 课程导入目标 API 地址。                                                                                                                 |
-| `FORGE_COURSE_VIDEO_DIR` | 否     | `apps/api/storage/course-video/` | 导入时视频复制目标目录（API 静态挂载到 `/course-video`）。                                                                              |
-| `AUTH_USERNAME`          | 视情况 | 空                               | API 单用户登录用户名，`forge:import` 导入前自动登录用；与 `apps/api/.env` 一致。后端发起的流水线子进程自动继承，手动跑 CLI 时才需配置。 |
-| `AUTH_PASSWORD`          | 视情况 | 空                               | 同上，登录密码。详见根目录 `README.login.md`。                                                                                          |
+| 变量                     | 必填   | 默认值                  | 用途                                                                                                                                    |
+| ------------------------ | ------ | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `FORGE_API_URL`          | 否     | `http://localhost:3001` | 课程导入目标 API 地址。                                                                                                                 |
+| `S3_*`（见上文对象存储） | 否     | dev MinIO 默认值        | `forge:import` 把视频上传到 `course-video/<runId>.<ext>`、JSON 产物上传到 `forge/<runId>/`，与 `apps/api/.env` 的 S3 配置保持一致。     |
+| `AUTH_USERNAME`          | 视情况 | 空                      | API 单用户登录用户名，`forge:import` 导入前自动登录用；与 `apps/api/.env` 一致。后端发起的流水线子进程自动继承，手动跑 CLI 时才需配置。 |
+| `AUTH_PASSWORD`          | 视情况 | 空                      | 同上，登录密码。详见根目录 `README.login.md`。                                                                                          |
 
 ### 3.4 流水线运行时变量（由后端自动注入，**无需手动配置**）
 
@@ -116,6 +135,7 @@ AUTH_USERNAME="admin"
 AUTH_PASSWORD="换成你的密码"
 # PORT=3001
 # TTS_PROXY_URL="http://127.0.0.1:10809"   # 国内访问 Edge TTS 时再开
+# S3_* 全部可省略：默认即 dev MinIO（先 pnpm docker:start）
 ```
 
 **apps/client/.env**
@@ -136,12 +156,13 @@ FORGE_PREPROCESS_MODEL=qwen3.8-flash
 FORGE_LLM_API_KEY=sk-你的百炼Key
 FORGE_LLM_REASONING_EFFORT=
 FORGE_LLM_ENABLE_THINKING=false
+# S3_* 省略时默认 dev MinIO；手动跑 forge:import 且 API 不在本机时按需填写
 ```
 
 ---
 
 ## 五、安全提醒
 
-- 真实 Key（`FORGE_*_API_KEY`）**只放本地 `.env`，绝不提交**（已 gitignore）。
+- 真实 Key（`FORGE_*_API_KEY`、`S3_SECRET_ACCESS_KEY`）**只放本地 `.env`，绝不提交**（已 gitignore）。
 - 前端 `apps/client/.env` 的值会打包进浏览器产物，**禁止放任何密钥**，只放 `API_BASE` 等公开配置。
 - 若本地 `packages/course-forge/.env` 里填入的是真实百炼 Key，请注意该 Key 的额度与轮换；如机器共享或曾误传，建议尽快在服务商控制台吊销重发。
