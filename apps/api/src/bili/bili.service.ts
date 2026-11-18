@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { BadRequestException, Injectable, Logger, NotFoundException } from "@nestjs/common";
@@ -8,7 +9,7 @@ import { toDataURL } from "qrcode";
 import type { BiliInfo, BiliLoginStatus, BiliPollResult } from "./bilidown-bridge";
 import type { DownloadBiliDto } from "./dto/download-bili.dto";
 import { ForgeService } from "../forge/forge.service";
-import { COURSE_VIDEO_DIR } from "../forge/runner-client";
+import { StorageService } from "../storage/storage.service";
 import { getBilidownCore } from "./bilidown-bridge";
 
 type DownloadStatus = "running" | "done" | "failed" | "cancelled";
@@ -55,7 +56,10 @@ export class BiliService {
     { jar: Record<string, string>; createdAt: number }
   >();
 
-  constructor(private readonly forgeService: ForgeService) {}
+  constructor(
+    private readonly forgeService: ForgeService,
+    private readonly storage: StorageService,
+  ) {}
 
   async loginStatus(): Promise<BiliLoginStatus> {
     const core = await getBilidownCore();
@@ -72,9 +76,7 @@ export class BiliService {
   }
 
   /** 轮询登录状态；成功时由内核落盘 cookie 并返回账号信息 */
-  async loginPoll(
-    key: string,
-  ): Promise<{
+  async loginPoll(key: string): Promise<{
     status: "pending" | "scanned" | "expired" | "success";
     uname?: string;
     vipStatus?: boolean;
@@ -137,6 +139,10 @@ export class BiliService {
     signal: AbortSignal,
   ): Promise<void> {
     const record = this.downloads.get(id)!;
+    // ffmpeg 混流必须操作本地文件：先落到临时目录，成品上传对象存储后清理
+    const workDir = join(tmpdir(), "earthworm-bili", id);
+    const videoKey = `course-video/${fileName}`;
+    let uploaded = false;
     try {
       const core = await getBilidownCore();
       await core.download({
@@ -144,7 +150,7 @@ export class BiliService {
         p: dto.p,
         qn: dto.qn,
         noCookie: dto.noCookie,
-        outDir: COURSE_VIDEO_DIR,
+        outDir: workDir,
         outName: fileName,
         signal,
         onStage: (stage) => {
@@ -158,7 +164,10 @@ export class BiliService {
         onLog: (msg, level) => this.logger[level === "warn" ? "warn" : "log"](msg),
       });
 
-      const { jobId } = this.forgeService.createJobFromLocalVideo({
+      await this.storage.uploadFile(videoKey, join(workDir, fileName));
+      uploaded = true;
+
+      const { jobId } = this.forgeService.createJobFromUploadedVideo({
         fileName,
         title: dto.title,
         type: dto.type,
@@ -169,14 +178,17 @@ export class BiliService {
       record.phase = PHASE_LABEL.done;
       record.percent = 1;
       record.jobId = jobId;
-      record.videoPath = `/course-video/${fileName}`;
+      record.videoPath = await this.storage.presignGet(videoKey);
       record.finishedAt = Date.now();
     } catch (error) {
-      // 清理可能写了一半的成品文件；.tmp 中间文件由内核按名清理
-      await rm(join(COURSE_VIDEO_DIR, fileName), { force: true }).catch(() => {});
+      if (uploaded) {
+        await this.storage.deleteObject(videoKey).catch(() => {});
+      }
       record.status = signal.aborted ? "cancelled" : "failed";
       record.error = error instanceof Error ? error.message : String(error);
       record.finishedAt = Date.now();
+    } finally {
+      await rm(workDir, { recursive: true, force: true }).catch(() => {});
     }
   }
 

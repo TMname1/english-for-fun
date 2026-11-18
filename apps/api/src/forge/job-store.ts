@@ -1,6 +1,6 @@
-import { rm } from "node:fs/promises";
-
 import { Injectable, OnModuleDestroy } from "@nestjs/common";
+
+import { StorageService } from "../storage/storage.service";
 
 export type ForgeJobStatus =
   | "pending"
@@ -29,12 +29,10 @@ export interface ForgeJobRecord {
   error?: string;
   startedAt: number;
   finishedAt?: number;
-  /** 流水线产物目录（course.json / meta.json / alignment.json 所在处） */
+  /** 流水线本地临时产物目录（scratch）；持久产物在对象存储 forge/<id>/ */
   outDir: string;
-  /** 视频文件在服务器上的绝对路径，runner 内 ffmpeg 直接读取 */
-  videoFsPath: string;
-  /** 静态挂载后的站内 URL，如 /course-video/xxx.mp4 */
-  videoUrlPath: string;
+  /** 视频对象键，如 course-video/xxx.mp4 */
+  videoKey: string;
   /** 标题 / 类型，前端轮询回显用 */
   title: string;
   type: "dialogue" | "music";
@@ -56,7 +54,7 @@ export class JobStore implements OnModuleDestroy {
   private readonly records = new Map<string, ForgeJobRecord>();
   private readonly cleanupTimer: NodeJS.Timeout;
 
-  constructor() {
+  constructor(private readonly storage: StorageService) {
     this.cleanupTimer = setInterval(() => this.cleanupStale(), CLEANUP_INTERVAL_MS);
     this.cleanupTimer.unref?.();
   }
@@ -89,7 +87,7 @@ export class JobStore implements OnModuleDestroy {
       if (record.status === "pending") {
         if (now - record.startedAt > PENDING_EXPIRE_MS) {
           this.records.delete(id);
-          void rm(record.videoFsPath, { force: true }).catch(() => {});
+          void this.storage.deleteObject(record.videoKey).catch(() => {});
         }
         continue;
       }

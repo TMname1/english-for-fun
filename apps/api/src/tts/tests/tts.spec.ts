@@ -1,6 +1,3 @@
-import { promises as fs } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { Readable } from "node:stream";
 
 import { BadGatewayException, BadRequestException, INestApplication } from "@nestjs/common";
@@ -8,6 +5,7 @@ import { ConfigService } from "@nestjs/config";
 import { Test } from "@nestjs/testing";
 import * as request from "supertest";
 
+import { StorageService } from "../../storage/storage.service";
 import { TtsController } from "../tts.controller";
 import { TtsService } from "../tts.service";
 
@@ -46,10 +44,19 @@ function delayedStream(chunk: Buffer, delayMs: number) {
 describe("tts", () => {
   let service: TtsService;
   let app: INestApplication;
-  let storageDir: string;
+  /** 内存版对象存储：key -> 内容，替代真实 S3 */
+  const objects = new Map<string, Buffer>();
+  const storageMock = {
+    getBuffer: jest.fn(async (key: string) => objects.get(key) ?? null),
+    putBuffer: jest.fn(async (key: string, body: Buffer) => {
+      objects.set(key, body);
+    }),
+  };
 
   beforeEach(async () => {
-    storageDir = await fs.mkdtemp(join(tmpdir(), "earthworm-tts-test-"));
+    objects.clear();
+    storageMock.getBuffer.mockClear();
+    storageMock.putBuffer.mockClear();
     mockToStream.mockReset();
     mockSetMetadata.mockReset();
     mockClose.mockReset();
@@ -59,10 +66,8 @@ describe("tts", () => {
       controllers: [TtsController],
       providers: [
         TtsService,
-        {
-          provide: ConfigService,
-          useValue: { get: (key: string) => (key === "TTS_STORAGE_DIR" ? storageDir : undefined) },
-        },
+        { provide: ConfigService, useValue: { get: () => undefined } },
+        { provide: StorageService, useValue: storageMock },
       ],
     }).compile();
 
@@ -73,20 +78,20 @@ describe("tts", () => {
 
   afterEach(async () => {
     await app.close();
-    await fs.rm(storageDir, { recursive: true, force: true });
   });
 
   describe("service", () => {
-    it("synthesizes on cache miss and serves from disk afterwards", async () => {
+    it("synthesizes on cache miss and serves from object storage afterwards", async () => {
       mockToStream.mockImplementation(() => audioStreamOf([Buffer.from("fake-mp3")]));
 
       const first = await service.getAudio("hello world", "American");
       expect(first.toString()).toBe("fake-mp3");
       expect(mockToStream).toHaveBeenCalledTimes(1);
 
-      const files = await fs.readdir(storageDir);
-      expect(files).toHaveLength(1);
-      expect(files[0]).toMatch(/^[0-9a-f]{64}\.mp3$/);
+      const keys = [...objects.keys()];
+      expect(keys).toHaveLength(1);
+      expect(keys[0]).toMatch(/^tts\/[0-9a-f]{64}\.mp3$/);
+      expect(storageMock.putBuffer).toHaveBeenCalledWith(keys[0], first, "audio/mpeg");
 
       const second = await service.getAudio("hello world", "American");
       expect(second.toString()).toBe("fake-mp3");
@@ -100,8 +105,7 @@ describe("tts", () => {
       await service.getAudio("same text", "British");
 
       expect(mockToStream).toHaveBeenCalledTimes(2);
-      const files = await fs.readdir(storageDir);
-      expect(files).toHaveLength(2);
+      expect(objects.size).toBe(2);
     });
 
     it("rejects invalid text and accent with 400", async () => {
@@ -116,12 +120,13 @@ describe("tts", () => {
       expect(mockToStream).not.toHaveBeenCalled();
     });
 
-    it("returns 502 without leaving files or broken clients when synthesis fails", async () => {
+    it("returns 502 without caching partial audio or leaving broken clients when synthesis fails", async () => {
       mockToStream.mockImplementation(() => failingStream());
 
       await expect(service.getAudio("bad text", "American")).rejects.toThrow(BadGatewayException);
       expect(mockClose).toHaveBeenCalled();
-      expect(await fs.readdir(storageDir)).toHaveLength(0);
+      expect(objects.size).toBe(0);
+      expect(storageMock.putBuffer).not.toHaveBeenCalled();
 
       // the next request recreates the client and succeeds
       mockToStream.mockImplementation(() => audioStreamOf([Buffer.from("recovered")]));

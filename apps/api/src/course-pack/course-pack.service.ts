@@ -1,4 +1,4 @@
-import { Inject, Injectable, NotFoundException } from "@nestjs/common";
+import { Inject, Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { asc, eq } from "drizzle-orm";
 
@@ -13,10 +13,12 @@ import { coursePack, statement } from "@earthworm/schema";
 import type { CreateCoursePackDto } from "./dto/create-course-pack.dto";
 import { CourseHistoryService } from "../course-history/course-history.service";
 import { DB, DbType } from "../global/providers/db.provider";
+import { StorageService } from "../storage/storage.service";
 import { UserCourseProgressService } from "../user-course-progress/user-course-progress.service";
 
 @Injectable()
 export class CoursePackService {
+  private readonly logger = new Logger(CoursePackService.name);
   private gameDataSdkReady = false;
 
   constructor(
@@ -24,6 +26,7 @@ export class CoursePackService {
     private readonly courseHistoryService: CourseHistoryService,
     private readonly userCourseProgressService: UserCourseProgressService,
     private readonly configService: ConfigService,
+    private readonly storage: StorageService,
   ) {}
 
   async findAll() {
@@ -46,12 +49,18 @@ export class CoursePackService {
 
   /**
    * 课程包详情：pack 信息 + 完成次数（原 courses 数组随"分课程"功能删除）。
+   * 播放路径：video 对象键转预签名 URL（外部 URL 透传）。
    */
   async findOneWithCompletion(coursePackId: string) {
     const pack = await this.findOne(coursePackId);
     const completionCount = await this.courseHistoryService.findCompletionCount(coursePackId);
 
-    return { ...pack, completionCount };
+    return {
+      ...pack,
+      video: await this.storage.presignVideoUrl(pack.video),
+      videoIsExternal: /^https?:\/\//i.test(pack.video ?? ""),
+      completionCount,
+    };
   }
 
   /**
@@ -70,7 +79,13 @@ export class CoursePackService {
 
     const statementIndex = await this.userCourseProgressService.findStatement(coursePackId);
 
-    return { ...pack, statements, statementIndex };
+    return {
+      ...pack,
+      video: await this.storage.presignVideoUrl(pack.video),
+      videoIsExternal: /^https?:\/\//i.test(pack.video ?? ""),
+      statements,
+      statementIndex,
+    };
   }
 
   /**
@@ -145,17 +160,48 @@ export class CoursePackService {
   }
 
   /**
-   * 删除课程包（级联删除其下句子及学习记录、进度）。
+   * 删除课程包（级联删除其下句子及学习记录、进度），并清理对象存储中的孤儿文件。
    */
   async delete(coursePackId: string) {
     this.ensureGameDataSdk();
 
     // 先走 API 层查询，保证不存在时返回 404 而不是 SDK 内部的 500
-    await this.findOne(coursePackId);
+    const pack = await this.findOne(coursePackId);
 
     await deleteCoursePack(coursePackId);
 
+    await this.cleanupVideoObjects(pack.video, coursePackId);
+
     return { deleted: true, coursePackId };
+  }
+
+  /**
+   * 视频对象键被最后一个引用的包删除时才删对象及对应 forge 产物；
+   * 清理失败不影响删除结果（数据库是事实来源），仅告警。
+   */
+  private async cleanupVideoObjects(video: string | null | undefined, coursePackId: string) {
+    const key = video?.trim();
+    if (!key || /^https?:\/\//i.test(key)) return;
+
+    try {
+      const stillReferenced = await this.db.query.coursePack.findFirst({
+        where: eq(coursePack.video, key),
+        columns: { id: true },
+      });
+      if (stillReferenced) return;
+
+      await this.storage.deleteObject(key);
+      // jobId/runId 即视频文件名去扩展名（forge.service buildRecord 与 course-forge importer 同规则）
+      const forgeId = key
+        .split("/")
+        .pop()!
+        .replace(/\.[^.]+$/, "");
+      await this.storage.deleteByPrefix(`forge/${forgeId}/`);
+    } catch (error) {
+      this.logger.warn(
+        `课程包 ${coursePackId} 的对象存储清理失败（${key}）：${(error as Error).message}`,
+      );
+    }
   }
 
   /**

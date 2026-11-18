@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync } from "node:fs";
-import { extname } from "node:path";
+import { rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { extname, join } from "node:path";
 
 import {
   BadRequestException,
@@ -17,17 +19,22 @@ import {
 import { FileInterceptor } from "@nestjs/platform-express";
 import { diskStorage } from "multer";
 
-import { COURSE_VIDEO_DIR } from "../forge/runner-client";
+import { StorageService } from "../storage/storage.service";
 import { CoursePackService } from "./course-pack.service";
 import { CreateCoursePackDto } from "./dto/create-course-pack.dto";
 
 /** 与 forge.controller / course-forge 的视频白名单保持一致 */
 const VIDEO_EXT_WHITELIST = new Set([".mp4", ".m4v", ".mkv", ".webm", ".mov", ".avi"]);
 const MAX_VIDEO_BYTES = 2 * 1024 * 1024 * 1024;
+/** multer 落盘只是中转，上传对象存储后即删 */
+const UPLOAD_TMP_DIR = join(tmpdir(), "earthworm-uploads");
 
 @Controller("course-pack")
 export class CoursePackController {
-  constructor(private readonly coursePackService: CoursePackService) {}
+  constructor(
+    private readonly coursePackService: CoursePackService,
+    private readonly storage: StorageService,
+  ) {}
 
   @Get()
   async findAll() {
@@ -40,18 +47,18 @@ export class CoursePackController {
   }
 
   /**
-   * 上传本地视频文件到课程视频静态目录（不跑 ASR），返回站内路径。
-   * 添加/修改课程表单用它把视频落到 /course-video，再回填到 video 字段。
+   * 上传本地视频文件到对象存储（不跑 ASR），返回对象键与预签名预览 URL。
+   * 添加/修改课程表单用对象键回填 video 字段（入库），URL 仅供即时预览。
    */
   @Post("video")
   @UseInterceptors(
     FileInterceptor("videoFile", {
       storage: diskStorage({
         destination: (_req, _file, cb) => {
-          if (!existsSync(COURSE_VIDEO_DIR)) {
-            mkdirSync(COURSE_VIDEO_DIR, { recursive: true });
+          if (!existsSync(UPLOAD_TMP_DIR)) {
+            mkdirSync(UPLOAD_TMP_DIR, { recursive: true });
           }
-          cb(null, COURSE_VIDEO_DIR);
+          cb(null, UPLOAD_TMP_DIR);
         },
         filename: (_req, file, cb) => {
           const ext = extname(file.originalname).toLowerCase();
@@ -69,11 +76,17 @@ export class CoursePackController {
       },
     }),
   )
-  uploadVideo(@UploadedFile() file: Express.Multer.File | undefined) {
+  async uploadVideo(@UploadedFile() file: Express.Multer.File | undefined) {
     if (!file) {
       throw new BadRequestException("缺少视频文件 videoFile");
     }
-    return { video: `/course-video/${file.filename}` };
+    const videoKey = `course-video/${file.filename}`;
+    try {
+      await this.storage.uploadFile(videoKey, file.path);
+    } finally {
+      await rm(file.path, { force: true }).catch(() => {});
+    }
+    return { video: videoKey, videoUrl: await this.storage.presignGet(videoKey) };
   }
 
   @Delete(":coursePackId")

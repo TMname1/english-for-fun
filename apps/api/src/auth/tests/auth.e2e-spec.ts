@@ -44,8 +44,9 @@ describe("auth e2e", () => {
     await request(app.getHttpServer()).post("/auth/login").send({ username: "" }).expect(400);
   });
 
-  it("blocks unauthenticated api, static audio and swagger requests", async () => {
+  it("blocks unauthenticated api and swagger requests (middleware covers any path)", async () => {
     await request(app.getHttpServer()).get("/course-pack").expect(401);
+    // 静态挂载已删除，但认证中间件在路由之前，任意路径未登录一律 401
     await request(app.getHttpServer()).get("/course-audio/whatever.mp3").expect(401);
     await request(app.getHttpServer()).get("/course-video/whatever.mp4").expect(401);
     await request(app.getHttpServer()).get("/swagger").expect(401);

@@ -1,7 +1,3 @@
-import { mkdir, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-
 import { INestApplication } from "@nestjs/common";
 import { Test, TestingModule } from "@nestjs/testing";
 import { createId } from "@paralleldrive/cuid2";
@@ -19,10 +15,6 @@ import { AppModule } from "../../app/app.module";
 import { appGlobalMiddleware } from "../../app/useGlobal";
 import { endDB } from "../../common/db";
 import { DB, DbType } from "../../global/providers/db.provider";
-
-// e2e 专用音频目录：在应用创建前设置，使 useGlobal 挂载该目录服务 /course-audio
-const testCourseAudioDir = join(tmpdir(), "earthworm-course-audio-e2e");
-process.env.COURSE_AUDIO_DIR = testCourseAudioDir;
 
 describe("course-pack e2e", () => {
   let app: INestApplication;
@@ -102,7 +94,7 @@ describe("course-pack e2e", () => {
       .expect(400);
   });
 
-  it("post: /course-pack persists video and statement timings", async () => {
+  it("post: /course-pack persists video key and statement timings; learning presigns the video", async () => {
     const words = [
       { word: "How", start: 1, end: 1.3 },
       { word: "are", start: 1.3, end: 1.6 },
@@ -112,7 +104,7 @@ describe("course-pack e2e", () => {
       .post("/course-pack")
       .send({
         title: "视频课程",
-        video: "/course-video/20261113-120000.mp4",
+        video: "course-video/20261113-120000.mp4",
         courses: {
           statements: [
             { english: "How are you", chinese: "你好吗", startTime: 1, endTime: 2, words },
@@ -125,7 +117,7 @@ describe("course-pack e2e", () => {
     const pack = await db.query.coursePack.findFirst({
       where: eq(coursePack.id, body.coursePackId),
     });
-    expect(pack?.video).toBe("/course-video/20261113-120000.mp4");
+    expect(pack?.video).toBe("course-video/20261113-120000.mp4");
 
     const statements = await db.query.statement.findMany({
       where: eq(statement.coursePackId, body.coursePackId),
@@ -137,20 +129,35 @@ describe("course-pack e2e", () => {
     expect(statements[1]!.startTime).toBeNull();
     expect(statements[1]!.words).toBeNull();
 
-    // learning 接口原样带出新字段
+    // learning 接口：对象键转预签名 URL（签名是本地计算，e2e 不需要真实 OSS），时间戳原样带出
     await agent
       .get(`/course-pack/${body.coursePackId}/learning`)
       .expect(200)
       .expect(({ body: learning }) => {
-        expect(learning.video).toBe("/course-video/20261113-120000.mp4");
+        expect(learning.video).toMatch(/^https?:\/\//);
+        expect(learning.video).toContain("course-video/20261113-120000.mp4");
+        expect(learning.video).toContain("X-Amz-Signature");
+        expect(learning.videoIsExternal).toBe(false);
         expect(learning.statements[0].startTime).toBe(1);
         expect(learning.statements[0].words).toEqual(words);
       });
   });
 
+  it("learning passes external video URLs through with videoIsExternal=true", async () => {
+    const { id } = await insertCoursePack(db, { video: "https://example.com/v.mp4" });
+
+    await agent
+      .get(`/course-pack/${id}/learning`)
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body.video).toBe("https://example.com/v.mp4");
+        expect(body.videoIsExternal).toBe(true);
+      });
+  });
+
   it("patch: /course-pack/:coursePackId keeps timings only for unchanged english", async () => {
     const words = [{ word: "old", start: 0, end: 0.5 }];
-    const { id: coursePackId } = await insertCoursePack(db, { video: "/course-video/v.mp4" });
+    const { id: coursePackId } = await insertCoursePack(db, { video: "course-video/v.mp4" });
     await insertStatement(db, coursePackId, 1, {
       english: "keep",
       startTime: 1,
@@ -192,27 +199,12 @@ describe("course-pack e2e", () => {
     const pack = await db.query.coursePack.findFirst({
       where: eq(coursePack.id, coursePackId),
     });
-    expect(pack?.video).toBe("/course-video/v.mp4");
+    expect(pack?.video).toBe("course-video/v.mp4");
   });
 
-  it("get: /course-audio/:file serves stored audio clips", async () => {
-    const clipBytes = Buffer.from("fake-mp3-bytes-for-e2e");
-    const fileName = "e2e-clip.mp3";
-    try {
-      await agent.get(`/course-audio/${fileName}`).expect(404);
-
-      await mkdir(testCourseAudioDir, { recursive: true });
-      await writeFile(join(testCourseAudioDir, fileName), clipBytes);
-
-      await agent
-        .get(`/course-audio/${fileName}`)
-        .expect(200)
-        .expect((res) => {
-          expect(res.body).toEqual(clipBytes);
-        });
-    } finally {
-      await rm(testCourseAudioDir, { recursive: true, force: true });
-    }
+  it("static media routes are removed: /course-audio and /course-video return 404 when authed", async () => {
+    await agent.get("/course-audio/whatever.mp3").expect(404);
+    await agent.get("/course-video/whatever.mp4").expect(404);
   });
 
   it("delete: /course-pack/:coursePackId removes pack with its statements and progress", async () => {
@@ -251,7 +243,7 @@ describe("course-pack e2e", () => {
       title: "待编辑",
       description: "原描述",
       cover: "cover.png",
-      video: "/course-video/e2e.mp4",
+      video: "course-video/e2e.mp4",
     });
     await insertStatement(db, coursePackId, 2, {
       english: "two",
@@ -270,7 +262,7 @@ describe("course-pack e2e", () => {
           title: "待编辑",
           description: "原描述",
           cover: "cover.png",
-          video: "/course-video/e2e.mp4",
+          video: "course-video/e2e.mp4",
           statements: [
             { english: "one", chinese: "一", phonetic: "/1/" },
             { english: "two", chinese: "二", phonetic: "/2/", startTime: 3, endTime: 4 },

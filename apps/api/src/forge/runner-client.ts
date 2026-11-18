@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 
@@ -23,9 +24,8 @@ function findRepoRoot(): string {
 
 export const REPO_ROOT = findRepoRoot();
 export const FORGE_PKG_DIR = join(REPO_ROOT, "packages", "course-forge");
-export const FORGE_OUTPUT_ROOT = join(FORGE_PKG_DIR, "output");
-export const COURSE_VIDEO_DIR =
-  process.env.COURSE_VIDEO_DIR || join(REPO_ROOT, "apps", "api", "storage", "course-video");
+/** 流水线本地临时工作区（ffmpeg/ASR 必须操作本地文件）；持久产物在对象存储 forge/<jobId>/ */
+export const FORGE_OUTPUT_ROOT = join(tmpdir(), "earthworm-forge");
 
 export interface ForgeRunnerParams {
   /** transcribe：跑「提取音轨 + ASR 转写」后暂停；structure：读 outDir 下编辑过的 transcript 续跑 */
