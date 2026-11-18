@@ -1,6 +1,6 @@
 # 单用户登录说明（README.login.md）
 
-本项目只允许**一个用户**登录使用：没有注册功能，用户名和密码写在后端环境变量里。未登录时，前端所有页面都会跳转到登录页，后端所有接口（包括课程音频 `/course-audio`、课程视频 `/course-video`、TTS、Swagger）一律返回 401。
+本项目只允许**一个用户**登录使用：没有注册功能，用户名和密码写在后端环境变量里。未登录时，前端所有页面都会跳转到登录页，后端所有接口（包括 TTS、Swagger）一律返回 401。课程音视频存对象存储，前端拿**预签名 URL 直连**播放——URL 有效期内持链接即可访问，不再经过登录校验。
 
 ## 快速开始
 
@@ -28,7 +28,7 @@
 
 - 登录接口 `POST /auth/login` 校验 env 中的用户名密码，成功后发放一个 **httpOnly Cookie**（`auth_token`），有效期 **7 天**，页面脚本读不到它。
 - Cookie 内容是用 `SECRET` 做 HMAC-SHA256 签名的令牌，后端每次请求都验签 + 验过期，**不依赖数据库**，也没有 users 表。
-- 认证在 Express 中间件层全局生效（`apps/api/src/app/useGlobal.ts`），因此 Nest 路由、静态音视频、Swagger 全部被保护；唯一放行的是 `POST /auth/login` 和 CORS 预检请求。
+- 认证在 Express 中间件层全局生效（`apps/api/src/app/useGlobal.ts`），因此 Nest 路由、Swagger 全部被保护；唯一放行的是 `POST /auth/login` 和 CORS 预检请求。对象存储预签名 URL 直连不经过 API，不受此保护。
 - 前端全局路由中间件（`apps/client/middleware/auth.global.ts`）在每次进入页面时检查登录态；任何 API 返回 401 也会自动跳回 `/login`。
 - 相关接口：`POST /auth/login`（登录）、`POST /auth/logout`（退出）、`GET /auth/me`（当前用户）。
 
@@ -71,7 +71,7 @@
 | 位置                                    | 作用                                                          |
 | --------------------------------------- | ------------------------------------------------------------- |
 | `apps/api/src/auth/`                    | 登录/退出/me 接口、令牌签发与校验、全局认证中间件             |
-| `apps/api/src/app/useGlobal.ts`         | 注册全局认证中间件（先于静态资源挂载）                        |
+| `apps/api/src/app/useGlobal.ts`         | 注册全局认证中间件                                            |
 | `apps/api/src/main.ts`                  | CORS `credentials: true`                                      |
 | `apps/client/pages/login.vue`           | 登录页（独立布局，无导航栏）                                  |
 | `apps/client/middleware/auth.global.ts` | 前端全局路由守卫                                              |
