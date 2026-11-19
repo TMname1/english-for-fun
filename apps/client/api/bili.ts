@@ -57,9 +57,16 @@ export interface BiliDownloadView {
   error?: string;
 }
 
+// 前端超时略长于后端 API 超时（15s），确保后端的"解析超时"错误能先返回展示
+const BILI_FETCH_TIMEOUT_MS = 20_000;
+
 function biliFetch(): $Fetch {
   const config = useRuntimeConfig();
-  return ofetch.create({ baseURL: config.public.apiBase as string, credentials: "include" });
+  return ofetch.create({
+    baseURL: config.public.apiBase as string,
+    credentials: "include",
+    timeout: BILI_FETCH_TIMEOUT_MS,
+  });
 }
 
 export async function getBiliLoginStatus(): Promise<BiliLoginStatus> {
