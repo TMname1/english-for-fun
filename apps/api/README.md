@@ -95,7 +95,7 @@ pnpm dev:serve      # 启动后端（watch 模式，自动先构建 schema / sto
 - `tts/`：TTS mp3 缓存
 - `forge/<jobId>/`：流水线 JSON 产物（meta / transcript / transcript.edited / clips / alignment / course）
 
-ffmpeg/ASR 必需的临时文件在 `os.tmpdir()/earthworm-*` 下，阶段结束即清理；B 站 cookies.json 留本地。
+ffmpeg/ASR 必需的临时文件在 `os.tmpdir()/earthworm-*` 下，阶段结束即清理；B 站扫码登录的 cookie 持久化在数据库 `bili_cookie` 表（不再写本地文件）。
 数据库 `course_packs.video` 存对象键（或外部 URL），播放接口按需转预签名 URL。
 
 清理策略：

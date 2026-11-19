@@ -19,6 +19,7 @@ const REQUIRED_TABLES = [
   "mastered_elements",
   "user_course_progress",
   "user_learning_activities",
+  "bili_cookie",
 ];
 
 /**

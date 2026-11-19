@@ -3,13 +3,17 @@ import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { BadRequestException, Injectable, Logger, NotFoundException } from "@nestjs/common";
+import { BadRequestException, Inject, Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { toDataURL } from "qrcode";
 
+import type { DbType } from "../global/providers/db.provider";
 import type { BiliInfo, BiliLoginStatus, BiliPollResult } from "./bilidown-bridge";
+import type { BilidownCore } from "./bilidown-bridge";
 import type { DownloadBiliDto } from "./dto/download-bili.dto";
 import { ForgeService } from "../forge/forge.service";
+import { DB } from "../global/providers/db.provider";
 import { StorageService } from "../storage/storage.service";
+import { createDbCookieStore } from "./bili-cookie.store";
 import { getBilidownCore } from "./bilidown-bridge";
 
 type DownloadStatus = "running" | "done" | "failed" | "cancelled";
@@ -57,18 +61,31 @@ export class BiliService {
   >();
 
   constructor(
+    @Inject(DB) private readonly db: DbType,
     private readonly forgeService: ForgeService,
     private readonly storage: StorageService,
   ) {}
 
+  /** 内核为单例；首次取用时把数据库 cookie store 注入进去，之后所有读写走 bili_cookie 表。 */
+  private corePromise: Promise<BilidownCore> | null = null;
+  private core(): Promise<BilidownCore> {
+    if (!this.corePromise) {
+      this.corePromise = getBilidownCore().then((c) => {
+        c.configureCookieStore(createDbCookieStore(this.db));
+        return c;
+      });
+    }
+    return this.corePromise;
+  }
+
   async loginStatus(): Promise<BiliLoginStatus> {
-    const core = await getBilidownCore();
+    const core = await this.core();
     return core.getLoginStatus();
   }
 
   /** 生成登录二维码：返回可直接放进 <img> 的 data URL 与轮询 key */
   async loginStart(): Promise<{ key: string; qrDataUrl: string }> {
-    const core = await getBilidownCore();
+    const core = await this.core();
     const { url, qrcodeKey, jar } = await core.createLoginQrcode();
     this.pendingLogins.set(qrcodeKey, { jar, createdAt: Date.now() });
     const qrDataUrl = await toDataURL(url, { width: 240, margin: 1 });
@@ -81,7 +98,7 @@ export class BiliService {
     uname?: string;
     vipStatus?: boolean;
   }> {
-    const core = await getBilidownCore();
+    const core = await this.core();
     const session = this.pendingLogins.get(key);
     if (!session) throw new NotFoundException("登录会话已失效，请重新获取二维码");
     const r: BiliPollResult = await core.pollLogin(key, session.jar);
@@ -98,7 +115,7 @@ export class BiliService {
 
   async info(url: string): Promise<BiliInfo> {
     if (!url?.trim()) throw new BadRequestException("请输入 B 站视频链接或 BV 号");
-    const core = await getBilidownCore();
+    const core = await this.core();
     return core.getInfo(url);
   }
 
@@ -144,7 +161,7 @@ export class BiliService {
     const videoKey = `course-video/${fileName}`;
     let uploaded = false;
     try {
-      const core = await getBilidownCore();
+      const core = await this.core();
       await core.download({
         input: dto.url,
         p: dto.p,

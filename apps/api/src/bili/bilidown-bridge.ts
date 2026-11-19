@@ -66,7 +66,14 @@ export interface BiliDownloadOptions {
   onLog?: (message: string, level?: string) => void;
 }
 
+/** 内核可注入的异步 cookie 存储：服务端用数据库实现并加载入。 */
+export interface CookieStore {
+  load(): Promise<Record<string, string>>;
+  save(jar: Record<string, string>): Promise<void>;
+}
+
 export interface BilidownCore {
+  configureCookieStore(store: CookieStore): void;
   getLoginStatus(): Promise<BiliLoginStatus>;
   createLoginQrcode(): Promise<BiliQrcode>;
   pollLogin(qrcodeKey: string, jar: Record<string, string>): Promise<BiliPollResult>;
