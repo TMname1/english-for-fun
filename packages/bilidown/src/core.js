@@ -17,7 +17,27 @@ import { generateQrcode, pollQrcode } from "./api/login.js";
 import { download as downloadStream } from "./lib/download.js";
 import { mux, toMp3 } from "./lib/ffmpeg.js";
 import { biliHeaders } from "./lib/http.js";
-import { cookieString, loadCookies, saveCookies } from "./lib/storage.js";
+import { cookieString, parseCookieString } from "./lib/storage.js";
+
+/**
+ * cookie 存储是可注入的异步对象：{ load(): Promise<jar>, save(jar): Promise<void> }。
+ * 服务端通过 configureCookieStore 注入数据库版；CLI 默认用环境变量 BILI_COOKIE 且不落盘，
+ * 这样 bilidown 自身不再依赖任何本地文件存储。
+ */
+const defaultCookieStore = () => ({
+  async load() {
+    return parseCookieString(process.env.BILI_COOKIE || "");
+  },
+  async save() {
+    // 默认不持久化：请用 Web/API 登录写库，或设置 BILI_COOKIE 环境变量供 CLI 下载携带。
+  },
+});
+
+let cookieStore = defaultCookieStore();
+
+export function configureCookieStore(store) {
+  cookieStore = store;
+}
 
 export const QN_ALIAS = {
   360: 16,
@@ -47,7 +67,7 @@ export function sanitize(s) {
 
 /** 读取已存 cookie 的登录态：未登录时仅返回标记，不请求 nav */
 export async function getLoginStatus() {
-  const cookieStr = cookieString(loadCookies());
+  const cookieStr = cookieString(await cookieStore.load());
   if (!cookieStr) return { isLogin: false, hasCookie: false };
   const d = (await nav(cookieStr)).data || {};
   return {
@@ -61,7 +81,7 @@ export async function getLoginStatus() {
 /** 生成登录二维码：返回登录页 URL（前端/终端渲染）+ 轮询 key + 本次会话初始 cookie jar */
 export async function createLoginQrcode() {
   const { url, qrcodeKey } = await generateQrcode();
-  return { url, qrcodeKey, jar: loadCookies() };
+  return { url, qrcodeKey, jar: await cookieStore.load() };
 }
 
 /**
@@ -71,7 +91,7 @@ export async function createLoginQrcode() {
 export async function pollLogin(qrcodeKey, jar) {
   const r = await pollQrcode(qrcodeKey, jar);
   if (r.status === "success") {
-    saveCookies(jar);
+    await cookieStore.save(jar);
     const d = (await nav(cookieString(jar))).data || {};
     return {
       status: "success",
@@ -113,7 +133,7 @@ export async function download(opts) {
   const tmpDir = path.join(outDir, ".tmp");
   fs.mkdirSync(tmpDir, { recursive: true });
 
-  const cookieStr = opts.noCookie ? "" : cookieString(loadCookies());
+  const cookieStr = opts.noCookie ? "" : cookieString(await cookieStore.load());
 
   stage("parse");
   const info = await view(bvid);

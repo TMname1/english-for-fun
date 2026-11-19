@@ -1,13 +1,10 @@
 #!/usr/bin/env node
-// BiliDown CLI 终端壳：渲染登录二维码、把 core.js 的回调打到 stdout。
-// 实际下载/登录链路在 src/core.js（服务端 bili 模块共用同一份逻辑）。
-import QRCode from "qrcode-terminal";
-
-import { createLoginQrcode, download, getInfo, getLoginStatus, pollLogin } from "./core.js";
-import { cookieFilePath } from "./lib/storage.js";
+// BiliDown CLI 终端壳：把 core.js 的回调打到 stdout。
+// 实际下载链路在 src/core.js（服务端 bili 模块共用同一份逻辑）。
+// 登录已改为服务端扫码入库，CLI 不再持有 cookie：下载走 --no-cookie 或环境变量 BILI_COOKIE。
+import { download, getInfo, getLoginStatus } from "./core.js";
 
 const HELP = `用法:
-  bilidown login                             扫码登录并保存 cookie
   bilidown info <BV号|视频链接>               只看视频信息与分 P 列表
   bilidown <BV号|视频链接> [选项]              解析并下载
 
@@ -20,8 +17,11 @@ const HELP = `用法:
   --keep         保留下载的音视频中间文件
   --no-cookie    不携带 cookie 下载(仅低画质)
 
+环境变量:
+  BILI_COOKIE    下载携带的 cookie 串(如 "SESSDATA=...; bili_jct=...")；
+                 登录请用 Web 端扫码，cookie 会存到服务端数据库。
+
 示例:
-  bilidown login
   bilidown BV1xx411c7mD --p 2 --qn 1080
   bilidown https://www.bilibili.com/video/BV1xx411c7mD --audio
 `;
@@ -30,26 +30,6 @@ function fmtBytes(n) {
   if (!n) return "0B";
   const mb = n / 1048576;
   return mb >= 1 ? `${mb.toFixed(1)}MB` : `${(n / 1024).toFixed(0)}KB`;
-}
-
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-async function runLogin() {
-  const { url, qrcodeKey, jar } = await createLoginQrcode();
-  console.log("请用哔哩哔哩 App 扫描下方二维码登录：");
-  QRCode.generate(url, { small: true });
-  console.log("\n等待扫码确认...");
-  for (;;) {
-    await sleep(2000);
-    const r = await pollLogin(qrcodeKey, jar);
-    if (r.status === "success") {
-      console.log(`\n登录成功，cookie 已保存到 ${cookieFilePath}`);
-      console.log(`当前账号: ${r.uname}${r.vipStatus ? " [大会员]" : ""}`);
-      return;
-    }
-    if (r.status === "86038") throw new Error("二维码已过期，请重新运行 login");
-    if (r.status === "86090") process.stdout.write("  已扫码，请在手机上确认...\r");
-  }
 }
 
 async function runInfo(input) {
@@ -116,7 +96,12 @@ async function main() {
     console.log(HELP);
     return;
   }
-  if (rest[0] === "login") return runLogin();
+  if (rest[0] === "login") {
+    console.error(
+      "登录已改为 Web 端扫码（cookie 存服务端数据库）。CLI 下载请用 --no-cookie 或设置 BILI_COOKIE。",
+    );
+    process.exit(1);
+  }
   if (rest[0] === "info") return runInfo(rest[1]);
   return runDownload(rest[0], opts);
 }
