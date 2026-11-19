@@ -1,22 +1,22 @@
-// Cookie 持久化：登录成功后把 B 站的 SESSDATA 等 cookie 存到 cookies.json。
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const COOKIE_FILE = path.resolve(__dirname, "..", "..", "cookies.json");
-
-export function loadCookies() {
-  try {
-    return JSON.parse(fs.readFileSync(COOKIE_FILE, "utf8"));
-  } catch {
-    return {};
-  }
+// Cookie 工具：纯函数，只负责 jar（name→value 对象）与 Cookie 头字符串之间的转换。
+// 持久化已上移到调用方注入的异步 cookieStore（服务端用数据库，CLI 默认读 BILI_COOKIE 环境变量）。
+export function cookieString(jar = {}) {
+  return Object.entries(jar)
+    .map(([k, v]) => `${k}=${v}`)
+    .join("; ");
 }
 
-export function saveCookies(obj) {
-  fs.writeFileSync(COOKIE_FILE, JSON.stringify(obj, null, 2), "utf8");
-  return COOKIE_FILE;
+// 把 "k=v; k2=v2" 形式的 Cookie 头解析回 jar 对象。
+export function parseCookieString(str = "") {
+  const jar = {};
+  for (const part of String(str).split(";")) {
+    const eq = part.indexOf("=");
+    if (eq < 0) continue;
+    const name = part.slice(0, eq).trim();
+    const value = part.slice(eq + 1).trim();
+    if (name && value) jar[name] = value;
+  }
+  return jar;
 }
 
 // 从 Set-Cookie 头数组里解析出 name=value 合并进现有 jar。
@@ -32,11 +32,3 @@ export function mergeSetCookies(jar, setCookieHeaders) {
   }
   return jar;
 }
-
-export function cookieString(jar = loadCookies()) {
-  return Object.entries(jar)
-    .map(([k, v]) => `${k}=${v}`)
-    .join("; ");
-}
-
-export const cookieFilePath = COOKIE_FILE;

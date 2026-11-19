@@ -19,8 +19,18 @@ export function setCookies(res) {
   return raw ? [raw] : [];
 }
 
-export async function fetchJson(url, { headers = {}, method = "GET" } = {}) {
-  const res = await fetch(url, { method, headers: biliHeaders(headers) });
+// API 请求默认超时（ms），防止 B 站服务不可达时无限期挂起
+export const DEFAULT_TIMEOUT_MS = 15_000;
+
+export async function fetchJson(
+  url,
+  { headers = {}, method = "GET", timeout = DEFAULT_TIMEOUT_MS } = {},
+) {
+  const res = await fetch(url, {
+    method,
+    headers: biliHeaders(headers),
+    signal: AbortSignal.timeout(timeout),
+  });
   if (!res.ok) throw new Error(`HTTP ${res.status} @ ${url}`);
   const json = await res.json();
   if (json.code !== undefined && json.code !== 0 && json.code !== 200) {
