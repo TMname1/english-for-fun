@@ -3,9 +3,14 @@ import { biliHeaders, setCookies } from "../lib/http.js";
 import { mergeSetCookies } from "../lib/storage.js";
 
 const PASSPORT = "https://passport.bilibili.com/x/passport-login/web/qrcode";
+// 登录接口用较短超时：轮询本身有会话 TTL（5 分钟）兜底，单次挂起 10 秒足够判定不可达
+const LOGIN_TIMEOUT_MS = 10_000;
 
 export async function generateQrcode() {
-  const res = await fetch(`${PASSPORT}/generate`, { headers: biliHeaders() });
+  const res = await fetch(`${PASSPORT}/generate`, {
+    headers: biliHeaders(),
+    signal: AbortSignal.timeout(LOGIN_TIMEOUT_MS),
+  });
   const json = await res.json();
   if (json.code !== 0) throw new Error(`生成二维码失败: ${json.message}`);
   return { url: json.data.url, qrcodeKey: json.data.qrcode_key };
@@ -15,6 +20,7 @@ export async function generateQrcode() {
 export async function pollQrcode(qrcodeKey, jar) {
   const res = await fetch(`${PASSPORT}/poll?qrcode_key=${qrcodeKey}`, {
     headers: biliHeaders(),
+    signal: AbortSignal.timeout(LOGIN_TIMEOUT_MS),
   });
   const json = await res.json();
   const data = json.data || {};

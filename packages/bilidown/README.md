@@ -60,10 +60,10 @@ node src/index.js BV1xx411c7mD --no-cookie --ffmpeg "C:/path/ffmpeg.exe" --keep
 
 ### 命令
 
-| 命令                 | 说明                                                                          |
-| -------------------- | ----------------------------------------------------------------------------- |
-| `login`              | 终端出二维码，用 B 站 App 扫码登录；成功后 cookie 存到项目根 `cookies.json`。 |
-| `<BV号 \| 视频链接>` | 解析并下载视频；也可直接传完整 URL，会自动提取其中的 `BV…` 号。               |
+| 命令                 | 说明                                                                             |
+| -------------------- | -------------------------------------------------------------------------------- |
+| `login`              | 已废弃：登录改由 Web 端扫码并写入服务端 `bili_cookie` 表；运行会给出提示并退出。 |
+| `<BV号 \| 视频链接>` | 解析并下载视频；也可直接传完整 URL，会自动提取其中的 `BV…` 号。                  |
 
 ### 下载选项
 
@@ -78,7 +78,7 @@ node src/index.js BV1xx411c7mD --no-cookie --ffmpeg "C:/path/ffmpeg.exe" --keep
 | `--no-cookie`   | 开关（无值）        | 关                                                      | 不携带已保存的 cookie 下载，仅能拿到低画质（约 720 及以下）。                                                                             |
 | `-h` / `--help` | 开关（无值）        | —                                                       | 打印内置帮助文本。                                                                                                                        |
 
-> 无参数运行（或仅 `-h/--help`）会输出 `login` 与下载两组用法说明。
+> 无参数运行（或仅 `-h/--help`）会输出用法说明。下载默认不携带 cookie，可用环境变量 `BILI_COOKIE` 注入或加 `--no-cookie`。
 
 ### `--qn` 清晰度对照表
 
@@ -116,12 +116,12 @@ src/
   lib/
     http.js         UA/Referer 注入（破防盗链）
     wbi.js          WBI 签名（img_key+sub_key → w_rid）
-    storage.js      cookies.json 读写
+    storage.js      cookie 串与 jar 的纯转换（持久化由调用方注入）
     download.js     流式下载 + 断点续传
     ffmpeg.js       混流 mp4 / 转 mp3
 ```
 
-登录成功后 cookie 保存在项目根 `cookies.json`。
+B 站登录已改为服务端扫码：cookie 持久化到数据库 `bili_cookie` 表。CLI 下载如需带 cookie，设置环境变量 `BILI_COOKIE`（形如 `SESSDATA=...; bili_jct=...`）。
 
 ## 合规提示
 

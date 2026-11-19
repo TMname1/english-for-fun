@@ -1,5 +1,5 @@
 // B 站核心接口：视频信息 + 取流。复刻渲染层 app.js 里的 view / playurl 调用。
-import { biliHeaders, fetchJson } from "../lib/http.js";
+import { biliHeaders, DEFAULT_TIMEOUT_MS, fetchJson } from "../lib/http.js";
 import { extractWbiKeys, signWbi } from "../lib/wbi.js";
 
 const API = "https://api.bilibili.com";
@@ -9,6 +9,7 @@ const API = "https://api.bilibili.com";
 export async function nav(cookieStr) {
   const res = await fetch(`${API}/x/web-interface/nav`, {
     headers: biliHeaders(cookieStr ? { Cookie: cookieStr } : {}),
+    signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
   });
   return res.json();
 }
