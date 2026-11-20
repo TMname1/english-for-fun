@@ -29,7 +29,7 @@ export interface StorageConfig {
 
 /**
  * 从环境变量解析存储配置。dev 默认值面向本地 MinIO；
- * prod 部署时按 README.devToProd.md 覆盖为阿里云 OSS 的 S3 兼容端点。
+ * prod 部署时按 README.prod.env.md 覆盖为阿里云 OSS 的 S3 兼容端点。
  */
 export function storageConfigFromEnv(env: NodeJS.ProcessEnv = process.env): StorageConfig {
   const expires = Number(env.S3_PRESIGN_EXPIRES_SECONDS);
