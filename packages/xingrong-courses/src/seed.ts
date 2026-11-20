@@ -7,7 +7,15 @@ import postgres from "postgres";
 
 import { coursePack, schemas, statement as statementSchema } from "@earthworm/schema";
 
-dotenv.config({ path: path.resolve(__dirname, "../../../apps/api/.env") });
+// 与 apps/api 的 ConfigModule 一致：按 NODE_ENV 选择 env 文件
+const envFiles: Record<string, string> = { prod: ".env.prod", test: ".env.test" };
+dotenv.config({
+  path: path.resolve(
+    __dirname,
+    "../../../apps/api",
+    envFiles[process.env.NODE_ENV ?? ""] ?? ".env",
+  ),
+});
 const db = drizzle(postgres(process.env.DATABASE_URL ?? ""), { schema: schemas });
 
 type Statement = typeof statementSchema.$inferInsert;
