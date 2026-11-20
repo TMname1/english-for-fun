@@ -1,8 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { db } from "@earthworm/db";
-import { coursePack, statement as statementSchema } from "@earthworm/schema";
+import dotenv from "dotenv";
+import { drizzle } from "drizzle-orm/postgres-js";
+import postgres from "postgres";
+
+import { coursePack, schemas, statement as statementSchema } from "@earthworm/schema";
+
+dotenv.config({ path: path.resolve(__dirname, "../../../apps/api/.env") });
+const db = drizzle(postgres(process.env.DATABASE_URL ?? ""), { schema: schemas });
 
 type Statement = typeof statementSchema.$inferInsert;
 
