@@ -22,7 +22,7 @@ OSS 原生兼容 S3 协议，代码统一走 `@earthworm/storage`（AWS SDK）�
 
 ### 对象存储：阿里云 OSS（`S3_*`）
 
-`apps/api/.env.prod` 与 `packages/course-forge/.env`（若手动跑 CLI）两处都要配，且保持一致。
+只需配 `apps/api/.env.prod` 一处（forge 子进程与 CLI 共用该文件）。
 **生产没有默认值兜底可用，`S3_*` 必须显式填写**（代码默认值面向 dev MinIO）：
 
 | 变量                         | 生产取值                               | 说明                                                                                      |
@@ -101,10 +101,10 @@ S3_PRESIGN_EXPIRES_SECONDS="21600"
 > （`localhost:*` 与 `earthworm.cuixueshe.com(:81)`）。**换域名需同步改这里的正则**。
 > 媒体走预签名 URL 直连 OSS，不受 API CORS 限制。
 
-## 三、Course Forge（`packages/course-forge/.env`，仅手动跑 CLI 时）
+## 三、Course Forge（`apps/api/.env.prod` 的 FORGE\_\* 段）
 
 后端发起的流水线子进程自动继承 API 进程的环境变量，**无需单独配置**。
-只有在生产服务器上手动跑 CLI（如 `forge:import`）时才需要本文件：
+在生产服务器上手动跑 CLI（如 `forge:import`）时读的也是同一文件：
 
 | 变量                          | 生产取值                                | 说明                          |
 | ----------------------------- | --------------------------------------- | ----------------------------- |

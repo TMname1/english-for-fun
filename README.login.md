@@ -55,7 +55,7 @@
 `pnpm forge:import` 通过 HTTP 调 API 导入课程，现在也需要登录：
 
 - **由后端「导入视频」页面发起的流水线**：子进程自动继承后端的 `AUTH_USERNAME/AUTH_PASSWORD`，无需额外配置。
-- **手动跑 CLI**：在 `packages/course-forge/.env`（或进程环境变量）里配置与 `apps/api/.env` 一致的 `AUTH_USERNAME/AUTH_PASSWORD`，导入前会自动登录换取 Cookie。
+- **手动跑 CLI**：在 `apps/api/.env`（或进程环境变量）里配置 `AUTH_USERNAME/AUTH_PASSWORD`，导入前会自动登录换取 Cookie。
 
 `pnpm db:upload`（xingrong-courses）直接写数据库，不走 HTTP，不受登录影响。
 

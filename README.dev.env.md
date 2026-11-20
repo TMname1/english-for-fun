@@ -7,14 +7,14 @@
 
 ## 文件总览
 
-| 文件                         | 所属包                        | 读取方式                                                                                             | 何时需要           |
-| ---------------------------- | ----------------------------- | ---------------------------------------------------------------------------------------------------- | ------------------ |
-| `apps/api/.env`              | 后端 API                      | NestJS `ConfigModule`（默认 `.env`；`NODE_ENV=test` 读 `.env.test`，`NODE_ENV=prod` 读 `.env.prod`） | ✅ 必须            |
-| `apps/client/.env`           | 前端 Nuxt                     | `process.env` → `runtimeConfig`                                                                      | ✅ 必须            |
-| `apps/api/.env.test`         | 后端 API（测试）              | `NODE_ENV=test` 时读取                                                                               | 跑 e2e / vitest 时 |
-| `packages/course-forge/.env` | Course Forge 视频转课程流水线 | 自定义加载（已存在的进程环境变量优先于本文件）                                                       | 用视频转课程功能时 |
-| 根目录 `.env`                | docker compose                | compose 变量替换                                                                                     | 想改 MinIO 账号时  |
-| `packages/db`                | 数据库                        | 复用 `DATABASE_URL`（drizzle 迁移、`db.ts`）                                                         | 无需单独配置       |
+| 文件                            | 所属包                        | 读取方式                                                                                             | 何时需要           |
+| ------------------------------- | ----------------------------- | ---------------------------------------------------------------------------------------------------- | ------------------ |
+| `apps/api/.env`                 | 后端 API                      | NestJS `ConfigModule`（默认 `.env`；`NODE_ENV=test` 读 `.env.test`，`NODE_ENV=prod` 读 `.env.prod`） | ✅ 必须            |
+| `apps/client/.env`              | 前端 Nuxt                     | `process.env` → `runtimeConfig`                                                                      | ✅ 必须            |
+| `apps/api/.env.test`            | 后端 API（测试）              | `NODE_ENV=test` 时读取                                                                               | 跑 e2e / vitest 时 |
+| `apps/api/.env`（FORGE\_\* 段） | Course Forge 视频转课程流水线 | 自定义加载（已存在的进程环境变量优先于本文件）                                                       | 用视频转课程功能时 |
+| 根目录 `.env`                   | docker compose                | compose 变量替换                                                                                     | 想改 MinIO 账号时  |
+| 数据库（drizzle）               | 数据库                        | 复用 `DATABASE_URL`（`apps/api/drizzle.config*.ts`、`src/db/migrate.ts`）                            | 无需单独配置       |
 
 ## 〇、先启动依赖服务
 
@@ -107,7 +107,7 @@ API_BASE="http://localhost:3001"
 > API 的 CORS 白名单写死在 `apps/api/src/main.ts`（`localhost:*` 与 `earthworm.cuixueshe.com(:81)`），
 > dev 的 `localhost` 已覆盖，无需改动。
 
-## 三、Course Forge 流水线（`packages/course-forge/.env`，仅用视频转课程功能时）
+## 三、Course Forge 流水线（`apps/api/.env` 的 FORGE\_\* 段，仅用视频转课程功能时）
 
 用于“视频 → ASR 转写 → LLM 组装课程 → 导入后端”。加载规则：**已在进程中设置的同名环境变量优先于此文件**，本文件只填充未设置的项。
 后端发起的流水线子进程自动继承 API 进程的环境变量；只有**手动跑 CLI** 时才需要本文件。
@@ -150,7 +150,7 @@ API_BASE="http://localhost:3001"
 
 后端通过 `runner-client` 以子进程方式跑 `pipeline-runner`，会传入：`FORGE_PHASE`（`transcribe`\|`structure`）、`FORGE_OUT_DIR`、`FORGE_MEDIA_PATH`、`FORGE_TITLE`、`FORGE_TYPE`（`dialogue`\|`music`）、`FORGE_CLIPS`（`[{start,end}]` JSON）、`FORGE_LANGUAGE`、`FORGE_DESC`。仅在手动跑 CLI/子进程时才需要了解。
 
-### 最小可用配置（复制 `packages/course-forge/.env.example` 后填 Key）
+### 最小可用配置（在 `apps/api/.env` 的 FORGE\_\* 段填 Key，参考 `.env.example`）
 
 ```
 FORGE_ASR_API_KEY=sk-你的百炼Key
@@ -182,4 +182,4 @@ B 站登录已改为 **Web 端扫码、cookie 存服务端数据库**（`bili_co
 
 - 真实 Key（`FORGE_*_API_KEY`、`S3_SECRET_ACCESS_KEY`、`BILI_COOKIE`）**只放本地 `.env` / 进程环境，绝不提交**（已 gitignore）。
 - 前端 `apps/client/.env` 的值会打包进浏览器产物，**禁止放任何密钥**，只放 `API_BASE` 等公开配置。
-- 若本地 `packages/course-forge/.env` 里填入的是真实百炼 Key，请注意该 Key 的额度与轮换；如机器共享或曾误传，建议尽快在服务商控制台吊销重发。
+- 若本地 `apps/api/.env` 里填入的是真实百炼 Key，请注意该 Key 的额度与轮换；如机器共享或曾误传，建议尽快在服务商控制台吊销重发。
