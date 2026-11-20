@@ -23,6 +23,7 @@
     "docker:down": "docker-compose down",
     "build:server": "pnpm schema:build && pnpm storage:build && pnpm -F @earthworm/game-data-sdk build && pnpm -F api build",
     "build:client": "pnpm -F client generate",
+    "deploy:client": "pnpm build:client && wrangler pages deploy apps/client/.output/public --project-name english-for-fun",
     "prod:serve": "pnpm -F api start:prod:pm",
     "format": "prettier --write --cache .",
     "format-check": "prettier --check --cache .",
@@ -58,10 +59,16 @@
     "simple-git-hooks": "2.11.1",
     "tsup": "^8.0.1",
     "tsx": "^4.7.0",
-    "typescript": "^5.3.3"
+    "typescript": "^5.3.3",
+    "wrangler": "^4.165.0"
   },
   "dependencies": {
     "@t3-oss/env-core": "^0.7.1",
     "zod": "^3.22.4"
+  },
+  "pnpm": {
+    "patchedDependencies": {
+      "nitropack@2.9.6": "patches/nitropack@2.9.6.patch"
+    }
   }
 }
