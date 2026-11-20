@@ -15,6 +15,7 @@ async function bootstrap() {
       /^http:\/\/localhost(:\d+)?$/,
       /^http:\/\/earthworm\.cuixueshe\.com(:81)?$/,
       /^https:\/\/bananablog\.cc$/,
+      /^https:\/\/([\w-]+?\.)?english-for-fun-d7h\.pages\.dev$/,
     ],
     credentials: true,
   });

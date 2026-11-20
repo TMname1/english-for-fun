@@ -1,6 +1,6 @@
 # 构建（仓库根执行）：
 #   docker build --platform linux/amd64 -f apps/api/Dockerfile -t earthworm-api:local .
-# 部署说明见 apps/api/DEPLOY.md
+# 部署说明见根目录 README.backend.md
 
 ########## builder：在 Linux 环境安装依赖并编译 ##########
 FROM node:20-bookworm-slim AS builder
