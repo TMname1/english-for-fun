@@ -1,0 +1,51 @@
+# 服务器端编排：pg + api + cloudflared
+# 用法见 apps/api/DEPLOY.md；本目录需有 .env（compose 插值）与 .env.prod（api 运行时变量）
+name: earthworm
+
+services:
+  pg:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: earthworm
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请在 .env 中设置 POSTGRES_PASSWORD}
+      POSTGRES_DB: earthworm
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    command: ["postgres", "-c", "shared_buffers=128MB", "-c", "max_connections=50"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U earthworm -d earthworm"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    mem_limit: 512m
+    logging: &log
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+    # 不写 ports：pg 仅 docker 内网可达，不暴露公网
+
+  api:
+    image: ${API_IMAGE:?请在 .env 中设置 API_IMAGE}
+    restart: unless-stopped
+    depends_on:
+      pg:
+        condition: service_healthy
+    env_file: .env.prod
+    # 启动前自动跑 drizzle 迁移（幂等），失败则退出由 restart 策略重试
+    command: ["sh", "-c", "node dist/src/db/migrate.js && node dist/src/main"]
+    ports:
+      - "127.0.0.1:3001:3001" # 仅本机，供 host 网络的 cloudflared 回源
+    mem_limit: 1g
+    environment:
+      NODE_OPTIONS: "--max-old-space-size=768" # 给 forge/ffmpeg 子进程留余量
+    logging: *log
+
+  cloudflared:
+    image: cloudflare/cloudflared:2026.11.1
+    restart: unless-stopped
+    network_mode: host # CF 面板 Service URL 填 http://localhost:3001
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN:?请在 .env 中设置 CLOUDFLARE_TUNNEL_TOKEN}
+    logging: *log
+
+volumes:
+  pg-data:
