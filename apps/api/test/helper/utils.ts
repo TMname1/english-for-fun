@@ -2,7 +2,7 @@ import { INestApplication } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { sql } from "drizzle-orm";
 import { DbType } from "src/global/providers/db.provider";
-import * as request from "supertest";
+import request from "supertest";
 
 import { GlobalModule } from "../../src/global/global.module";
 

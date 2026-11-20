@@ -3,7 +3,7 @@ import { Readable } from "node:stream";
 import { BadGatewayException, BadRequestException, INestApplication } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { Test } from "@nestjs/testing";
-import * as request from "supertest";
+import request from "supertest";
 
 import { StorageService } from "../../storage/storage.service";
 import { TtsController } from "../tts.controller";

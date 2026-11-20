@@ -1,7 +1,7 @@
 import { INestApplication } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { Test, TestingModule } from "@nestjs/testing";
-import * as request from "supertest";
+import request from "supertest";
 
 import { createAuthedAgent } from "../../../test/helper/utils";
 import { AppModule } from "../../app/app.module";

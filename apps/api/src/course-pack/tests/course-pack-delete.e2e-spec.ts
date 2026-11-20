@@ -1,7 +1,7 @@
 import { INestApplication } from "@nestjs/common";
 import { Test, TestingModule } from "@nestjs/testing";
 import { eq } from "drizzle-orm";
-import * as request from "supertest";
+import request from "supertest";
 
 import { coursePack } from "@earthworm/schema";
 import { insertCoursePack } from "../../../test/fixture/db";
