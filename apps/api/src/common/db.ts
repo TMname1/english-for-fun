@@ -1,7 +1,7 @@
 import { Logger } from "@nestjs/common";
 import { DefaultLogger, LogWriter } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
-import * as postgres from "postgres";
+import postgres from "postgres";
 
 import { schemas } from "@earthworm/schema";
 

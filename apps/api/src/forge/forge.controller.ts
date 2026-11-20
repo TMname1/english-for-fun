@@ -22,7 +22,7 @@ import { ResumeForgeJobDto } from "./dto/resume-forge-job.dto";
 import { StartForgeJobDto } from "./dto/start-forge-job.dto";
 import { ForgeService } from "./forge.service";
 
-/** 与 packages/course-forge/src/forge.ts 的 VIDEO_EXT 白名单保持一致 */
+/** 与 src/forge/core/forge.ts 的 VIDEO_EXT 白名单保持一致 */
 const VIDEO_EXT_WHITELIST = new Set([".mp4", ".m4v", ".mkv", ".webm", ".mov", ".avi"]);
 const MAX_VIDEO_BYTES = 2 * 1024 * 1024 * 1024;
 /** multer 落盘只是中转，service 上传对象存储后即删 */

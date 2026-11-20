@@ -191,7 +191,7 @@ export class CoursePackService {
       if (stillReferenced) return;
 
       await this.storage.deleteObject(key);
-      // jobId/runId 即视频文件名去扩展名（forge.service buildRecord 与 course-forge importer 同规则）
+      // jobId/runId 即视频文件名去扩展名（forge.service buildRecord 与 forge/core/importer 同规则）
       const forgeId = key
         .split("/")
         .pop()!
