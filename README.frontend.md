@@ -96,7 +96,7 @@ CF 面板 → Workers & Pages → `english-for-fun` → Custom domains → Set u
 1. 服务器执行 `curl https://api.你的域名/auth/me` → 返回 401 JSON（Tunnel 链路通）；
 2. 打开 `https://你的域名` → 页面正常加载；
 3. 登录成功，DevTools 中 `auth_token` Cookie 带 `SameSite=None; Secure`，后续请求携带 Cookie；
-4. 深链刷新（如 `/course-pack/xxx`）不 404（`public/_redirects` 的 `/* /200.html 200` 兜底）；
+4. 深链刷新（如 `/course-pack/xxx`）页面正常渲染（由 Pages 原生 `404.html` 兜底；HTTP 状态码是 404 属预期，纯 SPA 无 SSR 不影响使用）；
 5. 课程学习、每日一句、B 站扫码登录状态接口正常；媒体走 OSS 预签名 URL 直连，与本次部署无关。
 
 ## 常见问题
@@ -113,10 +113,15 @@ nitropack 2.9.6 预渲染器在 Windows 上的已知问题（nuxt/nuxt#26943）�
 **登录后一直跳回 /login**
 按顺序检查：后端是否 HTTPS（Tunnel 是否生效）→ 后端代码是否包含 CORS/Cookie 改动并重启 → DevTools 里 Cookie 是否被浏览器拒收（缺 `Secure` 或 `SameSite=None`）。
 
+**站点报 `ERR_TOO_MANY_REDIRECTS`（重定向次数过多）**
+
+不要新增 `/* → *.html` 的 rewrite 规则（如 `_redirects` 里的 `/* /200.html 200`）。Pages 有一条关不掉的"去 `.html` 扩展名"规范化：`/200.html` 会被 308 到 `/200`，而 `/200` 又命中同一条通配规则 → 无限循环；且规则优先于静态资源匹配，连 `/_nuxt/*.js`、`/favicon.ico` 都会被一起劫持，整站不可用。SPA 深链交给 Pages 原生的 `404.html` 兜底即可。
+
+修复后浏览器仍报错是 308 被缓存所致：用无痕窗口，或 DevTools → Network 勾 Disable cache 硬刷新，必要时清除本站站点数据。
+
 ## 相关文件
 
 - `apps/client/.env.prod` — 生产 API 地址（不入库）
-- `apps/client/public/_redirects` — SPA 深链兜底规则
 - `patches/nitropack@2.9.6.patch` — Windows 构建补丁
 - 根 `package.json` — `build:client` / `deploy:client` 脚本
 - `README.env.prod.md` — 后端生产环境变量与部署

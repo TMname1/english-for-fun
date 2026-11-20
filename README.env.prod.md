@@ -6,9 +6,12 @@
 dev 与 prod 共用一套代码，差异全部通过环境变量表达：对象存储从 dev 的 MinIO 换成**阿里云 OSS**。
 OSS 原生兼容 S3 协议，代码统一走 `@earthworm/storage`（AWS SDK），**无需改代码**，只改环境变量。
 
-## 一、后端 API（`apps/api/.env.prod`，启动时 `NODE_ENV=prod`）
+## 一、后端 API（生产环境变量，`NODE_ENV=prod`）
 
-`NODE_ENV=prod` 时 NestJS `ConfigModule` 改读 `.env.prod`（已 gitignore，不提交）。
+统一模板：[`apps/api/deploy/.env.prod.example`](apps/api/deploy/.env.prod.example)。
+
+- **Docker 部署**（主路径，见 `README.backend.md`）：复制为服务器 `/opt/earthworm/.env.prod`，由 compose `env_file` 注入 api 容器；`NODE_ENV=prod` / `PORT=3001` 镜像已内置。
+- **非容器运行**（pm2 / 服务器上手动跑 forge CLI）：复制为 `apps/api/.env.prod`，进程环境设 `NODE_ENV=prod`，NestJS `ConfigModule` 与 forge 均读该文件（已 gitignore，不提交）。
 
 | 变量            | 必填  | 生产取值                            | 说明                                                                          |
 | --------------- | ----- | ----------------------------------- | ----------------------------------------------------------------------------- |
@@ -22,7 +25,7 @@ OSS 原生兼容 S3 协议，代码统一走 `@earthworm/storage`（AWS SDK）�
 
 ### 对象存储：阿里云 OSS（`S3_*`）
 
-只需配 `apps/api/.env.prod` 一处（forge 子进程与 CLI 共用该文件）。
+只需配一处（Docker 部署为 `/opt/earthworm/.env.prod`，非容器为 `apps/api/.env.prod`；forge 子进程自动继承，CLI 共用该文件）。
 **生产没有默认值兜底可用，`S3_*` 必须显式填写**（代码默认值面向 dev MinIO）：
 
 | 变量                         | 生产取值                               | 说明                                                                                      |
@@ -99,7 +102,7 @@ S3_PRESIGN_EXPIRES_SECONDS="21600"
 | `NODE_ENV`    | 否    | `production`（生产构建）                              | `production` 才会注入 Clarity。               |
 
 > 注意：API 的 CORS 白名单写死在 `apps/api/src/main.ts`
-> （`localhost:*` 与 `earthworm.cuixueshe.com(:81)`）。**换域名需同步改这里的正则**。
+> （`localhost:*`、`earthworm.cuixueshe.com(:81)` 与 `https://bananablog.cc`）。**换域名需同步改这里的正则**。
 > 媒体走预签名 URL 直连 OSS，不受 API CORS 限制。
 
 ## 三、Course Forge（`apps/api/.env.prod` 的 FORGE\_\* 段）
