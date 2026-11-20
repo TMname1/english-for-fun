@@ -1,6 +1,11 @@
-# 开发环境环境变量配置（README.dev.env.md）
+# 开发环境环境变量配置（README.env.dev.md）
 
-本文列出**本地开发**需要配置的全部环境变量。生产部署见 `README.prod.env.md`；登录凭证说明见 `README.login.md`。
+本文列出**本地开发**需要配置的全部环境变量。生产部署见 `README.env.prod.md`；登录凭证说明见 `README.login.md`。
+
+> **为什么没有 `.env.dev`？** 本项目采用「缺省即开发」约定：env 文件按 `NODE_ENV` 白名单映射
+> （`prod` → `.env.prod`、`test` → `.env.test`），查不到一律回退 `.env`，所以 **`.env` 就是 dev 环境文件**。
+> 本地开发无需设置 `NODE_ENV`；dotenv / Nuxt / drizzle-kit 等工具也默认读 `.env`，零配置即可启动。
+> prod / test 属于「偏离默认」的场景，才需要显式文件名 + 显式 `NODE_ENV` 切换。
 
 本项目是多包仓库（pnpm workspace），各包各自读取 `.env`。真实 `.env` / `.env.test` / `.env.prod` 均已 gitignore，
 仓库只保留 `.env.example` 模板——新环境从对应 `.example` 复制后填写即可。
