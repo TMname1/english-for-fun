@@ -6,9 +6,13 @@ import { ConfigService } from "@nestjs/config";
 export const AUTH_COOKIE_NAME = "auth_token";
 export const AUTH_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
+// 生产前端（CF Pages）与 API（Tunnel 子域）跨站，Cookie 必须 SameSite=None; Secure 才会被浏览器携带
+const isProd = process.env.NODE_ENV === "prod";
+
 export const authCookieOptions = {
   httpOnly: true,
-  sameSite: "lax" as const,
+  sameSite: (isProd ? "none" : "lax") as "none" | "lax",
+  secure: isProd,
   path: "/",
   maxAge: AUTH_TOKEN_TTL_MS,
 };
