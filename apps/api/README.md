@@ -15,14 +15,14 @@ pnpm dev:serve      # 启动后端（watch 模式，自动先构建 schema / sto
 
 配置：复制 `apps/api/.env.example` 为 `apps/api/.env`。
 
-| 变量              | 用途                                                                                                           |
-| ----------------- | -------------------------------------------------------------------------------------------------------------- |
-| `DATABASE_URL`    | Postgres 连接串                                                                                                |
-| `SECRET`          | 签名密钥                                                                                                       |
-| `PORT`            | 监听端口，默认 3001                                                                                            |
-| `S3_*`            | 对象存储（dev MinIO / prod 阿里云 OSS），见根目录 `README.env.md` 与 `README.devToProd.md`；默认值即 dev MinIO |
-| `TTS_PROXY_URL`   | Edge TTS websocket 代理（可选）                                                                                |
-| `FORGE_REPO_ROOT` | forge 子进程定位 monorepo 根的覆盖项（可选，默认自动向上找）                                                   |
+| 变量              | 用途                                                                                                              |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`    | Postgres 连接串                                                                                                   |
+| `SECRET`          | 签名密钥                                                                                                          |
+| `PORT`            | 监听端口，默认 3001                                                                                               |
+| `S3_*`            | 对象存储（dev MinIO / prod 阿里云 OSS），见根目录 `README.dev.env.md` 与 `README.prod.env.md`；默认值即 dev MinIO |
+| `TTS_PROXY_URL`   | Edge TTS websocket 代理（可选）                                                                                   |
+| `FORGE_REPO_ROOT` | forge 子进程定位 monorepo 根的覆盖项（可选，默认自动向上找）                                                      |
 
 `NODE_ENV` 决定读哪个 env 文件：`prod` → `.env.prod`，`test` → `.env.test`，否则 `.env`。
 
@@ -103,7 +103,7 @@ ffmpeg/ASR 必需的临时文件在 `os.tmpdir()/earthworm-*` 下，阶段结束
 - **视频 / forge 产物**：删除课程包时做引用检查，最后一个引用同一视频键的包被删除后，
   级联删除视频对象与 `forge/<id>/`（id = 视频文件名去扩展名）。清理失败仅记 warn 日志，不影响删包。
 - **tts/ 缓存**：内容寻址的共享缓存，不参与级联删除，由生命周期规则 30 天过期
-  （dev 由 compose `minio-init` 自动配置；prod 在 OSS 控制台配置，见 README.devToProd.md）。
+  （dev 由 compose `minio-init` 自动配置；prod 在 OSS 控制台配置，见 README.prod.env.md）。
 
 ## 测试
 
