@@ -1,1 +1,0 @@
-ALTER TABLE "statements" DROP COLUMN IF EXISTS "audio_url";
