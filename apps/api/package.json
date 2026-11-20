@@ -16,7 +16,14 @@
     "test": "pnpm test:unit && pnpm test:e2e",
     "test:unit": "cross-env NODE_ENV=test jest --config jest.config.ts",
     "test:e2e": "cross-env NODE_ENV=test jest --config jest.config.e2e.ts",
-    "test:cov": "jest --coverage"
+    "test:cov": "jest --coverage",
+    "forge": "tsx src/forge/core/cli.ts forge",
+    "forge:import": "tsx src/forge/core/cli.ts import",
+    "db:push": "drizzle-kit push",
+    "db:push:test": "drizzle-kit push --config=drizzle.config.test.ts",
+    "db:migrate": "tsx src/db/migrate.ts",
+    "db:generate": "drizzle-kit generate",
+    "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
     "@earthworm/game-data-sdk": "workspace:^",
@@ -30,14 +37,18 @@
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.1",
     "drizzle-orm": "^0.32.0",
+    "dotenv": "^16.3.1",
+    "ffmpeg-static": "^5.3.0",
     "https-proxy-agent": "^7.0.5",
     "msedge-tts": "^2.1.1",
+    "multer": "^1.4.4-lts.1",
     "postgres": "^3.4.4",
     "qrcode": "^1.5.4",
     "reflect-metadata": "^0.1.13",
     "rxjs": "^7.8.1",
     "start": "^5.1.0",
-    "superagent": "^8.1.2"
+    "superagent": "^8.1.2",
+    "zod": "^3.22.4"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.1.2",
@@ -52,13 +63,16 @@
     "@types/qrcode": "^1.5.6",
     "@types/supertest": "^6.0.0",
     "cross-env": "^7.0.3",
+    "drizzle-kit": "^0.23.0",
     "jest": "^29.5.0",
+    "pg": "^8.11.5",
     "source-map-support": "^0.5.21",
     "supertest": "^6.3.3",
     "ts-jest": "^29.1.0",
     "ts-loader": "^9.4.3",
     "ts-node": "^10.9.1",
     "tsconfig-paths": "^4.2.0",
+    "tsx": "^4.7.0",
     "typescript": "^5.1.3"
   }
 }
