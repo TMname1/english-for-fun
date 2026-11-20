@@ -142,3 +142,6 @@ course-db
 .code-review-graph/
 
 temp/
+
+# forge CLI 本地产物
+apps/api/output/
