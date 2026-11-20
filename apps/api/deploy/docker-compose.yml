@@ -1,5 +1,5 @@
-# 服务器端编排：pg + api + cloudflared
-# 用法见 apps/api/DEPLOY.md；本目录需有 .env（compose 插值）与 .env.prod（api 运行时变量）
+# 服务器端编排：pg + api（cloudflared 走宿主机 systemd，见 README.backend.md）
+# 本目录需有 .env（compose 插值）与 .env.prod（api 运行时变量）
 name: earthworm
 
 services:
@@ -34,17 +34,10 @@ services:
     # 启动前自动跑 drizzle 迁移（幂等），失败则退出由 restart 策略重试
     command: ["sh", "-c", "node dist/src/db/migrate.js && node dist/src/main"]
     ports:
-      - "127.0.0.1:3001:3001" # 仅本机，供 host 网络的 cloudflared 回源
+      - "127.0.0.1:3001:3001" # 仅本机，供宿主机 cloudflared 回源
     mem_limit: 1g
     environment:
       NODE_OPTIONS: "--max-old-space-size=768" # 给 forge/ffmpeg 子进程留余量
-    logging: *log
-
-  cloudflared:
-    image: cloudflare/cloudflared:2026.11.1
-    restart: unless-stopped
-    network_mode: host # CF 面板 Service URL 填 http://localhost:3001
-    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN:?请在 .env 中设置 CLOUDFLARE_TUNNEL_TOKEN}
     logging: *log
 
 volumes:
