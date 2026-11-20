@@ -80,7 +80,7 @@ cp ./apps/client/.env.example ./apps/client/.env
 
 ### 3. 启动 Docker Compose 服务
 
-后端用到了 Postgres 和 MinIO（对象存储，dev 环境；prod 用阿里云 OSS，见 `README.prod.env.md`）服务，通过下面在 `package.json` 中配置的命令启动和停止。MinIO 首次启动会自动创建私有桶 `earthworm` 并给 `tts/` 缓存配置 30 天过期的生命周期规则，控制台在 `http://localhost:9001`（默认账号密码 minioadmin/minioadmin）。
+后端用到了 Postgres 和 MinIO（对象存储，dev 环境；prod 用阿里云 OSS，见 `README.env.prod.md`）服务，通过下面在 `package.json` 中配置的命令启动和停止。MinIO 首次启动会自动创建私有桶 `earthworm` 并给 `tts/` 缓存配置 30 天过期的生命周期规则，控制台在 `http://localhost:9001`（默认账号密码 minioadmin/minioadmin）。
 
 ```bash
 # 启动

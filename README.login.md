@@ -8,12 +8,12 @@
 
    ```dotenv
    AUTH_USERNAME="admin"
-   AUTH_PASSWORD="earthworm123"
+   AUTH_PASSWORD="换成你的密码"
    # 登录 Cookie 的签名密钥，任意长随机字符串即可
-   SECRET="sjldk92#sd903mnc./xklsjdf9sdfj"
+   SECRET="换成一个长随机字符串"
    ```
 
-   三个变量都**必填**，缺少任何一个后端会启动失败。当前 `.env` 里已填了默认值 `admin / earthworm123`，**部署前务必修改密码**。
+   三个变量都**必填**，缺少任何一个后端会启动失败。模板里的用户名、密码与 SECRET 均为示例占位值，复制后**务必换成自己的强密码和随机串**。
 
 2. 正常启动前后端：
 
