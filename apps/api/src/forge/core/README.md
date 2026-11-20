@@ -208,7 +208,7 @@ pnpm forge -- --audio song.mp3 --title "某首歌" --type music
 | `FORGE_LLM_VRAM_STRICT`      | `1`                               | 显存估算不足时是否直接拦停；设为 `0` 仅警告（接受 CPU 卸载慢跑）                                                                                                                                                                      |
 | `FORGE_LLM_VRAM_MARGIN_MB`   | 512                               | 显存估算余量（KV cache + CUDA 上下文开销，MB）                                                                                                                                                                                        |
 | `FORGE_API_URL`              | `http://localhost:3001`           | 导入目标 API                                                                                                                                                                                                                          |
-| `S3_*`                       | dev MinIO 默认值                  | 对象存储配置（`S3_ENDPOINT`/`S3_REGION`/`S3_ACCESS_KEY_ID`/`S3_SECRET_ACCESS_KEY`/`S3_BUCKET`/`S3_FORCE_PATH_STYLE`）；导入时视频与 JSON 产物上传到这里，与 `apps/api/.env` 保持一致，prod 换阿里云 OSS 见根目录 `README.prod.env.md` |
+| `S3_*`                       | dev MinIO 默认值                  | 对象存储配置（`S3_ENDPOINT`/`S3_REGION`/`S3_ACCESS_KEY_ID`/`S3_SECRET_ACCESS_KEY`/`S3_BUCKET`/`S3_FORCE_PATH_STYLE`）；导入时视频与 JSON 产物上传到这里，与 `apps/api/.env` 保持一致，prod 换阿里云 OSS 见根目录 `README.env.prod.md` |
 
 ## 6. ASR 转写配置（阿里云百炼 Qwen-Audio-ASR）
 
