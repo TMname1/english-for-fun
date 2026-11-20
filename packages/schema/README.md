@@ -1,6 +1,6 @@
 # @earthworm/schema（数据库表结构）
 
-全部 Drizzle ORM 表定义的单一事实来源，被 `@earthworm/db`、`@earthworm/game-data-sdk`、后端 API 共同依赖。用 tsup 构建为 CJS + 类型声明。
+全部 Drizzle ORM 表定义的单一事实来源，被 `@earthworm/game-data-sdk`、后端 API（含内置的数据库迁移）共同依赖。用 tsup 构建为 CJS + 类型声明。
 
 ## 表一览（`src/schema/`）
 
