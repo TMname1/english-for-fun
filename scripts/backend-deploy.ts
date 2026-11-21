@@ -144,10 +144,11 @@ function sshExec(conn: Client, command: string, passwordForStdin?: string): Prom
       if (err) return reject(err);
       let stderr = "";
       stream
-        .on("data", (data: Buffer) => process.stdout.write(data))
+        .on("data", (data: Buffer) => process.stdout.write(data.toString()))
         .on("stderr", (data: Buffer) => {
-          process.stderr.write(data);
-          stderr += data.toString();
+          const text = data.toString();
+          process.stderr.write(text);
+          stderr += text;
         })
         .on("close", (code: number | null) => {
           if (code === 0) return resolve();
@@ -158,6 +159,22 @@ function sshExec(conn: Client, command: string, passwordForStdin?: string): Prom
       }
     });
   });
+}
+
+/**
+ * 生成一条在服务器上执行的清理命令：删除与本仓库同前缀、但不是当前 keepImageRef 的所有旧 tag，仅保留本次正在使用的这一个。只作用于服务器本地磁盘
+ * 云端 ACR 历史 tag全部保留作为回滚来源。
+ * 末尾 `|| true` 让单条 docker rmi 失败（如旧 tag 仍被停止容器占用）不影响整体退出码，从而不会让部署判定为失败。
+ */
+function buildCleanupCommand(keepImageRef: string): string {
+  const prefix = `${ACR_REGISTRY}/${ACR_NAMESPACE}/${IMAGE_NAME}:`;
+  // grep -F 固定字符串匹配，避免前缀里的 . 被当成正则元字符误匹配；grep -Fvx 整行精确排除要保留的当前镜像。
+  return (
+    `docker images --format '{{.Repository}}:{{.Tag}}'` +
+    ` | grep -F '${prefix}'` +
+    ` | grep -Fvx '${keepImageRef}'` +
+    ` | xargs -r -n1 docker rmi || true`
+  );
 }
 
 async function main(): Promise<void> {
@@ -217,6 +234,13 @@ async function main(): Promise<void> {
 
     log(`服务器 docker compose pull && up -d（目录：${REMOTE_DIR}）`);
     await sshExec(conn, `cd '${REMOTE_DIR}' && docker compose pull && docker compose up -d`);
+
+    log("清理服务器本地旧镜像（仅保留当前使用的 tag）");
+    await sshExec(conn, buildCleanupCommand(remoteImageRef));
+    await sshExec(
+      conn,
+      `docker images | grep '${ACR_REGISTRY}/${ACR_NAMESPACE}/${IMAGE_NAME}' || true`,
+    );
   } finally {
     conn.end();
   }
