@@ -1,8 +1,7 @@
-import { Transform } from "class-transformer";
-import { IsBoolean, IsIn, IsInt, IsNotEmpty, IsOptional, IsString, Min } from "class-validator";
+import { IsIn, IsInt, IsNotEmpty, IsOptional, IsString, Min } from "class-validator";
 
 /**
- * B 站链接下载请求：url + 常用 CLI 参数（qn/p/no-cookie），外加课程包元信息（用于下载完成后建流水线任务）。
+ * B 站链接下载请求：url + 下载参数（qn/p），外加课程包元信息（用于下载完成后建流水线任务）。
  * 仅接受可解析出 BV 号的链接；清晰度用别名或数字 id 字符串（如 "1080" / "80"）。
  */
 export class DownloadBiliDto {
@@ -30,12 +29,6 @@ export class DownloadBiliDto {
   @IsString()
   @IsOptional()
   qn?: string;
-
-  /** 不携带 cookie（仅低画质） */
-  @Transform(({ value }) => value === true || value === "true")
-  @IsBoolean()
-  @IsOptional()
-  noCookie?: boolean;
 
   /** ASR 语言 */
   @IsIn(["en", "zh", "ja"])

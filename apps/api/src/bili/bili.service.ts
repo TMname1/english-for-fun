@@ -7,8 +7,7 @@ import { BadRequestException, Inject, Injectable, Logger, NotFoundException } fr
 import { toDataURL } from "qrcode";
 
 import type { DbType } from "../global/providers/db.provider";
-import type { BiliInfo, BiliLoginStatus, BiliPollResult } from "./bilidown-bridge";
-import type { BilidownCore } from "./bilidown-bridge";
+import type { BilidownCore, BiliInfo, BiliLoginStatus, BiliPollResult } from "./bilidown-bridge";
 import type { DownloadBiliDto } from "./dto/download-bili.dto";
 import { ForgeService } from "../forge/forge.service";
 import { DB } from "../global/providers/db.provider";
@@ -166,7 +165,6 @@ export class BiliService {
         input: dto.url,
         p: dto.p,
         qn: dto.qn,
-        noCookie: dto.noCookie,
         outDir: workDir,
         outName: fileName,
         signal,

@@ -43,7 +43,6 @@ export interface BiliDownloadOptions {
   input: string;
   p?: number;
   qn?: string;
-  noCookie?: boolean;
   outDir: string;
   outName?: string;
   keep?: boolean;

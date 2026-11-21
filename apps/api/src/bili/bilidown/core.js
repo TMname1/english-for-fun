@@ -119,7 +119,7 @@ function makeProgressCb(opts, stream) {
 
 /**
  * 解析并下载一个视频。
- * opts: { input, p, qn, audio, noCookie, outDir|out, outName, ffmpeg, keep, signal,
+ * opts: { input, p, qn, audio, outDir|out, outName, ffmpeg, keep, signal,
  *         onStage(stage), onProgress({stream,downloaded,total}), onLog(message, level) }
  * 返回 { filePath, fileName, title, page, bvid }
  */
@@ -133,7 +133,8 @@ export async function download(opts) {
   const tmpDir = path.join(outDir, ".tmp");
   fs.mkdirSync(tmpDir, { recursive: true });
 
-  const cookieStr = opts.noCookie ? "" : cookieString(await cookieStore.load());
+  // 自动决定：已登录（bili_cookie 表有 cookie）就带、解锁高清；未登录则不带，仅低画质。
+  const cookieStr = cookieString(await cookieStore.load());
 
   stage("parse");
   const info = await view(bvid);
