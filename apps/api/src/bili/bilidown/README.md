@@ -38,7 +38,7 @@
 
 ## 下载参数参考（BiliDownloadOptions）
 
-> 原 CLI 已移除，下表字段与 `core.js` 的 download opts 一一对应（p/qn/noCookie/outDir/keep 等）。
+> 原 CLI 已移除，下表字段与 `core.js` 的 download opts 一一对应（p/qn/outDir/keep 等）。
 
 ### 下载选项
 
@@ -50,10 +50,9 @@
 | `--out <dir>`   | 目录路径            | `./downloads`                                           | 输出目录，不存在时自动创建。                                                                                                              |
 | `--ffmpeg <p>`  | 可执行文件路径      | `ffmpeg-static` 随包二进制，缺失时在 PATH 中找 `ffmpeg` | 显式指定 ffmpeg 路径。                                                                                                                    |
 | `--keep`        | 开关（无值）        | 关                                                      | 保留 `<out>/.tmp` 下的音视频中间文件（`*.v.m4s` / `*.a.m4s`）；默认混流完成后删除。                                                       |
-| `--no-cookie`   | 开关（无值）        | 关                                                      | 不携带已保存的 cookie 下载，仅能拿到低画质（约 720 及以下）。                                                                             |
 | `-h` / `--help` | 开关（无值）        | —                                                       | 打印内置帮助文本。                                                                                                                        |
 
-> 服务端下载默认携带 `bili_cookie` 表中的 cookie；`noCookie: true` 时仅能拿到低画质。
+> 服务端下载自动携带 `bili_cookie` 表中的 cookie：已登录即带 cookie（解锁高清/大会员），未登录则不带（仅低画质）。
 
 ### `--qn` 清晰度对照表
 
