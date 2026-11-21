@@ -1,6 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
 
 import {
@@ -13,6 +11,8 @@ import {
 import { ConfigService } from "@nestjs/config";
 import { HttpsProxyAgent } from "https-proxy-agent";
 import { MsEdgeTTS, OUTPUT_FORMAT } from "msedge-tts";
+
+import { StorageService } from "../storage/storage.service";
 
 /** Accent (kept in sync with the client's PronunciationType) -> Edge neural voice */
 export const ACCENT_VOICE_MAP = {
@@ -27,7 +27,6 @@ const MAX_TEXT_LENGTH = 500;
 @Injectable()
 export class TtsService implements OnModuleDestroy {
   private readonly logger = new Logger(TtsService.name);
-  private readonly storageDir: string;
   private readonly proxyUrl: string | undefined;
   /** Per-voice ready clients, reused across requests to keep the websocket warm */
   private readonly clients = new Map<string, MsEdgeTTS>();
@@ -36,9 +35,10 @@ export class TtsService implements OnModuleDestroy {
   /** Dedupes concurrent synthesis of the same text, keyed by cache key */
   private readonly inFlight = new Map<string, Promise<Buffer>>();
 
-  constructor(private readonly configService: ConfigService) {
-    this.storageDir =
-      this.configService.get<string>("TTS_STORAGE_DIR") || join(process.cwd(), "storage", "tts");
+  constructor(
+    private readonly configService: ConfigService,
+    private readonly storage: StorageService,
+  ) {
     this.proxyUrl = this.configService.get<string>("TTS_PROXY_URL") || undefined;
   }
 
@@ -87,11 +87,7 @@ export class TtsService implements OnModuleDestroy {
   }
 
   private async readCached(key: string): Promise<Buffer | null> {
-    try {
-      return await readFile(join(this.storageDir, `${key}.mp3`));
-    } catch {
-      return null;
-    }
+    return this.storage.getBuffer(`tts/${key}.mp3`);
   }
 
   private async synthesize(voice: string, text: string, key: string): Promise<Buffer> {
@@ -189,15 +185,6 @@ export class TtsService implements OnModuleDestroy {
   }
 
   private async writeCache(key: string, data: Buffer): Promise<void> {
-    await mkdir(this.storageDir, { recursive: true });
-    const finalPath = join(this.storageDir, `${key}.mp3`);
-    const tmpPath = join(this.storageDir, `${key}.${randomUUID()}.tmp`);
-    try {
-      await writeFile(tmpPath, data);
-      await rename(tmpPath, finalPath);
-    } catch (error) {
-      await unlink(tmpPath).catch(() => undefined);
-      throw error;
-    }
+    await this.storage.putBuffer(`tts/${key}.mp3`, data, "audio/mpeg");
   }
 }

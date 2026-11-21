@@ -1,0 +1,13 @@
+diff --git a/dist/nitro.mjs b/dist/nitro.mjs
+index 1d07b0e073af941065e3677ad46118b7009a38e6..700e6c128f84ee7e713615fd404f44c5221a452e 100644
+--- a/dist/nitro.mjs
++++ b/dist/nitro.mjs
+@@ -1644,7 +1644,7 @@ function importMeta(nitro) {
+       if (!isEntry && (!ImportMetaRe.test(code) || code.includes("ROLLUP_NO_REPLACE"))) {
+         return;
+       }
+-      const url = nitro.options.node && isEntry && !code.includes("ROLLUP_NO_REPLACE") ? "_import_meta_url_" : '"file:///_entry.js"';
++      const url = nitro.options.node && isEntry && !code.includes("ROLLUP_NO_REPLACE") ? "_import_meta_url_" : JSON.stringify(pathToFileURL(resolve(nitro.options.output.dir, chunk.fileName)).href);
+       const envImport = nitro.options.node ? "import process from 'node:process';" : "";
+       const env = nitro.options.node ? "process.env" : "{}";
+       const ref = "globalThis._importMeta_";

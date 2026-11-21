@@ -64,7 +64,7 @@ export function usePronunciation() {
   }
 
   /**
-   * 把站内相对路径（如 /course-video/xxx.mp4、/course-audio/xxx.mp3）解析为绝对地址。
+   * 把相对路径解析为绝对地址；绝对 URL（对象存储预签名 URL、外链）直接透传。
    * 为空返回 ""。当前主要用于配套视频的资源地址解析。
    */
   function resolveAudioUrl(audioUrl: string | null | undefined): string {

@@ -1,7 +1,7 @@
 import { Logger } from "@nestjs/common";
 import { DefaultLogger, LogWriter } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
-import * as postgres from "postgres";
+import postgres from "postgres";
 
 import { schemas } from "@earthworm/schema";
 
@@ -19,6 +19,7 @@ const REQUIRED_TABLES = [
   "mastered_elements",
   "user_course_progress",
   "user_learning_activities",
+  "bili_cookie",
 ];
 
 /**

@@ -1,5 +1,5 @@
 import { Injectable } from "@nestjs/common";
-import * as superagent from "superagent";
+import superagent from "superagent";
 
 @Injectable()
 export class ToolService {

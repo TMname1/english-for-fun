@@ -45,7 +45,10 @@ export interface CoursePackLearningApiResponse {
   id: string;
   title: string;
   description: string;
+  /** 对象存储预签名 URL（会过期）或外部 URL */
   video: string;
+  /** true = 外部链接（走外链图标）；false = 对象存储视频（页内播放器 seek） */
+  videoIsExternal?: boolean;
   statements: StatementApiResponse[];
   statementIndex: number;
 }
@@ -79,6 +82,7 @@ export async function fetchCoursePackLearning(coursePackId: string) {
     title: body.title,
     description: body.description ?? "",
     video: body.video ?? "",
+    videoIsExternal: body.videoIsExternal ?? false,
     statements: body.statements,
     statementIndex: body.statementIndex ?? 0,
   } as CoursePackLearning;
@@ -113,7 +117,7 @@ export interface CreateCoursePackPayload {
   title: string;
   description: string;
   cover: string;
-  /** 配套视频站内路径（/course-video/xxx.mp4）或外部 URL */
+  /** 配套视频对象键（course-video/xxx.mp4）或外部 URL */
   video?: string;
   courses: CreateCoursePackCourse;
 }
@@ -172,19 +176,21 @@ export async function updateCoursePack(coursePackId: string, payload: CreateCour
 }
 
 /**
- * 上传本地视频文件到 /course-video 静态目录，返回站内路径。
+ * 上传本地视频文件到对象存储，返回对象键（入库用）与预签名预览 URL。
  * 单独走 ofetch：让浏览器自设 multipart boundary（共享 http 实例默认 application/json 会破坏上传）。
  */
 function coursePackFetch(): $Fetch {
   const config = useRuntimeConfig();
-  return ofetch.create({ baseURL: config.public.apiBase as string });
+  return ofetch.create({ baseURL: config.public.apiBase as string, credentials: "include" });
 }
 
-export async function uploadCoursePackVideo(file: File): Promise<{ video: string }> {
+export async function uploadCoursePackVideo(
+  file: File,
+): Promise<{ video: string; videoUrl: string }> {
   const formData = new FormData();
   formData.append("videoFile", file);
   const $fetch = coursePackFetch();
-  return await $fetch<{ video: string }>("/course-pack/video", {
+  return await $fetch<{ video: string; videoUrl: string }>("/course-pack/video", {
     method: "post",
     body: formData,
     retry: 0,

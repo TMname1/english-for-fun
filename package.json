@@ -7,21 +7,24 @@
   "scripts": {
     "prepare": "simple-git-hooks",
     "schema:build": "pnpm -F @earthworm/schema build",
+    "storage:build": "pnpm -F @earthworm/storage build",
     "sdk:build": "pnpm schema:build && pnpm -F @earthworm/game-data-sdk build",
-    "db:init": "pnpm schema:build && pnpm -F @earthworm/db run init",
-    "db:init:test": "pnpm schema:build && pnpm -F @earthworm/db run init:test",
-    "db:init:test:ci": "pnpm schema:build && pnpm -F @earthworm/db run init:ci",
-    "db:studio": "pnpm -F @earthworm/db db:studio",
+    "db:init": "pnpm schema:build && pnpm -F api db:push",
+    "db:init:test": "pnpm schema:build && pnpm -F api db:push:test",
+    "db:init:test:ci": "pnpm schema:build && pnpm -F api db:migrate",
+    "db:studio": "pnpm -F api db:studio",
     "db:upload": "pnpm -F @earthworm/xingrong-courses upload",
-    "forge": "pnpm -F @earthworm/course-forge forge",
-    "forge:import": "pnpm -F @earthworm/course-forge import:course",
-    "dev:serve": "pnpm schema:build && pnpm -F @earthworm/game-data-sdk build && pnpm -F api start:dev",
+    "forge": "pnpm -F api forge",
+    "forge:import": "pnpm -F api forge:import",
+    "dev:serve": "pnpm schema:build && pnpm storage:build && pnpm -F @earthworm/game-data-sdk build && pnpm -F api start:dev",
     "dev:client": "pnpm -F client dev",
     "docker:start": "docker-compose up -d",
     "docker:stop": "docker-compose stop",
     "docker:down": "docker-compose down",
-    "build:server": "pnpm schema:build && pnpm -F @earthworm/game-data-sdk build && pnpm -F api build",
+    "build:server": "pnpm schema:build && pnpm storage:build && pnpm -F @earthworm/game-data-sdk build && pnpm -F api build",
     "build:client": "pnpm -F client generate",
+    "deploy:client": "pnpm build:client && wrangler pages deploy apps/client/.output/public --project-name english-for-fun",
+    "deploy:serve": "tsx --env-file=scripts/.env.prod scripts/backend-deploy.ts",
     "prod:serve": "pnpm -F api start:prod:pm",
     "format": "prettier --write --cache .",
     "format-check": "prettier --check --cache .",
@@ -44,6 +47,7 @@
     "@types/inquirer": "^9.0.7",
     "@types/node": "^20.12.7",
     "@types/semver": "^7.5.8",
+    "@types/ssh2": "^1.15.0",
     "archiver": "^7.0.1",
     "conventional-changelog-cli": "^4.1.0",
     "dotenv": "^16.3.1",
@@ -55,12 +59,19 @@
     "prettier-plugin-tailwindcss": "0.5.13",
     "semver": "^7.6.3",
     "simple-git-hooks": "2.11.1",
+    "ssh2": "^1.16.0",
     "tsup": "^8.0.1",
     "tsx": "^4.7.0",
-    "typescript": "^5.3.3"
+    "typescript": "^5.3.3",
+    "wrangler": "^4.165.0"
   },
   "dependencies": {
     "@t3-oss/env-core": "^0.7.1",
     "zod": "^3.22.4"
+  },
+  "pnpm": {
+    "patchedDependencies": {
+      "nitropack@2.9.6": "patches/nitropack@2.9.6.patch"
+    }
   }
 }

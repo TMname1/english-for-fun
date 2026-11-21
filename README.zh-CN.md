@@ -2,6 +2,27 @@
 
 通过连词构句的方式让你更好的学习英语~ 😊
 
+## 📦 项目结构
+
+pnpm monorepo：两个应用（`apps/`）+ 六个共享包（`packages/`）。各包详细文档见对应 README。
+
+### 应用（apps/）
+
+| 目录          | 说明                                                                                                                                                            | 文档                              |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
+| `apps/api`    | 后端服务（NestJS + Drizzle/Postgres，默认 3001 端口）：课程包 CRUD、学习进度/时长统计、已掌握词、Edge TTS、每日一句、B 站扫码下载、forge 课程制作流水线 job API | [README](./apps/api/README.md)    |
+| `apps/client` | 前端（Nuxt 3 SPA + Nuxt UI + Pinia）：打字输入式学习游戏（中译英/听写）、课程包管理、视频原声 seek 播放、「导入视频」流水线 GUI（切片→转写→校对→导入）          | [README](./apps/client/README.md) |
+
+### 共享包（packages/）
+
+| 目录                        | 说明                                                                                                                        | 文档                                            |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
+| `packages/schema`           | 全部 Drizzle 表定义的单一事实来源（课程包/句子/进度/学习时长/已掌握词/历史），tsup 构建                                     | [README](./packages/schema/README.md)           |
+| `packages/game-data-sdk`    | 课程包数据访问层：`createCoursePack` / `updateCoursePack` / `deleteCoursePack`（事务写库，含视频时间戳），供 API 与脚本复用 | [README](./packages/game-data-sdk/README.md)    |
+| `packages/xingrong-courses` | 内置示例课程「星荣零基础学英语」的数据与导入脚本（`pnpm db:upload`，仅首次初始化用）                                        | [README](./packages/xingrong-courses/README.md) |
+
+依赖关系大致为：`client → api → game-data-sdk → schema`；课程流水线（forge）、B 站下载内核（bilidown）与数据库迁移（db）已内置进 api（分别见 `apps/api/src/forge/core`、`src/bili/bilidown`、`src/db` 的 README）。
+
 ## 🚀 如何开始？
 
 **以下所有相关操作都基于项目根目录位置，请注意检查不要出错！**
@@ -59,7 +80,7 @@ cp ./apps/client/.env.example ./apps/client/.env
 
 ### 3. 启动 Docker Compose 服务
 
-后端用到了 Postgres 服务，通过下面在 `package.json` 中配置的命令启动和停止。
+后端用到了 Postgres 和 MinIO（对象存储，dev 环境；prod 用阿里云 OSS，见 `README.env.prod.md`）服务，通过下面在 `package.json` 中配置的命令启动和停止。MinIO 首次启动会自动创建私有桶 `earthworm` 并给 `tts/` 缓存配置 30 天过期的生命周期规则，控制台在 `http://localhost:9001`（默认账号密码 minioadmin/minioadmin）。
 
 ```bash
 # 启动
@@ -68,7 +89,7 @@ pnpm docker:start
 # 下面这些命令等你用的时候在执行，不要傻乎乎的刚启动就停止哈 😊
 # 停止
 pnpm docker:stop
-# 删除容器和网络（不会删除数据卷，数据保留在 db-data / testdb-data 卷里）
+# 删除容器和网络（不会删除数据卷，数据保留在 db-data / testdb-data / minio-data 卷里）
 pnpm docker:down
 ```
 

@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 
 import type { ForgeJobStage } from "./job-store";
@@ -8,24 +8,10 @@ import type { ForgeJobStage } from "./job-store";
 const STDERR_BUFFER_MAX = 5 * 1024;
 const STDERR_TAIL_FOR_ERROR = 600;
 
-/** 向上查找 pnpm-workspace.yaml 定位 monorepo 根，apps/api 的 process.cwd() 通常在 apps/api/ 下 */
-function findRepoRoot(): string {
-  if (process.env.FORGE_REPO_ROOT) return process.env.FORGE_REPO_ROOT;
-  let dir = resolve(process.cwd());
-  for (let i = 0; i < 8; i++) {
-    if (existsSync(join(dir, "pnpm-workspace.yaml"))) return dir;
-    const parent = resolve(dir, "..");
-    if (parent === dir) break;
-    dir = parent;
-  }
-  return resolve(process.cwd(), "..", "..");
-}
-
-export const REPO_ROOT = findRepoRoot();
-export const FORGE_PKG_DIR = join(REPO_ROOT, "packages", "course-forge");
-export const FORGE_OUTPUT_ROOT = join(FORGE_PKG_DIR, "output");
-export const COURSE_VIDEO_DIR =
-  process.env.COURSE_VIDEO_DIR || join(REPO_ROOT, "apps", "api", "storage", "course-video");
+/** 编译后 runner-client.js 与 core/ 是兄弟目录；dev（nest start --watch）与 prod 同为 dist/src/forge/ */
+const RUNNER_ENTRY = join(__dirname, "core", "pipeline-runner.js");
+/** 流水线本地临时工作区（ffmpeg/ASR 必须操作本地文件）；持久产物在对象存储 forge/<jobId>/ */
+export const FORGE_OUTPUT_ROOT = join(tmpdir(), "earthworm-forge");
 
 export interface ForgeRunnerParams {
   /** transcribe：跑「提取音轨 + ASR 转写」后暂停；structure：读 outDir 下编辑过的 transcript 续跑 */
@@ -61,7 +47,7 @@ interface RunnerEventPayload {
 }
 
 /**
- * 用 tsx 起一个子进程跑 packages/course-forge/src/pipeline-runner.ts。
+ * 起一个 node 子进程跑编译产物 core/pipeline-runner.js。
  * 子进程 stdout 走 JSON Lines 事件协议，stderr 是 forgeMake 内部的 console 日志（劫持过）。
  */
 export function spawnForgeRunner(
@@ -82,10 +68,8 @@ export function spawnForgeRunner(
     if (params.clips?.length) env.FORGE_CLIPS = JSON.stringify(params.clips);
   }
 
-  const child = spawn("pnpm", ["exec", "tsx", "src/pipeline-runner.ts"], {
-    cwd: FORGE_PKG_DIR,
+  const child = spawn(process.execPath, [RUNNER_ENTRY], {
     env,
-    shell: process.platform === "win32",
   }) as ChildProcessWithoutNullStreams;
 
   let stdoutBuffer = "";

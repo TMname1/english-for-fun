@@ -12,7 +12,7 @@ export interface PackForm {
   title: string;
   description: string;
   cover: string;
-  /** 配套视频：站内路径（/course-video/xxx.mp4）或外部 URL，可为空串 */
+  /** 配套视频：对象键（course-video/xxx.mp4）或外部 URL，可为空串 */
   video: string;
 }
 

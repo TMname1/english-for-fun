@@ -15,14 +15,17 @@ import { attachVideoContainer, setVideoControls } from "~/composables/main/engli
 import { useCourseStore } from "~/store/course";
 
 /**
- * 课程配套视频播放器：video 为站内路径（/course-video/...）时渲染，
+ * 课程配套视频播放器：video 为对象存储预签名 URL（非外部链接）时渲染，
  * 播放由 englishSound/video.ts 按 statement 时间戳驱动（seek 区间播放）；
  * 外部链接（bilibili 等旧数据）仍走 StudyVideoLink 外链。
  */
 const courseStore = useCourseStore();
 const container = ref<HTMLElement>();
 
-const isInternalVideo = computed(() => (courseStore.currentLearning?.video ?? "").startsWith("/"));
+const isInternalVideo = computed(() => {
+  const pack = courseStore.currentLearning;
+  return Boolean(pack?.video) && !pack?.videoIsExternal;
+});
 
 function attach() {
   attachVideoContainer(container.value ?? null);

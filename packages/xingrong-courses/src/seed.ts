@@ -1,8 +1,22 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { db } from "@earthworm/db";
-import { coursePack, statement as statementSchema } from "@earthworm/schema";
+import dotenv from "dotenv";
+import { drizzle } from "drizzle-orm/postgres-js";
+import postgres from "postgres";
+
+import { coursePack, schemas, statement as statementSchema } from "@earthworm/schema";
+
+// 与 apps/api 的 ConfigModule 一致：按 NODE_ENV 选择 env 文件
+const envFiles: Record<string, string> = { prod: ".env.prod", test: ".env.test" };
+dotenv.config({
+  path: path.resolve(
+    __dirname,
+    "../../../apps/api",
+    envFiles[process.env.NODE_ENV ?? ""] ?? ".env",
+  ),
+});
+const db = drizzle(postgres(process.env.DATABASE_URL ?? ""), { schema: schemas });
 
 type Statement = typeof statementSchema.$inferInsert;
 

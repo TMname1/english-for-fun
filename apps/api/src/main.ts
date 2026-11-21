@@ -11,7 +11,13 @@ async function bootstrap() {
   // useBodyParser 在运行时的 NestApplication 上存在，但当前版本 INestApplication 接口未声明，故按具体类断言。
   (app as NestApplication).useBodyParser("json", { limit: "10mb" });
   app.enableCors({
-    origin: [/^http:\/\/localhost(:\d+)?$/, /^http:\/\/earthworm\.cuixueshe\.com(:81)?$/],
+    origin: [
+      /^http:\/\/localhost(:\d+)?$/,
+      /^http:\/\/earthworm\.cuixueshe\.com(:81)?$/,
+      /^https:\/\/bananablog\.cc$/,
+      /^https:\/\/([\w-]+?\.)?english-for-fun-d7h\.pages\.dev$/,
+    ],
+    credentials: true,
   });
 
   appGlobalMiddleware(app);

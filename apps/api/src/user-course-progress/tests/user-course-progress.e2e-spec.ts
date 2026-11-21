@@ -2,11 +2,11 @@ import { INestApplication } from "@nestjs/common";
 import { Test, TestingModule } from "@nestjs/testing";
 import { createId } from "@paralleldrive/cuid2";
 import { eq } from "drizzle-orm";
-import * as request from "supertest";
+import request from "supertest";
 
 import { userCourseProgress } from "@earthworm/schema";
 import { insertCoursePack, insertUserCourseProgress } from "../../../test/fixture/db";
-import { cleanDB } from "../../../test/helper/utils";
+import { cleanDB, createAuthedAgent } from "../../../test/helper/utils";
 import { AppModule } from "../../app/app.module";
 import { appGlobalMiddleware } from "../../app/useGlobal";
 import { endDB } from "../../common/db";
@@ -15,6 +15,7 @@ import { DB, DbType } from "../../global/providers/db.provider";
 describe("user-progress e2e", () => {
   let app: INestApplication;
   let db: DbType;
+  let agent: ReturnType<typeof request.agent>;
 
   beforeAll(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
@@ -25,6 +26,7 @@ describe("user-progress e2e", () => {
     appGlobalMiddleware(app);
     db = moduleFixture.get<DbType>(DB);
     await app.init();
+    agent = await createAuthedAgent(app);
   });
 
   afterEach(async () => {
@@ -52,7 +54,7 @@ describe("user-progress e2e", () => {
     // 课程包被删除后遗留的孤儿进度，不应出现在返回结果里
     await insertUserCourseProgress(db, createId(), 3);
 
-    await request(app.getHttpServer())
+    await agent
       .get("/user-course-progress/recent-course-packs")
       .expect(200)
       .expect(({ body }) => {
@@ -77,14 +79,14 @@ describe("user-progress e2e", () => {
       await insertUserCourseProgress(db, pack.id, order);
     }
 
-    await request(app.getHttpServer())
+    await agent
       .get("/user-course-progress/recent-course-packs?limit=100")
       .expect(200)
       .expect(({ body }) => {
         expect(body.length).toBe(3);
       });
 
-    await request(app.getHttpServer())
+    await agent
       .get("/user-course-progress/recent-course-packs?limit=abc")
       .expect(200)
       .expect(({ body }) => {
@@ -95,7 +97,7 @@ describe("user-progress e2e", () => {
   it("put: /user-course-progress", async () => {
     const { id: coursePackId } = await insertCoursePack(db);
 
-    await request(app.getHttpServer())
+    await agent
       .put("/user-course-progress")
       .send({
         coursePackId,

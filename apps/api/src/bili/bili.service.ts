@@ -1,14 +1,19 @@
 import { randomUUID } from "node:crypto";
 import { rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { BadRequestException, Injectable, Logger, NotFoundException } from "@nestjs/common";
+import { BadRequestException, Inject, Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { toDataURL } from "qrcode";
 
+import type { DbType } from "../global/providers/db.provider";
 import type { BiliInfo, BiliLoginStatus, BiliPollResult } from "./bilidown-bridge";
+import type { BilidownCore } from "./bilidown-bridge";
 import type { DownloadBiliDto } from "./dto/download-bili.dto";
 import { ForgeService } from "../forge/forge.service";
-import { COURSE_VIDEO_DIR } from "../forge/runner-client";
+import { DB } from "../global/providers/db.provider";
+import { StorageService } from "../storage/storage.service";
+import { createDbCookieStore } from "./bili-cookie.store";
 import { getBilidownCore } from "./bilidown-bridge";
 
 type DownloadStatus = "running" | "done" | "failed" | "cancelled";
@@ -55,16 +60,32 @@ export class BiliService {
     { jar: Record<string, string>; createdAt: number }
   >();
 
-  constructor(private readonly forgeService: ForgeService) {}
+  constructor(
+    @Inject(DB) private readonly db: DbType,
+    private readonly forgeService: ForgeService,
+    private readonly storage: StorageService,
+  ) {}
+
+  /** 内核为单例；首次取用时把数据库 cookie store 注入进去，之后所有读写走 bili_cookie 表。 */
+  private corePromise: Promise<BilidownCore> | null = null;
+  private core(): Promise<BilidownCore> {
+    if (!this.corePromise) {
+      this.corePromise = getBilidownCore().then((c) => {
+        c.configureCookieStore(createDbCookieStore(this.db));
+        return c;
+      });
+    }
+    return this.corePromise;
+  }
 
   async loginStatus(): Promise<BiliLoginStatus> {
-    const core = await getBilidownCore();
+    const core = await this.core();
     return core.getLoginStatus();
   }
 
   /** 生成登录二维码：返回可直接放进 <img> 的 data URL 与轮询 key */
   async loginStart(): Promise<{ key: string; qrDataUrl: string }> {
-    const core = await getBilidownCore();
+    const core = await this.core();
     const { url, qrcodeKey, jar } = await core.createLoginQrcode();
     this.pendingLogins.set(qrcodeKey, { jar, createdAt: Date.now() });
     const qrDataUrl = await toDataURL(url, { width: 240, margin: 1 });
@@ -72,14 +93,12 @@ export class BiliService {
   }
 
   /** 轮询登录状态；成功时由内核落盘 cookie 并返回账号信息 */
-  async loginPoll(
-    key: string,
-  ): Promise<{
+  async loginPoll(key: string): Promise<{
     status: "pending" | "scanned" | "expired" | "success";
     uname?: string;
     vipStatus?: boolean;
   }> {
-    const core = await getBilidownCore();
+    const core = await this.core();
     const session = this.pendingLogins.get(key);
     if (!session) throw new NotFoundException("登录会话已失效，请重新获取二维码");
     const r: BiliPollResult = await core.pollLogin(key, session.jar);
@@ -96,7 +115,7 @@ export class BiliService {
 
   async info(url: string): Promise<BiliInfo> {
     if (!url?.trim()) throw new BadRequestException("请输入 B 站视频链接或 BV 号");
-    const core = await getBilidownCore();
+    const core = await this.core();
     return core.getInfo(url);
   }
 
@@ -137,14 +156,18 @@ export class BiliService {
     signal: AbortSignal,
   ): Promise<void> {
     const record = this.downloads.get(id)!;
+    // ffmpeg 混流必须操作本地文件：先落到临时目录，成品上传对象存储后清理
+    const workDir = join(tmpdir(), "earthworm-bili", id);
+    const videoKey = `course-video/${fileName}`;
+    let uploaded = false;
     try {
-      const core = await getBilidownCore();
+      const core = await this.core();
       await core.download({
         input: dto.url,
         p: dto.p,
         qn: dto.qn,
         noCookie: dto.noCookie,
-        outDir: COURSE_VIDEO_DIR,
+        outDir: workDir,
         outName: fileName,
         signal,
         onStage: (stage) => {
@@ -158,7 +181,10 @@ export class BiliService {
         onLog: (msg, level) => this.logger[level === "warn" ? "warn" : "log"](msg),
       });
 
-      const { jobId } = this.forgeService.createJobFromLocalVideo({
+      await this.storage.uploadFile(videoKey, join(workDir, fileName));
+      uploaded = true;
+
+      const { jobId } = this.forgeService.createJobFromUploadedVideo({
         fileName,
         title: dto.title,
         type: dto.type,
@@ -169,14 +195,17 @@ export class BiliService {
       record.phase = PHASE_LABEL.done;
       record.percent = 1;
       record.jobId = jobId;
-      record.videoPath = `/course-video/${fileName}`;
+      record.videoPath = await this.storage.presignGet(videoKey);
       record.finishedAt = Date.now();
     } catch (error) {
-      // 清理可能写了一半的成品文件；.tmp 中间文件由内核按名清理
-      await rm(join(COURSE_VIDEO_DIR, fileName), { force: true }).catch(() => {});
+      if (uploaded) {
+        await this.storage.deleteObject(videoKey).catch(() => {});
+      }
       record.status = signal.aborted ? "cancelled" : "failed";
       record.error = error instanceof Error ? error.message : String(error);
       record.finishedAt = Date.now();
+    } finally {
+      await rm(workDir, { recursive: true, force: true }).catch(() => {});
     }
   }
 

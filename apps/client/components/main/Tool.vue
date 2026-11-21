@@ -19,7 +19,10 @@
           {{ currentCourseInfo }}
         </UTooltip>
       </div>
-      <MainStudyVideoLink :video="courseStore.currentLearning?.video" />
+      <MainStudyVideoLink
+        :video="courseStore.currentLearning?.video"
+        :is-external="courseStore.currentLearning?.videoIsExternal"
+      />
     </div>
 
     <div class="flex items-center gap-4">

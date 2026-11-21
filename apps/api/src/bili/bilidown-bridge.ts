@@ -1,17 +1,4 @@
-import { join } from "node:path";
-import { pathToFileURL } from "node:url";
-
-import { REPO_ROOT } from "../forge/runner-client";
-
-/**
- * 动态加载 packages/bilidown 的 ESM 内核。
- * nest build 产物是 commonjs，静态 import 会被 tsc 转成 require 而无法加载 type:module 的 ESM；
- * 这里用运行时真·动态 import（new Function 绕过 tsc 的 import() → require 降级）。
- */
-const CORE_URL = pathToFileURL(join(REPO_ROOT, "packages", "bilidown", "src", "core.js")).href;
-const dynamicImport = new Function("s", "return import(s)") as unknown as (
-  s: string,
-) => Promise<BilidownCore>;
+import * as core from "./bilidown/core";
 
 export interface BiliLoginStatus {
   isLogin: boolean;
@@ -66,7 +53,14 @@ export interface BiliDownloadOptions {
   onLog?: (message: string, level?: string) => void;
 }
 
+/** 内核可注入的异步 cookie 存储：服务端用数据库实现并加载入。 */
+export interface CookieStore {
+  load(): Promise<Record<string, string>>;
+  save(jar: Record<string, string>): Promise<void>;
+}
+
 export interface BilidownCore {
+  configureCookieStore(store: CookieStore): void;
   getLoginStatus(): Promise<BiliLoginStatus>;
   createLoginQrcode(): Promise<BiliQrcode>;
   pollLogin(qrcodeKey: string, jar: Record<string, string>): Promise<BiliPollResult>;
@@ -75,9 +69,6 @@ export interface BilidownCore {
   parseBvid(input: string): string;
 }
 
-let corePromise: Promise<BilidownCore> | null = null;
-
 export function getBilidownCore(): Promise<BilidownCore> {
-  if (!corePromise) corePromise = dynamicImport(CORE_URL);
-  return corePromise;
+  return Promise.resolve(core as unknown as BilidownCore);
 }

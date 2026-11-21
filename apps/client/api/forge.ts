@@ -79,8 +79,10 @@ export interface ForgeJobView {
   error?: string;
   elapsedMs: number;
   outDir: string;
-  /** 视频在服务器静态目录的站内 URL，如 /course-video/xxx.mp4 */
+  /** 视频预签名 URL（对象存储直连，会过期），仅供预览播放 */
   videoPath: string;
+  /** 视频对象键，入库时填到 course_packs.video */
+  videoKey: string;
   title: string;
   type: "dialogue" | "music";
   language?: string;
@@ -109,7 +111,7 @@ export interface UploadForgeJobParams {
  */
 function forgeFetch(): $Fetch {
   const config = useRuntimeConfig();
-  return ofetch.create({ baseURL: config.public.apiBase as string });
+  return ofetch.create({ baseURL: config.public.apiBase as string, credentials: "include" });
 }
 
 export async function uploadForgeJob(params: UploadForgeJobParams): Promise<{ jobId: string }> {
