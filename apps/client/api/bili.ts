@@ -39,7 +39,6 @@ export interface BiliDownloadParams {
   type: "dialogue" | "music";
   p?: number;
   qn?: string;
-  noCookie?: boolean;
   language?: string;
   desc?: string;
 }

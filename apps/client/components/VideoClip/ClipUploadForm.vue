@@ -188,14 +188,6 @@
             </option>
           </select>
         </div>
-        <label class="flex items-center gap-2 pb-2 text-sm">
-          <input
-            v-model="params.noCookie"
-            type="checkbox"
-            class="checkbox checkbox-sm"
-          />
-          <span>不带 Cookie（--no-cookie）</span>
-        </label>
       </div>
 
       <div
@@ -359,7 +351,6 @@ const info = ref<BiliInfo | null>(null);
 const params = reactive({
   p: 1,
   qn: "1080",
-  noCookie: false,
 });
 
 const login = ref<BiliLoginStatus | null>(null);
@@ -520,7 +511,6 @@ async function beginDownload() {
       type: form.type,
       p: params.p,
       qn: params.qn || undefined,
-      noCookie: params.noCookie,
       language: form.language,
       desc: form.desc.trim() || undefined,
     });
