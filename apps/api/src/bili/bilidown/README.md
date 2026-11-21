@@ -53,6 +53,8 @@
 | `-h` / `--help` | 开关（无值）        | —                                                       | 打印内置帮助文本。                                                                                                                        |
 
 > 服务端下载自动携带 `bili_cookie` 表中的 cookie：已登录即带 cookie（解锁高清/大会员），未登录则不带（仅低画质）。
+>
+> `nav` / `view` / `playurl` 一律带访客指纹 `buvid3`（`lib/http.js` 的 `withBuvid3`，值取自 `x/frontend/finger/spi` 并进程内缓存）：服务器所在机房 IP 不带它会被 B 站风控成 HTTP 412，家宽 IP 则不会，所以只在云端复现。
 
 ### `--qn` 清晰度对照表
 
