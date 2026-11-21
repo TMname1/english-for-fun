@@ -7,7 +7,7 @@ Earthworm 的后端 API，基于 **NestJS 10 + Express + Drizzle ORM（Postgres�
 
 ```bash
 # 仓库根目录
-pnpm docker:start   # 起 Postgres（db / testdb）+ MinIO（自动建私有桶 earthworm）
+pnpm docker:start   # 起 Postgres（db）+ MinIO（自动建私有桶 earthworm）；testdb 不在此列，由 pnpm test 自动启停
 pnpm db:init        # 建表
 pnpm db:upload      # 首次：导入星荣课程
 pnpm dev:serve      # 启动后端（watch 模式，自动先构建 schema / storage / game-data-sdk）
@@ -107,7 +107,10 @@ ffmpeg/ASR 必需的临时文件在 `os.tmpdir()/earthworm-*` 下，阶段结束
 
 ## 测试
 
-需要 testdb 在跑，且 `.env.test` 配置正确（可复制 `.env.test.example`）：
+`pnpm test`（本地）会自动启停 testdb：`docker-compose --profile test up -d --wait testdb` →
+`pnpm db:init:test` 建表 → 跑 unit + e2e → 无论成败 `stop testdb`；CI 上 testdb 由 Actions service 提供，脚本自动跳过启停。
+`pnpm docker:start` 不再启动 testdb（它带了 `profiles: ["test"]`，只归测试脚本管）。
+单独跑 `test:unit` / `test:e2e` 不经过上述流程，需自己保证 testdb 在跑且 `.env.test` 配置正确（可复制 `.env.test.example`）：
 
 ```bash
 cd apps/api
