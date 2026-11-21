@@ -3,7 +3,14 @@ import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { BadRequestException, Inject, Injectable, Logger, NotFoundException } from "@nestjs/common";
+import {
+  BadGatewayException,
+  BadRequestException,
+  Inject,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from "@nestjs/common";
 import { toDataURL } from "qrcode";
 
 import type { DbType } from "../global/providers/db.provider";
@@ -115,7 +122,18 @@ export class BiliService {
   async info(url: string): Promise<BiliInfo> {
     if (!url?.trim()) throw new BadRequestException("请输入 B 站视频链接或 BV 号");
     const core = await this.core();
-    return core.getInfo(url);
+    try {
+      return await core.getInfo(url);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      this.logger.warn(`解析 B 站视频信息失败：${msg}`);
+      // 内核抛的是普通 Error，不包装的话 Nest 一律兜底成 500，前端看不到真实原因
+      if (msg.includes("无法从")) throw new BadRequestException(msg);
+      if (msg.includes("HTTP 412")) {
+        throw new BadGatewayException("被 B 站风控拦截（HTTP 412），请稍后重试或重新扫码登录");
+      }
+      throw new BadGatewayException(`解析失败：${msg}`);
+    }
   }
 
   /** 启动一次后台下载，立即返回 downloadId；完成后建 defer 流水线任务 */

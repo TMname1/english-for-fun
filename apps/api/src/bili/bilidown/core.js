@@ -105,7 +105,8 @@ export async function pollLogin(qrcodeKey, jar) {
 /** 仅取视频信息（标题 + 分 P 列表），供前端展示可选 P */
 export async function getInfo(input) {
   const bvid = parseBvid(input);
-  const info = await view(bvid);
+  // 有登录态就一并带上；没有时 view 内部会补访客指纹，两者都没有才会被风控
+  const info = await view(bvid, cookieString(await cookieStore.load()));
   return {
     bvid,
     title: info.title,
@@ -137,7 +138,7 @@ export async function download(opts) {
   const cookieStr = cookieString(await cookieStore.load());
 
   stage("parse");
-  const info = await view(bvid);
+  const info = await view(bvid, cookieStr);
   const pages = info.pages;
   const pageIdx = Math.max(1, opts.p || 1) - 1;
   const page = pages[pageIdx] || pages[0];

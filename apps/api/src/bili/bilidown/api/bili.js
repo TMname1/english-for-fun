@@ -1,5 +1,5 @@
 // B 站核心接口：视频信息 + 取流。复刻渲染层 app.js 里的 view / playurl 调用。
-import { biliHeaders, DEFAULT_TIMEOUT_MS, fetchJson } from "../lib/http.js";
+import { biliHeaders, DEFAULT_TIMEOUT_MS, fetchJson, withBuvid3 } from "../lib/http.js";
 import { extractWbiKeys, signWbi } from "../lib/wbi.js";
 
 const API = "https://api.bilibili.com";
@@ -8,14 +8,16 @@ const API = "https://api.bilibili.com";
 // 因此单独处理，不能用通用 fetchJson 把 -101 当错误抛出。
 export async function nav(cookieStr) {
   const res = await fetch(`${API}/x/web-interface/nav`, {
-    headers: biliHeaders(cookieStr ? { Cookie: cookieStr } : {}),
+    headers: biliHeaders({ Cookie: await withBuvid3(cookieStr) }),
     signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
   });
   return res.json();
 }
 
-export async function view(bvid) {
-  const json = await fetchJson(`${API}/x/web-interface/view?bvid=${bvid}`);
+export async function view(bvid, cookieStr = "") {
+  const json = await fetchJson(`${API}/x/web-interface/view?bvid=${bvid}`, {
+    headers: { Cookie: await withBuvid3(cookieStr) },
+  });
   const d = json.data;
   return {
     aid: d.aid,
@@ -36,7 +38,7 @@ export async function getPlayurl({ bvid, cid, qn = 127 }, wbiKeys, cookieStr) {
   const params = { bvid, cid, fnval: 4048, fourk: 1, fnver: 0, qn };
   const qs = signWbi(params, wbiKeys);
   const json = await fetchJson(`${API}/x/player/wbi/playurl?${qs}`, {
-    headers: cookieStr ? { Cookie: cookieStr } : {},
+    headers: { Cookie: await withBuvid3(cookieStr) },
   });
   return json.data; // 含 dash{video[],audio[]} 或 durl[]
 }
@@ -45,7 +47,7 @@ export async function getPlayurl({ bvid, cid, qn = 127 }, wbiKeys, cookieStr) {
 export async function getMp4Url({ aid, cid, qn = 64 }, cookieStr) {
   const url = `${API}/x/player/playurl?avid=${aid}&cid=${cid}&qn=${qn}&platform=html5&otype=json&high_quality=1`;
   const json = await fetchJson(url, {
-    headers: cookieStr ? { Cookie: cookieStr } : {},
+    headers: { Cookie: await withBuvid3(cookieStr) },
   });
   return json.data; // durl:[{url, size}]
 }
