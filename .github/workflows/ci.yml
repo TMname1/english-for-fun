@@ -53,8 +53,9 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build shared packages
-        # migrate 依赖 @earthworm/schema
-        run: pnpm schema:build
+        # api 测试依赖这些只出 dist 的 workspace 包：
+        # migrate 用 @earthworm/schema，storage/forge 用 @earthworm/storage 与 game-data-sdk
+        run: pnpm schema:build && pnpm storage:build && pnpm -F @earthworm/game-data-sdk build
 
       - name: Run database migrations
         run: pnpm -F api db:migrate
