@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  # 同一分支的旧运行自动取消，省 CI 额度
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# api 与 client 拆成两个独立 job：互不阻塞，单独显示红/绿
+jobs:
+  api:
+    name: API tests
+    runs-on: ubuntu-latest
+    # e2e 需要真实 Postgres，跑 migrate 建表后再测
+    services:
+      testdb:
+        image: postgres:14-alpine
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: earthworm_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U test -d earthworm_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      NODE_ENV: test
+      # 进程环境变量优先于 apps/api/.env.test（dotenv 不 override），
+      # 所以这里用 service 的 5432，本地 compose 的 5480 不受影响
+      DATABASE_URL: postgres://test:password@localhost:5432/earthworm_test
+      # 与 apps/api/.env.test 一致的测试固定值，非生产密钥，无需配 secret
+      SECRET: "sjldk92#sd903mnc./xklsjdf9sdfj"
+      AUTH_USERNAME: test
+      AUTH_PASSWORD: test-password
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.12.2
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build shared packages
+        # migrate 依赖 @earthworm/schema
+        run: pnpm schema:build
+
+      - name: Run database migrations
+        run: pnpm -F api db:migrate
+
+      - name: Run unit + e2e tests
+        run: pnpm -F api test
+
+  client:
+    name: Client tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.12.2
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # test:ci 会拉起 Nuxt dev server，再跑 vitest
+      - name: Run tests
+        run: pnpm -F client test:ci
