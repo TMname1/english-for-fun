@@ -59,8 +59,9 @@ pnpm deploy:serve
 7. **进入部署目录**：`cd /opt/earthworm`
 8. **拉取新镜像**：`docker compose pull`（按 `.env` 的新 `API_IMAGE` 拉本次 tag）
 9. **重启服务**：`docker compose up -d`（迁移随容器启动自动幂等执行）
+10. **清理服务器本地旧镜像**：删除同仓库前缀下除本次 tag 外的所有旧 tag，服务器本地只保留当前正在使用的这一个（正在运行的容器不受影响；清理失败也不会让部署判定为失败）。
 
-> 回滚：把 `scripts/.env.prod` 的 `IMAGE_TAG_PREFIX` / 或直接改服务器 `.env` 的 `API_IMAGE` 指回旧 tag，再单独在服务器 `docker compose pull && up -d`。因为每次 tag 唯一，旧镜像一直在 ACR 里。
+> 回滚：云端 ACR 仍保留全部历史 tag，把 `scripts/.env.prod` 的 `IMAGE_TAG_PREFIX` / 或直接改服务器 `.env` 的 `API_IMAGE` 指回旧 tag，再单独在服务器 `docker compose pull && up -d` 即可——即便该旧镜像已被第 10 步从服务器本地清掉，也会从云端重新拉取。
 
 ---
 
