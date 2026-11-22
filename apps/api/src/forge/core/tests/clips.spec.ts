@@ -30,14 +30,18 @@ describe("normalizeClips", () => {
     ).toEqual([{ start: 2, end: 6 }]);
   });
 
-  it("merges overlapping and adjacent clips", () => {
+  it("keeps adjacent and overlapping clips separate (no merge)", () => {
     expect(
       normalizeClips([
         { start: 0, end: 5 },
-        { start: 4, end: 8 },
-        { start: 8.02, end: 12 },
+        { start: 5, end: 8 },
+        { start: 7, end: 12 },
       ]),
-    ).toEqual([{ start: 0, end: 12 }]);
+    ).toEqual([
+      { start: 0, end: 5 },
+      { start: 5, end: 8 },
+      { start: 7, end: 12 },
+    ]);
   });
 
   it("clamps to duration and negatives", () => {
