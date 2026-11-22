@@ -26,6 +26,8 @@ pnpm deploy:client
 
 ## 二、后端：`pnpm deploy:serve`
 
+> 记得启动本地的docker环境，用于打镜像
+
 一条命令完成"本地构建镜像 → 推阿里云 ACR → 上传配置到服务器 → 服务器拉新镜像重启"。
 
 ```bash
