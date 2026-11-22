@@ -47,15 +47,29 @@ function log(msg: string): void {
   console.log(`\n\x1b[36m==>\x1b[0m ${msg}`);
 }
 
+/** 判断输出中是否包含 Docker 守护进程未启动的特征信息。 */
+function isDockerNotRunning(output: string): boolean {
+  return /error during connect|cannot connect to the Docker daemon|Is the docker daemon running|dockerDesktopLinuxEngine|The system cannot find the file specified|docker daemon/i.test(
+    output,
+  );
+}
+
 function run(cmd: string, args: string[]): void {
   log([cmd, ...args].join(" "));
   const result = spawnSync(cmd, args, {
     cwd: repoRoot,
-    stdio: "inherit",
+    stdio: "pipe",
+    encoding: "utf8",
     shell: process.platform === "win32",
   });
   if (result.status !== 0) {
-    throw new Error(`命令失败（退出码 ${result.status}）：${cmd} ${args.join(" ")}`);
+    const output = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
+    if (cmd === "docker" && isDockerNotRunning(output)) {
+      throw new Error(
+        `Docker 环境未就绪，请先启动本地 Docker Desktop（或 Docker 服务），确认 Docker 引擎正常运行后重试。\n原始错误：${output}`,
+      );
+    }
+    throw new Error(`命令失败（退出码 ${result.status}）：${cmd} ${args.join(" ")}\n${output}`);
   }
 }
 
@@ -208,7 +222,13 @@ async function main(): Promise<void> {
     { input: ACR_PASSWORD, encoding: "utf8", shell: process.platform === "win32" },
   );
   if (localLogin.status !== 0) {
-    throw new Error(`本地 docker login 失败：${localLogin.stderr || localLogin.stdout}`);
+    const output = [localLogin.stdout, localLogin.stderr].filter(Boolean).join("\n").trim();
+    if (isDockerNotRunning(output)) {
+      throw new Error(
+        `Docker 环境未就绪，请先启动本地 Docker Desktop（或 Docker 服务），确认 Docker 引擎正常运行后重试。\n原始错误：${output}`,
+      );
+    }
+    throw new Error(`本地 docker login 失败：${output}`);
   }
 
   // 4. 推送镜像
