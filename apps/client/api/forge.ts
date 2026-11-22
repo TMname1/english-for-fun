@@ -45,6 +45,32 @@ export interface ForgeTranscript {
   segments: ForgeTranscriptSegment[];
 }
 
+/** 单次结构化尝试的失败快照 */
+export interface ForgeSentenceAttempt {
+  reason: string;
+  statements?: ForgeJobCourseStatement[] | null;
+  raw?: string | null;
+}
+
+/** 一个句子在全部尝试后仍失败的记录 */
+export interface ForgeStructureFailure {
+  index: number;
+  sentence: string;
+  attempts: ForgeSentenceAttempt[];
+}
+
+/** 结构化进度快照：成功链 + 失败清单（needs_fix 状态返回） */
+export interface ForgeStructureProgress {
+  success: Array<{ index: number; statements: ForgeJobCourseStatement[] }>;
+  failures: ForgeStructureFailure[];
+}
+
+/** 前端对每个失败句的选择 */
+export interface ResolveForgeFailuresDecision {
+  index: number;
+  action: "delete" | "retry";
+}
+
 /** 校对续跑时回传的分段（被删除的段不包含） */
 export interface ResumeTranscriptSegment {
   id: number;
@@ -58,6 +84,7 @@ export type ForgeJobStatusValue =
   | "pending"
   | "running"
   | "awaiting_review"
+  | "needs_fix"
   | "done"
   | "failed"
   | "cancelled";
@@ -90,6 +117,8 @@ export interface ForgeJobView {
   /** status=awaiting_review 时附带：ASR 转录结果，供 word 级校对 */
   transcriptJson?: ForgeTranscript;
   courseJson?: ForgeJobCourseJson;
+  /** status=needs_fix 时附带：结构化成功链 + 失败清单 */
+  structureProgress?: ForgeStructureProgress;
   /** 视频切片流程：选中的时间区间（秒） */
   clips?: { start: number; end: number }[];
 }
@@ -161,6 +190,19 @@ export async function resumeForgeJob(
   return await $fetch<{ jobId: string }>(`/forge/jobs/${jobId}/resume`, {
     method: "post",
     body: { segments },
+    retry: 0,
+  });
+}
+
+/** 结构化失败句处理后：对每个失败句提交 delete/retry 决策并续跑 */
+export async function resolveForgeJob(
+  jobId: string,
+  decisions: ResolveForgeFailuresDecision[],
+): Promise<{ jobId: string }> {
+  const $fetch = forgeFetch();
+  return await $fetch<{ jobId: string }>(`/forge/jobs/${jobId}/resolve`, {
+    method: "post",
+    body: { decisions },
     retry: 0,
   });
 }

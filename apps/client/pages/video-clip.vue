@@ -107,6 +107,18 @@
       </div>
 
       <div
+        v-else-if="step === 'fix' && forge.job.value"
+        class="space-y-3"
+      >
+        <h3 class="text-lg font-semibold">处理未通过的句子</h3>
+        <ForgeStructureFix
+          :job="forge.job.value"
+          @resolve="handleResolveFailures"
+          @cancel="handleCancel"
+        />
+      </div>
+
+      <div
         v-else-if="step === 'failed'"
         class="space-y-4 py-4"
       >
@@ -134,16 +146,18 @@ import { navigateTo, useRuntimeConfig } from "#imports";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { toast } from "vue-sonner";
 
-import type { ResumeTranscriptSegment } from "~/api/forge";
+import type { ResolveForgeFailuresDecision, ResumeTranscriptSegment } from "~/api/forge";
 import type { ClipUploadPayload } from "~/components/VideoClip/ClipUploadForm.vue";
 import { createCoursePack } from "~/api/course-pack";
 import {
   cancelForgeJob,
   fetchForgeJob,
+  resolveForgeJob,
   resumeForgeJob,
   startForgeJob,
   uploadForgeJob,
 } from "~/api/forge";
+import ForgeStructureFix from "~/components/ForgeImport/ForgeStructureFix.vue";
 import ForgeTranscriptReview from "~/components/ForgeImport/ForgeTranscriptReview.vue";
 import ClipTimeline from "~/components/VideoClip/ClipTimeline.vue";
 import ClipToolbar from "~/components/VideoClip/ClipToolbar.vue";
@@ -154,7 +168,7 @@ import { validateClipSelection } from "~/composables/videoClip/clipMath";
 import { useClipEditor } from "~/composables/videoClip/useClipEditor";
 import { useClipPlayer } from "~/composables/videoClip/useClipPlayer";
 
-type Step = "upload" | "edit" | "working" | "review" | "failed";
+type Step = "upload" | "edit" | "working" | "review" | "fix" | "failed";
 
 const step = ref<Step>("upload");
 const uploading = ref(false);
@@ -192,6 +206,14 @@ watch(
   () => forge.isAwaitingReview.value,
   (awaiting) => {
     if (awaiting && step.value === "working") step.value = "review";
+  },
+);
+watch(
+  () => forge.isNeedsFix.value,
+  (needs) => {
+    if (needs && (step.value === "working" || step.value === "review")) {
+      step.value = "fix";
+    }
   },
 );
 watch(
@@ -286,6 +308,20 @@ function handleResume(segments: ResumeTranscriptSegment[]) {
   void (async () => {
     try {
       await resumeForgeJob(jobId.value!, segments);
+      forge.start(jobId.value!);
+    } catch (error) {
+      errorText.value = describeError(error);
+      step.value = "failed";
+    }
+  })();
+}
+
+function handleResolveFailures(decisions: ResolveForgeFailuresDecision[]) {
+  if (!jobId.value) return;
+  step.value = "working";
+  void (async () => {
+    try {
+      await resolveForgeJob(jobId.value!, decisions);
       forge.start(jobId.value!);
     } catch (error) {
       errorText.value = describeError(error);
