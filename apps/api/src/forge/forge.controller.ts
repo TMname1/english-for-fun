@@ -18,6 +18,7 @@ import { FileInterceptor } from "@nestjs/platform-express";
 import { diskStorage } from "multer";
 
 import { CreateForgeJobDto } from "./dto/create-forge-job.dto";
+import { ResolveForgeFailuresDto } from "./dto/resolve-forge-failures.dto";
 import { ResumeForgeJobDto } from "./dto/resume-forge-job.dto";
 import { StartForgeJobDto } from "./dto/start-forge-job.dto";
 import { ForgeService } from "./forge.service";
@@ -91,5 +92,11 @@ export class ForgeController {
   @Post("jobs/:id/resume")
   resumeJob(@Param("id") id: string, @Body() dto: ResumeForgeJobDto) {
     return this.forgeService.resumeJob(id, dto);
+  }
+
+  /** 结构化出现失败句后，前端对每个失败句选择「删除 / 重试」并续跑 */
+  @Post("jobs/:id/resolve")
+  resolveFailures(@Param("id") id: string, @Body() dto: ResolveForgeFailuresDto) {
+    return this.forgeService.resolveFailures(id, dto);
   }
 }

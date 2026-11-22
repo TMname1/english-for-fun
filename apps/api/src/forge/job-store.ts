@@ -6,6 +6,7 @@ export type ForgeJobStatus =
   | "pending"
   | "running"
   | "awaiting_review"
+  | "needs_fix"
   | "done"
   | "failed"
   | "cancelled";

@@ -68,6 +68,11 @@ describe("containsFullSentence", () => {
     expect(containsFullSentence(chain(["I", "like", "the food"]), "I like the food.")).toBe(false);
   });
 
+  it("首字母/单个字母词需逐字保留：Bye V 匹配，V 被展开为 victory 则失配", () => {
+    expect(containsFullSentence(chain(["Bye", "V", "Bye V"]), "Bye, V.")).toBe(true);
+    expect(containsFullSentence(chain(["Bye", "victory", "Bye victory"]), "Bye, V.")).toBe(false);
+  });
+
   it("空原句不存在", () => {
     expect(containsFullSentence(chain(["I"]), "   ")).toBe(false);
   });

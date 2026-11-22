@@ -1,6 +1,12 @@
 import { z } from "zod";
 
-import type { DraftCourse, DraftStatement, Transcript } from "./types";
+import type {
+  DraftCourse,
+  DraftStatement,
+  SentenceAttempt,
+  SentenceFailure,
+  Transcript,
+} from "./types";
 import { normalizeToken } from "./align";
 import { config } from "./config";
 import { buildMessages } from "./prompt";
@@ -436,6 +442,31 @@ export function containsFullSentence(statements: DraftStatement[], sentence: str
   return statements.some((s) => tokenSequence(s.english) === target);
 }
 
+/** 把未知结构安全转为字符串，用于失败快照里的 raw 展示 */
+function stringifyUnknown(value: unknown): string {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+/**
+ * 单句「内容校验」失败（可恢复）：结构不合法 / english 去标点后为空 / 完整原句缺失。
+ * 与网络、超时、审核等致命错误区分开；调用方据此收集为可人工处理的失败项，
+ * 而非让整条流水线直接中止。
+ */
+export class SentenceContentError extends Error {
+  constructor(
+    message: string,
+    readonly statements?: DraftStatement[],
+    readonly raw?: unknown,
+  ) {
+    super(message);
+    this.name = "SentenceContentError";
+  }
+}
+
 /** 单句组装链失败时的最大尝试次数（含首次） */
 const LLM_ATTEMPTS_PER_SENTENCE = 2;
 
@@ -448,11 +479,13 @@ async function generateChainForSentence(
   const raw = await callLlmJson(buildMessages(sentence, note) as ChatMessage[]);
   const parsed = draftSchema.safeParse(coerceCourseOutput(raw));
   if (!parsed.success) {
-    throw new Error(
+    throw new SentenceContentError(
       `[llm] 输出结构校验失败（${label}）：${parsed.error.issues
         .slice(0, 5)
         .map((i) => `${i.path.join(".")}: ${i.message}`)
         .join("; ")}`,
+      undefined,
+      raw,
     );
   }
   // api 的 strictNullChecks=false 会让 zod 把必填字段推断成可选；运行时已由 safeParse 校验
@@ -466,60 +499,114 @@ async function generateChainForSentence(
     );
   }
   if (emptyIndexes.length > 0) {
-    throw new Error(
+    throw new SentenceContentError(
       `[llm] 输出结构校验失败（${label}）：第 ${emptyIndexes.join(", ")} 行 english 去掉标点后为空`,
+      statements,
     );
   }
   if (!containsFullSentence(statements, sentence)) {
-    throw new Error(
+    throw new SentenceContentError(
       `[llm] 完整原句缺失（${label}）：输出里没有逐字等于「${sentence}」的行（可能被丢弃、漏词或把缩写展开如 don't→do not）`,
+      statements,
     );
   }
   return statements;
 }
 
+type SentenceOutcome =
+  | { kind: "chain"; index: number; statements: DraftStatement[] }
+  | { kind: "failure"; index: number; failure: SentenceFailure }
+  | { kind: "empty"; index: number };
+
 /**
- * 生成课程包内唯一的课程：一句一调用，多个句子并发处理（并发数 config.llmConcurrency）。
- * 预处理已把转写拆成完整句（一个 segment 即一句），这里直接逐句生成组装链，
- * 按原句顺序拼接成单一课程；标题用课程包标题。
- * 任一句子在重试后仍失败（结构不合法 / 完整原句缺失）则整体中止抛错——绝不让某一句被悄悄丢弃。
+ * 结构化收集模式：逐句生成，内容校验失败不中止整体，而是收集为失败清单，
+ * 供 needs_fix 后的人工「删除 / 重试」续跑。致命错误（网络/超时/审核等）仍直接抛出。
+ * 按 transcript.segments 的原数组下标迭代（不过滤空句），保证 index 与段落一一对应。
+ */
+export async function generateDraftCollected(
+  transcript: Transcript,
+  onlyIndexes?: number[],
+): Promise<{
+  chains: Array<{ index: number; statements: DraftStatement[] }>;
+  failures: SentenceFailure[];
+}> {
+  const total = transcript.segments.length;
+  const targetSet = new Set(onlyIndexes ?? transcript.segments.map((_, i) => i));
+  const jobs = transcript.segments
+    .map((seg, index) => ({ index, sentence: seg.text.trim() }))
+    .filter((j) => targetSet.has(j.index));
+
+  const limit = config.llmConcurrency;
+  console.log(
+    `[llm] 收集模式：${jobs.length} 个句子，一句一调用，并发 ${limit}（模型 ${config.llmModel}）...`,
+  );
+
+  const results = await mapWithConcurrency(jobs, limit, async (job): Promise<SentenceOutcome> => {
+    const label = `句 ${job.index + 1}/${total}`;
+    if (!job.sentence) {
+      return { kind: "empty", index: job.index };
+    }
+    const attempts: SentenceAttempt[] = [];
+    let lastContentError: SentenceContentError | null = null;
+    for (let attempt = 1; attempt <= LLM_ATTEMPTS_PER_SENTENCE; attempt++) {
+      try {
+        const note =
+          attempt > 1 && lastContentError
+            ? `上一次输出不合格：${lastContentError.message}。请修正上述问题重新输出，并确保有一行 english 恰好是这句的全部词（保留缩写、不增删换词）：${job.sentence}`
+            : undefined;
+        const chain = await generateChainForSentence(job.sentence, label, note);
+        if (job.index === 0 || (job.index + 1) % 10 === 0) {
+          console.log(`[llm] ${label} 完成（${chain.length} 行）`);
+        }
+        return { kind: "chain", index: job.index, statements: chain };
+      } catch (error) {
+        if (error instanceof SentenceContentError) {
+          attempts.push({
+            reason: error.message,
+            statements: error.statements ?? null,
+            raw: error.raw != null ? stringifyUnknown(error.raw) : null,
+          });
+          lastContentError = error;
+          if (attempt < LLM_ATTEMPTS_PER_SENTENCE) {
+            console.warn(`[llm] ${label} 失败，重试一次：${error.message}`);
+          }
+          continue;
+        }
+        throw error;
+      }
+    }
+    return {
+      kind: "failure",
+      index: job.index,
+      failure: { index: job.index, sentence: job.sentence, attempts },
+    };
+  });
+
+  const chains: Array<{ index: number; statements: DraftStatement[] }> = [];
+  const failures: SentenceFailure[] = [];
+  for (const r of results) {
+    if (r.kind === "chain") chains.push({ index: r.index, statements: r.statements });
+    else if (r.kind === "failure") failures.push(r.failure);
+  }
+  return { chains, failures };
+}
+
+/**
+ * CLI/本地严格路径：任一句失败即整体抛错（兼容 forgeMake）。
+ * 仅线上 GUI（pipeline-runner）走 generateDraftCollected 做可恢复处理。
  */
 export async function generateDraft(
   transcript: Transcript,
   packTitle: string,
 ): Promise<DraftCourse> {
-  const sentences = transcript.segments.map((seg) => seg.text.trim()).filter(Boolean);
-  const limit = config.llmConcurrency;
-  console.log(
-    `[llm] ${sentences.length} 个句子，一句一调用，并发 ${limit}（模型 ${config.llmModel}）...`,
-  );
-
-  const chains = await mapWithConcurrency(sentences, limit, async (sentence, index) => {
-    const label = `句 ${index + 1}/${sentences.length}`;
-    let lastError: unknown;
-    for (let attempt = 1; attempt <= LLM_ATTEMPTS_PER_SENTENCE; attempt++) {
-      try {
-        const note =
-          attempt > 1
-            ? `上一次输出不合格：${(lastError as Error).message}。请修正上述问题重新输出，并确保有一行 english 恰好是这句的全部词（保留缩写、不增删换词）：${sentence}`
-            : undefined;
-        const chain = await generateChainForSentence(sentence, label, note);
-        if (index === 0 || (index + 1) % 10 === 0) {
-          console.log(`[llm] ${label} 完成（${chain.length} 行）`);
-        }
-        return chain;
-      } catch (error) {
-        lastError = error;
-        if (attempt < LLM_ATTEMPTS_PER_SENTENCE) {
-          console.warn(`[llm] ${label} 失败，重试一次：${(error as Error).message}`);
-        }
-      }
-    }
+  const { chains, failures } = await generateDraftCollected(transcript);
+  if (failures.length > 0) {
+    const first = failures[0];
+    const last = first.attempts[first.attempts.length - 1];
     throw new Error(
-      `[llm] ${label} 最终失败（已尝试 ${LLM_ATTEMPTS_PER_SENTENCE} 次）：${(lastError as Error).message}`,
+      `[llm] 句 ${first.index + 1}/${transcript.segments.length} 最终失败（已尝试 ${LLM_ATTEMPTS_PER_SENTENCE} 次）：${last?.reason ?? "未知原因"}`,
     );
-  });
-
-  const statements = chains.flat();
+  }
+  const statements = chains.flatMap((c) => c.statements);
   return { title: packTitle, description: "", statements };
 }

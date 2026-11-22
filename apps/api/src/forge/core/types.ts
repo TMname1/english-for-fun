@@ -52,6 +52,34 @@ export interface DraftCourse {
   statements: DraftStatement[];
 }
 
+/** 单次结构化尝试的失败快照：reason 为校验失败原因，statements/raw 用于前端展示模型输出 */
+export interface SentenceAttempt {
+  reason: string;
+  statements?: DraftStatement[] | null;
+  raw?: string | null;
+}
+
+/** 一个句子在全部尝试后仍失败的「可恢复」失败记录 */
+export interface SentenceFailure {
+  /** 在 transcript.segments 中的原数组下标 */
+  index: number;
+  /** 要求的完整原句 */
+  sentence: string;
+  attempts: SentenceAttempt[];
+}
+
+/** 结构化进度快照：成功链 + 失败清单，用于 needs_fix 后的 resolve 续跑 */
+export interface StructureProgress {
+  success: Array<{ index: number; statements: DraftStatement[] }>;
+  failures: SentenceFailure[];
+}
+
+/** 前端对每个失败句的选择 */
+export interface ResolveDecision {
+  index: number;
+  action: "delete" | "retry";
+}
+
 /** 最终课程包 JSON（文本课程；音频字段由后续流程填充，流水线不产出） */
 export interface ForgeCourse {
   title: string;

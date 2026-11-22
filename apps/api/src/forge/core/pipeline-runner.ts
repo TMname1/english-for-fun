@@ -7,12 +7,15 @@
  *   stdout 仅写 JSON Lines（每行一个事件），父进程按 \n 切片解析
  *     { event: "stage", stage: "transcoding" | "transcribing" | "structuring" | "aligning" | "done" }
  *     { event: "done",  outDir: "<绝对路径>" }
+ *     { event: "needs_fix", outDir: "<绝对路径>" }
  *     { event: "error", message: "<错误>" }
  *   forgeMake 内部的 console.log/warn/error 一律劫持到 stderr，避免污染事件流。
  *
  * 环境变量：
- *   FORGE_PHASE       transcribe | structure（必填）：transcribe 跑「提取音轨 + ASR 转写」后暂停；
- *                     structure 读 outDir 下（人工编辑过的）transcript.json 续跑「结构化 + 对齐」
+ *   FORGE_PHASE       transcribe | structure | structure-resolve（必填）：
+ *                     transcribe 跑「提取音轨 + ASR 转写」后暂停；
+ *                     structure 读 outDir 下（人工编辑过的）transcript.json 续跑「结构化 + 对齐」；
+ *                     structure-resolve 读进度快照与 resolve 决策，只重跑 retry 句后合并收尾
  *   FORGE_MEDIA_PATH  视频/音频绝对路径（transcribe 阶段必填）
  *   FORGE_TITLE       课程包标题（transcribe 阶段必填）
  *   FORGE_TYPE        dialogue | music（transcribe 阶段必填）
@@ -26,7 +29,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import type { ClipRange } from "./types";
-import { forgeFromTranscript, forgeTranscribe } from "./forge";
+import { forgeStructureInteractive, forgeStructureResolve, forgeTranscribe } from "./forge";
 import { normalizeEditedTranscript } from "./transcript-edit";
 
 console.log = (...args: unknown[]) => {
@@ -50,11 +53,12 @@ function requireEnv(key: string): string {
 }
 
 async function main(): Promise<void> {
-  const phase = process.env.FORGE_PHASE === "structure" ? "structure" : "transcribe";
+  const phaseRaw = process.env.FORGE_PHASE ?? "transcribe";
+  const phase =
+    phaseRaw === "structure" || phaseRaw === "structure-resolve" ? phaseRaw : "transcribe";
   const outDir = requireEnv("FORGE_OUT_DIR");
 
   try {
-    let finalDir: string;
     if (phase === "structure") {
       // 读取前端回传的 word 级编辑结果，规整回 Transcript（重算 text/wordLevel、移除被删段），
       // 覆盖 transcript.json 后续跑结构化 + 对齐。
@@ -70,10 +74,17 @@ async function main(): Promise<void> {
         `${JSON.stringify(transcript, null, 2)}\n`,
         "utf-8",
       );
-      finalDir = await forgeFromTranscript({
+      const result = await forgeStructureInteractive({
         outDir,
         onStage: (stage) => emit({ event: "stage", stage }),
       });
+      emit(result.needsFix ? { event: "needs_fix", outDir } : { event: "done", outDir });
+    } else if (phase === "structure-resolve") {
+      const result = await forgeStructureResolve({
+        outDir,
+        onStage: (stage) => emit({ event: "stage", stage }),
+      });
+      emit(result.needsFix ? { event: "needs_fix", outDir } : { event: "done", outDir });
     } else {
       const type = requireEnv("FORGE_TYPE");
       if (type !== "dialogue" && type !== "music") {
@@ -90,7 +101,7 @@ async function main(): Promise<void> {
         }
         clips = parsed;
       }
-      finalDir = await forgeTranscribe({
+      const finalDir = await forgeTranscribe({
         mediaPath: requireEnv("FORGE_MEDIA_PATH"),
         title: requireEnv("FORGE_TITLE"),
         type,
@@ -100,8 +111,8 @@ async function main(): Promise<void> {
         clips,
         onStage: (stage) => emit({ event: "stage", stage }),
       });
+      emit({ event: "done", outDir: finalDir });
     }
-    emit({ event: "done", outDir: finalDir });
     process.exit(0);
   } catch (error) {
     emit({ event: "error", message: error instanceof Error ? error.message : String(error) });

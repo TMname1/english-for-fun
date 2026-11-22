@@ -14,8 +14,8 @@ const RUNNER_ENTRY = join(__dirname, "core", "pipeline-runner.js");
 export const FORGE_OUTPUT_ROOT = join(tmpdir(), "earthworm-forge");
 
 export interface ForgeRunnerParams {
-  /** transcribe：跑「提取音轨 + ASR 转写」后暂停；structure：读 outDir 下编辑过的 transcript 续跑 */
-  phase: "transcribe" | "structure";
+  /** transcribe：跑「提取音轨 + ASR 转写」后暂停；structure：读 outDir 下编辑过的 transcript 续跑；structure-resolve：按人工决策重试/删除失败句后续跑 */
+  phase: "transcribe" | "structure" | "structure-resolve";
   /** transcribe 阶段必填；structure 阶段不需要 */
   mediaPath?: string;
   title?: string;
@@ -30,6 +30,7 @@ export interface ForgeRunnerParams {
 export interface ForgeRunnerEvents {
   onStage: (stage: ForgeJobStage) => void;
   onDone: (outDir: string) => void;
+  onNeedsFix: (outDir: string) => void;
   onError: (message: string) => void;
 }
 
@@ -40,7 +41,7 @@ export interface ForgeRunnerHandle {
 }
 
 interface RunnerEventPayload {
-  event?: "stage" | "done" | "error";
+  event?: "stage" | "done" | "needs_fix" | "error";
   stage?: ForgeJobStage;
   outDir?: string;
   message?: string;
@@ -134,6 +135,9 @@ function handleStdoutLine(line: string, events: ForgeRunnerEvents): void {
       break;
     case "done":
       if (payload.outDir) events.onDone(payload.outDir);
+      break;
+    case "needs_fix":
+      if (payload.outDir) events.onNeedsFix(payload.outDir);
       break;
     case "error":
       events.onError(payload.message ?? "流水线报错");

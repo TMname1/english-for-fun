@@ -4,7 +4,9 @@ import { extname, join } from "node:path";
 
 import { BadRequestException, Injectable, Logger, NotFoundException } from "@nestjs/common";
 
+import type { StructureProgress } from "./core/types";
 import type { CreateForgeJobDto } from "./dto/create-forge-job.dto";
+import type { ResolveForgeFailuresDto } from "./dto/resolve-forge-failures.dto";
 import type { ResumeForgeJobDto } from "./dto/resume-forge-job.dto";
 import type { StartForgeJobDto } from "./dto/start-forge-job.dto";
 import type { ForgeJobRecord, ForgeJobStage } from "./job-store";
@@ -26,6 +28,7 @@ const ARTIFACT_FILES = [
   "clips.json",
   "alignment.json",
   "course.json",
+  "structure.progress.json",
 ];
 
 export interface ForgeJobView {
@@ -48,6 +51,8 @@ export interface ForgeJobView {
   transcriptJson?: unknown;
   /** status=done 时附带，结构同 course.json（ForgePayload） */
   courseJson?: unknown;
+  /** status=needs_fix 时附带：结构化成功链 + 失败清单（供前端删除/重试） */
+  structureProgress?: StructureProgress;
   /** 视频切片流程：选中的时间区间（秒） */
   clips?: { start: number; end: number }[];
 }
@@ -202,6 +207,7 @@ export class ForgeService {
         {
           onStage: (stage) => this.handleStage(record.id, stage),
           onDone: () => void this.handleDone(record.id),
+          onNeedsFix: () => void this.handleNeedsFix(record.id),
           onError: (msg) => this.handleError(record.id, msg),
         },
       );
@@ -249,6 +255,13 @@ export class ForgeService {
       const text = await this.storage.getBuffer(`forge/${id}/course.json`);
       if (text) {
         view.courseJson = JSON.parse(text.toString("utf-8"));
+      }
+    }
+
+    if (record.status === "needs_fix") {
+      const text = await this.storage.getBuffer(`forge/${id}/structure.progress.json`);
+      if (text) {
+        view.structureProgress = JSON.parse(text.toString("utf-8"));
       }
     }
     return view;
@@ -300,6 +313,92 @@ export class ForgeService {
       {
         onStage: (stage) => this.handleStage(id, stage),
         onDone: () => void this.handleDone(id),
+        onNeedsFix: () => void this.handleNeedsFix(id),
+        onError: (msg) => this.handleError(id, msg),
+      },
+    );
+    this.handles.set(id, handle);
+    this.timeouts.set(
+      id,
+      setTimeout(() => this.handleTimeout(id), JOB_TIMEOUT_MS),
+    );
+
+    return { jobId: id };
+  }
+
+  /**
+   * 结构化出现失败句（needs_fix）后，前端对每个失败句选择「删除 / 重试」并续跑：
+   * 决策写回对象存储进度快照 + 临时 resolve 文件，起 structure-resolve 阶段子进程。
+   */
+  async resolveFailures(id: string, dto: ResolveForgeFailuresDto): Promise<{ jobId: string }> {
+    const record = this.store.get(id);
+    if (!record) throw new NotFoundException(`未找到任务 ${id}`);
+    if (record.status !== "needs_fix") {
+      throw new BadRequestException(`任务 ${id} 当前状态 ${record.status}，无法处理失败句`);
+    }
+    if (!Array.isArray(dto?.decisions) || dto.decisions.length === 0) {
+      throw new BadRequestException("decisions 不能为空");
+    }
+
+    const progressBuf = await this.storage.getBuffer(`forge/${id}/structure.progress.json`);
+    if (!progressBuf) {
+      throw new BadRequestException("缺少结构化进度快照，无法处理失败句");
+    }
+    const progress = JSON.parse(progressBuf.toString("utf-8")) as StructureProgress;
+    const failureIndexes = new Set((progress.failures ?? []).map((f) => f.index));
+    const seen = new Set<number>();
+    for (const d of dto.decisions) {
+      if (!Number.isInteger(d.index) || !failureIndexes.has(d.index)) {
+        throw new BadRequestException(`句 ${d.index} 不在失败清单中`);
+      }
+      if (d.action !== "delete" && d.action !== "retry") {
+        throw new BadRequestException(`句 ${d.index} 的动作必须是 delete 或 retry`);
+      }
+      if (seen.has(d.index)) {
+        throw new BadRequestException(`句 ${d.index} 出现重复决策`);
+      }
+      seen.add(d.index);
+    }
+    const missing = [...failureIndexes].filter((i) => !seen.has(i));
+    if (missing.length > 0) {
+      throw new BadRequestException(`缺少对失败句的决策：${missing.map((i) => i + 1).join(", ")}`);
+    }
+    const retryCount = dto.decisions.filter((d) => d.action === "retry").length;
+    const successCount = (progress.success ?? []).length;
+    if (successCount === 0 && retryCount === 0) {
+      throw new BadRequestException("所有句子都被删除后无法生成课程，请至少保留一句");
+    }
+
+    await mkdir(record.outDir, { recursive: true });
+    for (const name of ["meta.json", "transcript.json", "clips.json", "structure.progress.json"]) {
+      const buf = await this.storage.getBuffer(`forge/${id}/${name}`);
+      if (buf) {
+        await writeFile(join(record.outDir, name), buf);
+      }
+    }
+    await writeFile(
+      join(record.outDir, "structure.resolve.json"),
+      `${JSON.stringify({ decisions: dto.decisions }, null, 2)}\n`,
+      "utf-8",
+    );
+
+    this.store.update(id, {
+      status: "running",
+      stage: "structuring",
+      message: "按选择继续：重试/删除后重新结构化中…",
+      phase: "structure-resolve",
+    });
+
+    const handle = spawnForgeRunner(
+      {
+        phase: "structure-resolve",
+        language: record.language,
+        outDir: record.outDir,
+      },
+      {
+        onStage: (stage) => this.handleStage(id, stage),
+        onDone: () => void this.handleDone(id),
+        onNeedsFix: () => void this.handleNeedsFix(id),
         onError: (msg) => this.handleError(id, msg),
       },
     );
@@ -318,7 +417,8 @@ export class ForgeService {
     if (
       record.status !== "running" &&
       record.status !== "pending" &&
-      record.status !== "awaiting_review"
+      record.status !== "awaiting_review" &&
+      record.status !== "needs_fix"
     ) {
       return { cancelled: false };
     }
@@ -369,6 +469,27 @@ export class ForgeService {
       stage: "done",
       message: "已完成",
       finishedAt: Date.now(),
+    });
+  }
+
+  /** 结构化有失败句：上传进度快照后再清理临时区，进入 needs_fix 等待人工删除/重试 */
+  private async handleNeedsFix(id: string): Promise<void> {
+    const record = this.store.get(id);
+    if (!record || record.status !== "running") return;
+
+    try {
+      await this.uploadArtifacts(record);
+    } catch (error) {
+      this.handleError(id, `进度快照上传对象存储失败：${(error as Error)?.message ?? error}`);
+      return;
+    }
+    this.cleanupScratch(record);
+    this.clearTimers(id);
+    this.handles.delete(id);
+    this.store.update(id, {
+      status: "needs_fix",
+      stage: "structuring",
+      message: "有句子未通过校验，等待处理",
     });
   }
 

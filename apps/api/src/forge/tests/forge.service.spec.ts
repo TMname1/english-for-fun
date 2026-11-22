@@ -259,4 +259,40 @@ describe("ForgeService（视频切片两段式启动 + 对象存储）", () => {
       BadRequestException,
     );
   });
+
+  it("resolveFailures：非 needs_fix 状态 400", async () => {
+    const { jobId } = await service.createJob(fileOf("a.mp4"), { ...baseDto, defer: true });
+    await expect(
+      service.resolveFailures(jobId, { decisions: [{ index: 0, action: "retry" }] } as any),
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  it("resolveFailures：拉回进度与产物、写 resolve 文件、起 structure-resolve 子进程", async () => {
+    const { jobId } = await service.createJob(fileOf("a.mp4"), { ...baseDto, defer: true });
+    store.update(jobId, { status: "needs_fix" });
+    const progress = { success: [], failures: [{ index: 1, sentence: "Bye, V.", attempts: [] }] };
+    storage.getBuffer.mockImplementation(async (key: string) =>
+      key === "forge/a/structure.progress.json"
+        ? Buffer.from(JSON.stringify(progress))
+        : key.startsWith("forge/a/")
+          ? Buffer.from("{}")
+          : null,
+    );
+
+    await service.resolveFailures(jobId, { decisions: [{ index: 1, action: "retry" }] } as any);
+
+    for (const name of ["meta.json", "transcript.json", "clips.json", "structure.progress.json"]) {
+      expect(storage.getBuffer).toHaveBeenCalledWith(`forge/a/${name}`);
+      expect(fsp.writeFile).toHaveBeenCalledWith(
+        join("/tmp/forge-output", "a", name),
+        expect.any(Buffer),
+      );
+    }
+    expect(fsp.writeFile).toHaveBeenCalledWith(
+      join("/tmp/forge-output", "a", "structure.resolve.json"),
+      expect.any(String),
+    );
+    expect(store.get(jobId)!.status).toBe("running");
+    expect(mockSpawn.mock.calls[0][0].phase).toBe("structure-resolve");
+  });
 });
