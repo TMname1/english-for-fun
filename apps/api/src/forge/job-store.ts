@@ -20,7 +20,7 @@ export type ForgeJobStage =
   | "aligning"
   | "done";
 
-export type ForgePhase = "transcribe" | "structure";
+export type ForgePhase = "transcribe" | "structure" | "structure-resolve";
 
 export interface ForgeJobRecord {
   id: string;
