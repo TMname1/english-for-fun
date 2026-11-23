@@ -1,23 +1,16 @@
 import { useAnswerTip } from "~/composables/main/answerTip";
-import { useErrorTip } from "~/composables/user/errorTip";
 import { usePlayTipSound } from "./useTypingSound";
 
-let wrongTimes = 0;
 export function useAnswerError() {
   const { playErrorSound } = usePlayTipSound();
-  const { isShowErrorTip } = useErrorTip();
-  const { showAnswerTip, hiddenAnswerTip } = useAnswerTip();
+  const { hiddenAnswerTip } = useAnswerTip();
 
   function handleAnswerError() {
+    // 答错只播放提示音，答案必须由用户手动点击“显示答案”或快捷键触发
     playErrorSound();
-    wrongTimes++;
-    if (isShowErrorTip() && wrongTimes >= 3) {
-      showAnswerTip();
-    }
   }
 
   function resetCloseTip() {
-    wrongTimes = 0;
     hiddenAnswerTip();
   }
 
