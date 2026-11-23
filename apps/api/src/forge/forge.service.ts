@@ -12,6 +12,7 @@ import type { ResolveForgeFailuresDto } from "./dto/resolve-forge-failures.dto";
 import type { StartForgeJobDto } from "./dto/start-forge-job.dto";
 import type { ForgeJobRecord, ForgeJobStage } from "./job-store";
 import type { ForgeRunnerHandle } from "./runner-client";
+import { mediaKindOf } from "../common/media-ext";
 import { StorageService } from "../storage/storage.service";
 import { JobStore } from "./job-store";
 import { FORGE_OUTPUT_ROOT, spawnForgeRunner } from "./runner-client";
@@ -42,8 +43,10 @@ export interface ForgeJobView {
   outDir: string;
   /** 预签名 URL，前端预览播放用（会过期，不可入库） */
   videoPath: string;
-  /** 视频对象键，前端入库时填到 course_packs.video */
+  /** 视频/音频对象键，前端入库时填到 course_packs.video */
   videoKey: string;
+  /** 媒体类型：前端据此决定渲染 <video> 还是 <audio> 播放条 */
+  mediaKind: "video" | "audio";
   title: string;
   type: "dialogue" | "music";
   language?: string;
@@ -72,7 +75,8 @@ export class ForgeService {
   async createJob(file: Express.Multer.File, dto: CreateForgeJobDto): Promise<{ jobId: string }> {
     const videoKey = `course-video/${file.filename}`;
     try {
-      await this.storage.uploadFile(videoKey, file.path);
+      // 透传 Content-Type：对象存储按它回给浏览器，音频/视频元素才能正确解码播放
+      await this.storage.uploadFile(videoKey, file.path, file.mimetype);
     } finally {
       await rm(file.path, { force: true }).catch(() => {});
     }
@@ -138,6 +142,7 @@ export class ForgeService {
       startedAt: Date.now(),
       outDir,
       videoKey: `course-video/${input.fileName}`,
+      mediaKind: mediaKindOf(input.fileName),
       title: input.title,
       type: input.type,
       language: input.language ?? "en",
@@ -238,6 +243,7 @@ export class ForgeService {
       outDir: record.outDir,
       videoPath: await this.storage.presignGet(record.videoKey),
       videoKey: record.videoKey,
+      mediaKind: record.mediaKind ?? mediaKindOf(record.videoKey),
       title: record.title,
       type: record.type,
       language: record.language,
@@ -357,10 +363,8 @@ export class ForgeService {
       if (!Number.isInteger(d.index) || !failureIndexes.has(d.index)) {
         throw new BadRequestException(`句 ${d.index} 不在失败清单中`);
       }
-      if (d.action !== "delete" && d.action !== "retry" && d.action !== "strip_words") {
-        throw new BadRequestException(
-          `句 ${d.index} 的动作必须是 delete、retry 或 strip_words（删除所有单个单词）`,
-        );
+      if (d.action !== "delete" && d.action !== "retry") {
+        throw new BadRequestException(`句 ${d.index} 的动作必须是 delete 或 retry`);
       }
       if (seen.has(d.index)) {
         throw new BadRequestException(`句 ${d.index} 出现重复决策`);
@@ -371,12 +375,10 @@ export class ForgeService {
     if (missing.length > 0) {
       throw new BadRequestException(`缺少对失败句的决策：${missing.map((i) => i + 1).join(", ")}`);
     }
-    // 「删除所有单个单词」也可能救回句子，因此只要不是全部 delete，就还有句子能进课程
-    const retryOrStripCount = dto.decisions.filter(
-      (d) => d.action === "retry" || d.action === "strip_words",
-    ).length;
+    // 「重试」可能救回句子，因此只要不是全部 delete，就还有句子能进课程
+    const retryCount = dto.decisions.filter((d) => d.action === "retry").length;
     const successCount = (progress.success ?? []).length;
-    if (successCount === 0 && retryOrStripCount === 0) {
+    if (successCount === 0 && retryCount === 0) {
       throw new BadRequestException("所有句子都被删除后无法生成课程，请至少保留一句");
     }
 

@@ -1,4 +1,5 @@
 import {
+  autoStripSingleWordRows,
   buildChatBody,
   buildEnglishFromIndexes,
   classifyLlmFailure,
@@ -258,6 +259,81 @@ describe("stripSingleWordRows", () => {
     );
     expect(result.removed).toBe(1);
     expect(result.chain?.statements.map((s) => s.english)).toEqual(["I like the food"]);
+  });
+});
+
+describe("autoStripSingleWordRows", () => {
+  const words = ["I", "like", "the", "food."];
+  const raw = (rows: unknown) => JSON.stringify({ statements: rows });
+
+  it("输出混着单词行：删掉后合格，直接给可用组装链、不给失败快照", () => {
+    const out = autoStripSingleWordRows(
+      raw([
+        { indexes: [0], chinese: "我" },
+        { indexes: [1], chinese: "喜欢" },
+        { indexes: [0, 1], chinese: "我喜欢" },
+        { indexes: [0, 1, 2, 3], chinese: "我喜欢这个食物" },
+      ]),
+      5,
+      words,
+    );
+    expect(out?.removed).toBe(2);
+    expect(out?.chain?.statements.map((s) => s.english)).toEqual(["I like", "I like the food"]);
+    expect(out?.chain?.spans).toEqual([
+      { wordStart: 5, wordEnd: 7 },
+      { wordStart: 5, wordEnd: 9 },
+    ]);
+    expect(out?.attempt).toBeNull();
+  });
+
+  it("删完仍不合规：给带 autoStrip 标记的失败快照（交给用户）", () => {
+    const out = autoStripSingleWordRows(
+      raw([
+        { indexes: [0], chinese: "我" },
+        { indexes: [0, 1], chinese: "我喜欢" },
+        { indexes: [2, 3], chinese: "这个食物" },
+      ]),
+      0,
+      words,
+    );
+    expect(out?.chain).toBeNull();
+    expect(out?.attempt?.autoStrip).toBe(true);
+    expect(out?.attempt?.reason).toContain("已自动删除 1 个单词行");
+    expect(out?.attempt?.reason).toContain("没有任何一行恰好覆盖");
+    expect(out?.attempt?.statements?.map((s) => s.english)).toEqual(["I like", "the food"]);
+  });
+
+  it("与失败原因无关：越界等原因只要输出混着单词行，同样先删一遍", () => {
+    const out = autoStripSingleWordRows(
+      raw([
+        { indexes: [0], chinese: "我" },
+        { indexes: [1, 2], chinese: "喜欢这个" },
+        { indexes: [3, 4], chinese: "食物" },
+      ]),
+      0,
+      words,
+    );
+    expect(out?.removed).toBe(1);
+    expect(out?.chain).toBeNull();
+    expect(out?.attempt?.autoStrip).toBe(true);
+    expect(out?.attempt?.reason).toContain("越界");
+  });
+
+  it("输出里没有单词行时完全不动（返回 null，保留原失败原因）", () => {
+    expect(
+      autoStripSingleWordRows(
+        raw([
+          { indexes: [0, 1], chinese: "我喜欢" },
+          { indexes: [2, 3], chinese: "这个食物" },
+        ]),
+        0,
+        words,
+      ),
+    ).toBeNull();
+  });
+
+  it("原始输出解析不出编号时完全不动", () => {
+    expect(autoStripSingleWordRows("not json", 0, words)).toBeNull();
   });
 });
 

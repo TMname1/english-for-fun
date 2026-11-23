@@ -57,9 +57,9 @@ export function formatNumberedWords(words: string[]): string {
   return words.map((w, i) => `${i} ${w}`).join("\n");
 }
 
+/** 一句一次调用：不再附带「上一次不合格」的纠错说明（校验失败不再自动重试） */
 export function buildMessages(
   words: string[],
-  note?: string,
 ): Array<{ role: "system" | "user"; content: string }> {
   const last = words.length - 1;
   return [
@@ -70,8 +70,7 @@ export function buildMessages(
         `请把下面这句英文拆成碎片并逐级拼回完整原句，输出组装链。\n` +
         `本句词表（共 ${words.length} 个词，编号 0..${last}，格式「编号 词」，词表按顺序拼起来就是这句原句）：\n` +
         `${formatNumberedWords(words)}\n` +
-        `要求：只能用这些编号引用词，不要输出英文单词文本；最后一行 indexes 必须恰为 0,1,…,${last}。` +
-        (note ? `\n\n${note}` : ""),
+        `要求：只能用这些编号引用词，不要输出英文单词文本；最后一行 indexes 必须恰为 0,1,…,${last}。`,
     },
   ];
 }

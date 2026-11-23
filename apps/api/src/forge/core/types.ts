@@ -64,6 +64,8 @@ export interface SentenceAttempt {
   reason: string;
   statements?: DraftStatement[] | null;
   raw?: string | null;
+  /** 这条快照来自「输出混着单词行」的自动删单词补救（而非模型输出本身） */
+  autoStrip?: boolean;
 }
 
 /** 一个句子在全部尝试后仍失败的「可恢复」失败记录 */
@@ -81,10 +83,10 @@ export interface StructureProgress {
   failures: SentenceFailure[];
 }
 
-/** 前端对每个失败句的选择：删除该句 / 重试该句 / 删除该句输出里的所有单词行 */
+/** 前端对每个失败句的选择：删除该句 / 重试该句（输出混着单词行由后端自动补救，不再是决策） */
 export interface ResolveDecision {
   index: number;
-  action: "delete" | "retry" | "strip_words";
+  action: "delete" | "retry";
 }
 
 /** 最终课程包 JSON（文本课程；音频字段由后续流程填充，流水线不产出） */

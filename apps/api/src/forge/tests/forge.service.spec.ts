@@ -16,8 +16,8 @@ jest.mock("../runner-client", () => ({
 
 const mockSpawn = jest.mocked(spawnForgeRunner);
 
-function fileOf(name: string): Express.Multer.File {
-  return { filename: name, path: `/tmp/uploads/${name}` } as Express.Multer.File;
+function fileOf(name: string, mimetype = "video/mp4"): Express.Multer.File {
+  return { filename: name, path: `/tmp/uploads/${name}`, mimetype } as Express.Multer.File;
 }
 
 function createStorageMock() {
@@ -67,11 +67,34 @@ describe("ForgeService（视频切片两段式启动 + 对象存储）", () => {
   it("defer=true 上传视频到 OSS、删临时文件，只建 pending 记录不启动子进程", async () => {
     const { jobId } = await service.createJob(fileOf("a.mp4"), { ...baseDto, defer: true });
 
-    expect(storage.uploadFile).toHaveBeenCalledWith("course-video/a.mp4", "/tmp/uploads/a.mp4");
+    expect(storage.uploadFile).toHaveBeenCalledWith(
+      "course-video/a.mp4",
+      "/tmp/uploads/a.mp4",
+      "video/mp4",
+    );
     expect(fsp.rm).toHaveBeenCalledWith("/tmp/uploads/a.mp4", { force: true });
     expect(mockSpawn).not.toHaveBeenCalled();
     expect(store.get(jobId)!.status).toBe("pending");
     expect(store.get(jobId)!.videoKey).toBe("course-video/a.mp4");
+    expect(store.get(jobId)!.mediaKind).toBe("video");
+  });
+
+  it("音频上传：透传 audio Content-Type，任务标记 audio，getJob 返回 mediaKind=audio", async () => {
+    const { jobId } = await service.createJob(fileOf("song.mp3", "audio/mpeg"), {
+      ...baseDto,
+      defer: true,
+    });
+
+    expect(storage.uploadFile).toHaveBeenCalledWith(
+      "course-video/song.mp3",
+      "/tmp/uploads/song.mp3",
+      "audio/mpeg",
+    );
+    expect(store.get(jobId)!.mediaKind).toBe("audio");
+
+    const view = await service.getJob(jobId);
+    expect(view.videoKey).toBe("course-video/song.mp3");
+    expect(view.mediaKind).toBe("audio");
   });
 
   it("上传 OSS 失败时抛错且仍清理临时文件，不建任务", async () => {
@@ -323,7 +346,7 @@ describe("ForgeService（视频切片两段式启动 + 对象存储）", () => {
     expect(mockSpawn.mock.calls[0][0].phase).toBe("structure-resolve");
   });
 
-  it("resolveFailures：strip_words（删除所有单个单词）被接受，且视为保留句子", async () => {
+  it("resolveFailures：已下线的 strip_words 动作按非法动作 400（单词行改由后端自动补救）", async () => {
     const { jobId } = await service.createJob(fileOf("a.mp4"), { ...baseDto, defer: true });
     store.update(jobId, { status: "needs_fix" });
     const progress = { success: [], failures: [{ index: 1, sentence: "Bye, V.", attempts: [] }] };
@@ -335,17 +358,11 @@ describe("ForgeService（视频切片两段式启动 + 对象存储）", () => {
           : null,
     );
 
-    // success 为空、唯一失败句选 strip_words：不能按「全部删除」报错
-    await service.resolveFailures(jobId, {
-      decisions: [{ index: 1, action: "strip_words" }],
-    } as any);
-
-    expect(fsp.writeFile).toHaveBeenCalledWith(
-      join("/tmp/forge-output", "a", "structure.resolve.json"),
-      expect.stringContaining("strip_words"),
-      "utf-8",
-    );
-    expect(store.get(jobId)!.status).toBe("running");
+    await expect(
+      service.resolveFailures(jobId, {
+        decisions: [{ index: 1, action: "strip_words" }],
+      } as any),
+    ).rejects.toThrow(/delete 或 retry/);
   });
 
   it("resolveFailures：未知动作仍 400", async () => {

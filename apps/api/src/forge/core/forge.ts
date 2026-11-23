@@ -12,15 +12,13 @@ import type {
   StructureProgress,
   Transcript,
 } from "./types";
-import type { TokenUniverse } from "./words";
 import { alignStatements, formatAlignmentSummary } from "./align";
 import { transcodeToWav, transcribeWithRaw } from "./asr";
 import { mergeClipTranscripts, normalizeClips, offsetTranscript, tagClipBoundaries } from "./clips";
 import { config, createRunId } from "./config";
-import { generateDraft, generateDraftCollected, stripSingleWordRows } from "./llm";
+import { generateDraft, generateDraftCollected } from "./llm";
 import { preflightLlm } from "./preflight";
 import { preprocessTranscript } from "./preprocess";
-import { buildTokenUniverse, sentenceWordView } from "./words";
 
 /** transcribed 表示「已转录、等待人工校对」，仅 GUI 两段式流程使用 */
 export type ForgeStage =
@@ -291,7 +289,7 @@ function validateResolveDecisions(decisions: ResolveDecision[], progress: Struct
     if (!Number.isInteger(d.index) || !failureIndexes.has(d.index)) {
       throw new Error(`[forge] 无效决策：句 ${d.index} 不在失败清单中`);
     }
-    if (d.action !== "delete" && d.action !== "retry" && d.action !== "strip_words") {
+    if (d.action !== "delete" && d.action !== "retry") {
       throw new Error(`[forge] 无效决策动作：${String(d.action)}`);
     }
     if (seen.has(d.index)) {
@@ -305,60 +303,7 @@ function validateResolveDecisions(decisions: ResolveDecision[], progress: Struct
   }
 }
 
-/**
- * 「删除所有单个单词」：把该句上次输出里单词成行的行丢掉后重新校验，
- * 合格则当作该句的组装链（带词区间，直接走编号直取对齐）；
- * 仍不合格则保留为失败项，并追加一条说明原因的快照，交给用户重新选择。
- */
-function stripFailureToChain(
-  failure: SentenceFailure,
-  universe: TokenUniverse,
-): {
-  chain: DraftChain | null;
-  failure: SentenceFailure | null;
-} {
-  const view = sentenceWordView(universe, failure.index);
-  if (!view) {
-    return {
-      chain: null,
-      failure: {
-        ...failure,
-        attempts: [
-          ...failure.attempts,
-          { reason: "本句没有可用的词，无法按编号删除单词行；请改用「重试该句」或「删除该句」" },
-        ],
-      },
-    };
-  }
-  const last = failure.attempts[failure.attempts.length - 1];
-  const result = stripSingleWordRows(last?.raw, view.wordStart, view.words);
-  if (result.chain && result.reason === null) {
-    return {
-      chain: {
-        index: failure.index,
-        statements: result.chain.statements,
-        spans: result.chain.spans,
-      },
-      failure: null,
-    };
-  }
-  return {
-    chain: null,
-    failure: {
-      ...failure,
-      attempts: [
-        ...failure.attempts,
-        {
-          reason: result.reason ?? "删除单词行后仍不合规",
-          statements: result.statements,
-          raw: result.raw,
-        },
-      ],
-    },
-  };
-}
-
-/** resolve 续跑：只重跑 retry 句，删除 delete 句，单词行按 strip_words 过滤，与已成功句合并后收尾 */
+/** resolve 续跑：只重跑 retry 句、丢掉 delete 句，与已成功句合并后收尾 */
 export async function forgeStructureResolve(
   opts: FromTranscriptOptions,
 ): Promise<{ needsFix: boolean }> {
@@ -371,7 +316,6 @@ export async function forgeStructureResolve(
 
   const deleteSet = new Set(decisions.filter((d) => d.action === "delete").map((d) => d.index));
   const retrySet = new Set(decisions.filter((d) => d.action === "retry").map((d) => d.index));
-  const stripSet = new Set(decisions.filter((d) => d.action === "strip_words").map((d) => d.index));
 
   opts.onStage?.("structuring");
   if (config.llmPreflight) {
@@ -387,33 +331,18 @@ export async function forgeStructureResolve(
     newFailures = result.failures;
   }
 
-  // strip_words：不调模型，直接过滤上次输出并重新校验
-  const strippedChains: DraftChain[] = [];
-  const strippedFailures: SentenceFailure[] = [];
-  const failureOf = new Map(progress.failures.map((f) => [f.index, f]));
-  const universe = stripSet.size > 0 ? buildTokenUniverse(transcript) : null;
-  for (const index of [...stripSet].sort((a, b) => a - b)) {
-    const failure = failureOf.get(index);
-    if (!failure || !universe) continue;
-    const stripped = stripFailureToChain(failure, universe);
-    if (stripped.chain) {
-      strippedChains.push(stripped.chain);
-    } else if (stripped.failure) {
-      strippedFailures.push(stripped.failure);
-    }
-  }
-  const failures = [...newFailures, ...strippedFailures].sort((a, b) => a.index - b.index);
+  const failures = [...newFailures].sort((a, b) => a.index - b.index);
 
   // 旧进度快照没有 spans：补齐为等长 null，交给 align 的兜底匹配
   const kept: DraftChain[] = progress.success
-    .filter((s) => !deleteSet.has(s.index) && !retrySet.has(s.index) && !stripSet.has(s.index))
+    .filter((s) => !deleteSet.has(s.index) && !retrySet.has(s.index))
     .map((s) => ({
       index: s.index,
       statements: s.statements,
       spans:
         s.spans && s.spans.length === s.statements.length ? s.spans : s.statements.map(() => null),
     }));
-  const merged = [...kept, ...strippedChains, ...newChains].sort((a, b) => a.index - b.index);
+  const merged = [...kept, ...newChains].sort((a, b) => a.index - b.index);
 
   if (failures.length > 0) {
     const next: StructureProgress = {

@@ -18,10 +18,15 @@ import { buildTokenUniverse, sentenceWordView } from "./words";
  *    服务端不支持时逐级降级 json_object -> 纯文本 + 括号配对提取（callLlmJson）。
  * 2. zod 结构校验（draftRowsSchema）：兜底降级模式，并清洗 {"courses":[...]} 旧包裹。
  * 3. 词编号校验（validateRowIndexes）：升序连续、不越界、不得逐词成行，且必须有一行覆盖整句。
- * 4. english 由编号还原（cleanWordToken 逐词去标点）：模型从不书写英文，
+ * 4. 单词行的自动补救（autoStripSingleWordRows）：只要校验失败、而该次输出里混着单词成行的行，
+ *    就本地删掉这些单词行、剩余行重新校验；合格就当作该句的组装链，不合格才记为失败交给用户选择。
+ *    与失败原因无关（越界、跳号、缺整句行等同样先删一遍），输出里没有单词行时不做任何处理。
+ * 5. english 由编号还原（cleanWordToken 逐词去标点）：模型从不书写英文，
  *    因此 $10,000 / don't / U.S. / 弯引号这类改写不可能发生。
  *
  * 一次调用只处理一个句子（一句一调用，多句并发），因此输出就是一条 statement 组装链。
+ * 校验失败**不自动重试**（只有上面第 4 条那种不调模型的本地补救）：一次不合格就直接
+ * 落进失败清单，由用户在 GUI 里决定「重试该句 / 删除该句」。
  */
 export interface DraftRow {
   indexes: number[];
@@ -73,6 +78,13 @@ export function buildEnglishFromIndexes(indexes: number[], words: string[]): str
 }
 
 /**
+ * 「逐词成行」这条校验失败的固定标识（validateRowIndexes 的文案里带它）。
+ * 单独抽成常量，避免文案改动后「这是单词行问题」这个语义悄悄失效
+ * （自动删单词行的判定不依赖文案，见 autoStripSingleWordRows）。
+ */
+export const SINGLE_WORD_ROW_MARKER = "属于逐词成行";
+
+/**
  * 校验模型给出的行编号：每行非空、整数、在 0..N-1 内、行内升序连续、
  * 不得逐词成行（每行至少 2 个词；本句只有 1 个词时整句行本身就是 [0]，放行），
  * 且必须有一行恰好覆盖整句 0..N-1（连续 ⇒ 覆盖即等价）。
@@ -105,7 +117,7 @@ export function validateRowIndexes(rows: number[][], wordCount: number): string 
     }
   }
   if (singleWordRow >= 0) {
-    return `第 ${singleWordRow + 1} 行只有一个词（编号 ${rows[singleWordRow][0]}），属于逐词成行；每行至少 2 个词，请按短语或从句片段切分`;
+    return `第 ${singleWordRow + 1} 行只有一个词（编号 ${rows[singleWordRow][0]}），${SINGLE_WORD_ROW_MARKER}；每行至少 2 个词，请按短语或从句片段切分`;
   }
   if (!hasFull) {
     return `没有任何一行恰好覆盖本句全部 ${wordCount} 个词（应有一行编号恰为 0,1,…,${wordCount - 1}）`;
@@ -150,7 +162,7 @@ export function parseDraftRowsFromRaw(raw: string | null | undefined): DraftRow[
   }
 }
 
-/** 「删除所有单个单词」的结果：合格时给可用组装链，不合格时给中文原因（直接进 needs_fix 界面） */
+/** 「删除单词行」的结果：合格时给可用组装链，不合格时给中文原因（直接进 needs_fix 界面） */
 export interface StripWordsResult {
   /** 被删掉的单词行数 */
   removed: number;
@@ -163,9 +175,9 @@ export interface StripWordsResult {
 }
 
 /**
- * 人工「删除所有单个单词」：把上次输出里单词成行的行（N>1 时 indexes 只有 1 个词）全部丢掉，
+ * 删除单词行：把这次输出里单词成行的行（N>1 时 indexes 只有 1 个词）全部丢掉，
  * 剩余行按同一套规则重新校验——合格即作为该句的组装链（english 由编号还原、词区间直接算），
- * 不合格则返回原因，交给用户重新选择「重试该句 / 删除该句」。
+ * 不合格则返回原因。自动补救（autoStripSingleWordRows）与 resolve 续跑都走这里。
  * 本句只有 1 个词时整句行本身就是 [0]，不算单词成行，不会被删。
  */
 export function stripSingleWordRows(
@@ -225,6 +237,48 @@ export function stripSingleWordRows(
     wordEnd: wordStart + r.indexes[r.indexes.length - 1] + 1,
   }));
   return { removed, chain: { statements, spans }, reason: null, statements, raw };
+}
+
+/** 自动补救结果：chain 合格可直接用；不合格时 attempt 是追加给用户看的失败快照 */
+export interface AutoStripOutcome {
+  /** 被自动删掉的单词行数（> 0 才会返回本结构） */
+  removed: number;
+  chain: { statements: DraftStatement[]; spans: StatementSpan[] } | null;
+  attempt: SentenceAttempt | null;
+}
+
+/**
+ * 单词行的自动补救（不调模型、不重试）：
+ * **只看输出、不看失败原因**——只要模型这一次输出里混着单词成行的行（本句词数 > 1 时
+ * indexes 只有 1 个词），就本地删掉这些行、剩余行按同一套规则重新校验：
+ * 合格就直接作为该句的组装链（静默通过，只写日志）；仍不合格则生成一条带 autoStrip 标记的
+ * 失败快照，交给用户在 GUI 里选择「重试该句 / 删除该句」。
+ *
+ * 为什么不再按失败原因判断：越界、跳号、缺整句行等失败同样经常伴随单词行，
+ * 以前这类句子只能靠用户手点「删除所有单个单词」在本地救回，现在一律自动做一遍。
+ * 输出里没有单词行（含解析不出编号）时返回 null，保持原失败原因不变。
+ */
+export function autoStripSingleWordRows(
+  rawInput: string | null | undefined,
+  wordStart: number,
+  words: string[],
+): AutoStripOutcome | null {
+  const result = stripSingleWordRows(rawInput, wordStart, words);
+  if (result.chain && result.reason === null) {
+    return { removed: result.removed, chain: result.chain, attempt: null };
+  }
+  // 没有删掉任何行 ⇒ 这次输出本来就不含单词行，或解析不出编号：不动，保留原失败原因
+  if (result.removed === 0) return null;
+  return {
+    removed: result.removed,
+    chain: null,
+    attempt: {
+      reason: `已自动删除 ${result.removed} 个单词行，仍不合规：${result.reason ?? "未知原因"}`,
+      statements: result.statements,
+      raw: result.raw,
+      autoStrip: true,
+    },
+  };
 }
 
 /** 结构化输出的 JSON Schema（strict 风格：全字段 required，可选用空串表达） */
@@ -597,17 +651,13 @@ export class SentenceContentError extends Error {
   }
 }
 
-/** 单句组装链失败时的最大尝试次数（含首次） */
-const LLM_ATTEMPTS_PER_SENTENCE = 2;
-
 /** 单句：调用 LLM + 结构校验 + 词编号校验，产出一条 statement 组装链与其词区间 */
 async function generateChainForSentence(
   words: string[],
   wordStart: number,
   label: string,
-  note: string | undefined,
 ): Promise<{ statements: DraftStatement[]; spans: StatementSpan[] }> {
-  const raw = await callLlmJson(buildMessages(words, note) as ChatMessage[]);
+  const raw = await callLlmJson(buildMessages(words) as ChatMessage[]);
   const parsed = draftRowsSchema.safeParse(coerceCourseOutput(raw));
   if (!parsed.success) {
     throw new SentenceContentError(
@@ -653,8 +703,11 @@ type SentenceOutcome =
   | { kind: "empty"; index: number };
 
 /**
- * 结构化收集模式：逐句生成，内容校验失败不中止整体，而是收集为失败清单，
- * 供 needs_fix 后的人工「删除 / 重试」续跑。致命错误（网络/超时/审核等）仍直接抛出。
+ * 结构化收集模式：逐句生成（一句只调一次模型，校验失败**不自动重试**），
+ * 失败项收集为失败清单，由用户在 needs_fix 界面决定「重试该句 / 删除该句」。
+ * 唯一例外是「输出里混着单词行」：本地删掉单词行后重新校验，合格即通过（不调模型），
+ * 仍不合格才进入失败清单（见 autoStripSingleWordRows）。
+ * 致命错误（网络/超时/审核等）仍直接抛出。
  * 按 transcript.segments 的原数组下标迭代（不过滤空句），保证 index 与段落一一对应。
  */
 export async function generateDraftCollected(
@@ -691,45 +744,52 @@ export async function generateDraftCollected(
         `[llm] ${label} 有 ${words.length} 个词（疑似段级降级的长段），编号输出较长，失败可考虑换更强模型`,
       );
     }
-    const attempts: SentenceAttempt[] = [];
-    let lastContentError: SentenceContentError | null = null;
-    for (let attempt = 1; attempt <= LLM_ATTEMPTS_PER_SENTENCE; attempt++) {
-      try {
-        const note =
-          attempt > 1 && lastContentError
-            ? `上一次输出不合格：${lastContentError.message}。请修正后重新输出：每行 statements[].indexes 必须是本句词编号组成的升序连续整数数组，每行至少包含 2 个词（本句只有 1 个词时除外），不得把单个词单独作为一行，且必须有一行 indexes 恰为 0,1,…,${words.length - 1}（编号从 0 开始，不得重复、跳号或超出范围）。`
-            : undefined;
-        const chain = await generateChainForSentence(words, job.view.wordStart, label, note);
-        if (job.index === 0 || (job.index + 1) % 10 === 0) {
-          console.log(`[llm] ${label} 完成（${chain.statements.length} 行）`);
-        }
+    try {
+      const chain = await generateChainForSentence(words, job.view.wordStart, label);
+      if (job.index === 0 || (job.index + 1) % 10 === 0) {
+        console.log(`[llm] ${label} 完成（${chain.statements.length} 行）`);
+      }
+      return {
+        kind: "chain",
+        index: job.index,
+        statements: chain.statements,
+        spans: chain.spans,
+      };
+    } catch (error) {
+      if (!(error instanceof SentenceContentError)) {
+        throw error;
+      }
+      const raw = error.raw != null ? stringifyUnknown(error.raw) : null;
+      const attempts: SentenceAttempt[] = [
+        { reason: error.message, statements: error.statements ?? null, raw },
+      ];
+      // 只要输出里混着单词行：本地删掉后重新校验，合格就直接用（不调模型、不重试）
+      const auto = autoStripSingleWordRows(raw, job.view.wordStart, words);
+      if (auto?.chain) {
+        console.log(
+          `[llm] ${label} 输出混着 ${auto.removed} 个单词行，已自动删除后通过（${auto.chain.statements.length} 行）`,
+        );
         return {
           kind: "chain",
           index: job.index,
-          statements: chain.statements,
-          spans: chain.spans,
+          statements: auto.chain.statements,
+          spans: auto.chain.spans,
         };
-      } catch (error) {
-        if (error instanceof SentenceContentError) {
-          attempts.push({
-            reason: error.message,
-            statements: error.statements ?? null,
-            raw: error.raw != null ? stringifyUnknown(error.raw) : null,
-          });
-          lastContentError = error;
-          if (attempt < LLM_ATTEMPTS_PER_SENTENCE) {
-            console.warn(`[llm] ${label} 失败，重试一次：${error.message}`);
-          }
-          continue;
-        }
-        throw error;
       }
+      if (auto?.attempt) {
+        console.warn(
+          `[llm] ${label} 自动删除单词行后仍不合规，交给用户处理：${auto.attempt.reason}`,
+        );
+        attempts.push(auto.attempt);
+      } else {
+        console.warn(`[llm] ${label} 未通过校验（不自动重试）：${error.message}`);
+      }
+      return {
+        kind: "failure",
+        index: job.index,
+        failure: { index: job.index, sentence: job.sentence, attempts },
+      };
     }
-    return {
-      kind: "failure",
-      index: job.index,
-      failure: { index: job.index, sentence: job.sentence, attempts },
-    };
   });
 
   const chains: DraftChain[] = [];
@@ -746,6 +806,7 @@ export async function generateDraftCollected(
 
 /**
  * CLI/本地严格路径：任一句失败即整体抛错（兼容 forgeMake）。
+ * 不做重试（与 GUI 收集模式一致；唯一例外是「输出里混着单词行」的本地删单词补救）。
  * 仅线上 GUI（pipeline-runner）走 generateDraftCollected 做可恢复处理。
  */
 export async function generateDraft(transcript: Transcript): Promise<DraftChain[]> {
@@ -754,7 +815,7 @@ export async function generateDraft(transcript: Transcript): Promise<DraftChain[
     const first = failures[0];
     const last = first.attempts[first.attempts.length - 1];
     throw new Error(
-      `[llm] 句 ${first.index + 1}/${transcript.segments.length} 最终失败（已尝试 ${LLM_ATTEMPTS_PER_SENTENCE} 次）：${last?.reason ?? "未知原因"}`,
+      `[llm] 句 ${first.index + 1}/${transcript.segments.length} 未通过校验（不自动重试）：${last?.reason ?? "未知原因"}`,
     );
   }
   return chains;

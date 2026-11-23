@@ -12,24 +12,44 @@ interface CreateCoursePackResponse {
 }
 
 /**
- * 视频输入的运行：把视频上传到对象存储 course-video/<runId><ext>，返回对象键（入库用）。
+ * 把运行用到的媒体上传到对象存储 course-video/<runId><ext>，返回对象键（入库用）。
  * 文件名带 runId 保证不可变语义。
- * 非 mp4 只警告不转码：Safari 等浏览器可能无法播放 mkv/webm，需要时手工转 H.264+AAC mp4。
+ * - 视频输入：上传视频，非 mp4 只警告不转码（Safari 等浏览器可能无法播放 mkv/webm）。
+ * - 纯音频输入（--audio，无 videoPath）：上传音频，播放端按扩展名渲染音频播放条。
  */
-async function publishVideo(meta: ForgeMeta, storage: ObjectStorage): Promise<string | null> {
-  if (!meta.videoPath || !existsSync(meta.videoPath)) {
+async function publishMedia(meta: ForgeMeta, storage: ObjectStorage): Promise<string | null> {
+  const videoPath = meta.videoPath && existsSync(meta.videoPath) ? meta.videoPath : null;
+  const mediaPath =
+    videoPath ?? (meta.audioPath && existsSync(meta.audioPath) ? meta.audioPath : null);
+  if (!mediaPath) {
     return null;
   }
-  const ext = extname(meta.videoPath).toLowerCase();
-  if (ext !== ".mp4") {
+  const ext = extname(mediaPath).toLowerCase();
+  if (videoPath && ext !== ".mp4") {
     console.warn(
       `[import] 警告：视频不是 mp4（${ext}），部分浏览器（Safari）可能无法播放；建议转成 H.264+AAC 的 mp4 再导入`,
     );
   }
-  const videoKey = `course-video/${meta.runId}${ext}`;
-  await storage.uploadFile(videoKey, meta.videoPath);
-  console.log(`[import] 视频已上传到对象存储：${videoKey}`);
-  return videoKey;
+  const mediaKey = `course-video/${meta.runId}${ext}`;
+  await storage.uploadFile(mediaKey, mediaPath, videoPath ? undefined : audioContentType(ext));
+  console.log(`[import] ${videoPath ? "视频" : "音频"}已上传到对象存储：${mediaKey}`);
+  return mediaKey;
+}
+
+/** 音频扩展名 → Content-Type（浏览器按它解码，缺省会让 <audio> 拒绝播放） */
+function audioContentType(ext: string): string | undefined {
+  switch (ext) {
+    case ".mp3":
+      return "audio/mpeg";
+    case ".m4a":
+      return "audio/mp4";
+    case ".wav":
+      return "audio/wav";
+    case ".aac":
+      return "audio/aac";
+    default:
+      return undefined;
+  }
 }
 
 /** 把本地 outDir 的 JSON 产物持久化到 forge/<runId>/（与 GUI 流水线的对象布局一致） */
@@ -89,7 +109,7 @@ export async function forgeImport(outDir: string): Promise<CreateCoursePackRespo
     : null;
 
   const storage = new ObjectStorage(storageConfigFromEnv());
-  const videoKey = meta ? await publishVideo(meta, storage) : null;
+  const videoKey = meta ? await publishMedia(meta, storage) : null;
   if (meta) {
     await publishArtifacts(outDir, meta.runId, storage);
   }

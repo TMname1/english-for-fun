@@ -7,6 +7,7 @@ import request from "supertest";
 import { courseHistory, coursePack, statement } from "@earthworm/schema";
 import {
   insertCoursePack,
+  insertMasteredElement,
   insertStatement,
   insertUserCourseProgress,
 } from "../../../test/fixture/db";
@@ -155,6 +156,55 @@ describe("course-pack e2e", () => {
       });
   });
 
+  it("get: /course-pack/:coursePackId/statements paginates without loading everything", async () => {
+    const { id } = await insertCoursePack(db);
+    for (let i = 1; i <= 5; i++) {
+      await insertStatement(db, id, i, { english: `sentence-${i}` });
+    }
+
+    await agent
+      .get(`/course-pack/${id}/statements?page=2&pageSize=2`)
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body.total).toBe(5);
+        expect(body.totalPages).toBe(3);
+        expect(body.page).toBe(2);
+        expect(body.items).toHaveLength(2);
+        expect(body.items.map((item: { index: number }) => item.index)).toEqual([2, 3]);
+        expect(body.items[0].english).toBe("sentence-3");
+        expect(body.items[0].isMastered).toBe(false);
+      });
+
+    await agent.get(`/course-pack/${id}/statements?filter=unknown`).expect(400);
+  });
+
+  it("get: /course-pack/:coursePackId/statements filters by mastered state over http", async () => {
+    const { id } = await insertCoursePack(db);
+    await insertStatement(db, id, 1, { english: "first" });
+    await insertStatement(db, id, 2, { english: "second" });
+    await insertMasteredElement(db, "SECOND");
+
+    await agent
+      .get(`/course-pack/${id}/statements?filter=mastered`)
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body.total).toBe(1);
+        expect(body.items).toHaveLength(1);
+        expect(body.items[0].index).toBe(1);
+        expect(body.items[0].isMastered).toBe(true);
+      });
+
+    await agent
+      .get(`/course-pack/${id}/statements?filter=notMastered`)
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body.total).toBe(1);
+        // 下标不因筛选压缩
+        expect(body.items[0].index).toBe(0);
+        expect(body.items[0].isMastered).toBe(false);
+      });
+  });
+
   it("patch: /course-pack/:coursePackId keeps timings only for unchanged english", async () => {
     const words = [{ word: "old", start: 0, end: 0.5 }];
     const { id: coursePackId } = await insertCoursePack(db, { video: "course-video/v.mp4" });
@@ -263,6 +313,7 @@ describe("course-pack e2e", () => {
           description: "原描述",
           cover: "cover.png",
           video: "course-video/e2e.mp4",
+          mediaKind: "video",
           statements: [
             { english: "one", chinese: "一", phonetic: "/1/" },
             { english: "two", chinese: "二", phonetic: "/2/", startTime: 3, endTime: 4 },
