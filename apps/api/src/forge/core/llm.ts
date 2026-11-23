@@ -1,31 +1,39 @@
 import { z } from "zod";
 
 import type {
-  DraftCourse,
+  DraftChain,
   DraftStatement,
   SentenceAttempt,
   SentenceFailure,
+  StatementSpan,
   Transcript,
 } from "./types";
-import { normalizeToken } from "./align";
 import { config } from "./config";
 import { buildMessages } from "./prompt";
+import { buildTokenUniverse, sentenceWordView } from "./words";
 
 /**
  * LLM 输出的代码侧约束（不依赖提示词），按顺序：
  * 1. response_format：请求携带 json_schema（strict），字段名/必填/类型由服务端保证；
  *    服务端不支持时逐级降级 json_object -> 纯文本 + 括号配对提取（callLlmJson）。
- * 2. zod 结构校验（draftSchema）：兜底降级模式，并清洗 {"courses":[...]} 旧包裹。
- * 3. english 标点清理（normalizeStatementsEnglish）：见下方说明。
- * 4. 完整原句锚点校验（containsFullSentence）：保证模型没有把这一句丢弃或改写。
+ * 2. zod 结构校验（draftRowsSchema）：兜底降级模式，并清洗 {"courses":[...]} 旧包裹。
+ * 3. 词编号校验（validateRowIndexes）：升序连续、不越界、不得逐词成行，且必须有一行覆盖整句。
+ * 4. english 由编号还原（cleanWordToken 逐词去标点）：模型从不书写英文，
+ *    因此 $10,000 / don't / U.S. / 弯引号这类改写不可能发生。
  *
  * 一次调用只处理一个句子（一句一调用，多句并发），因此输出就是一条 statement 组装链。
  */
-export const draftSchema = z.object({
+export interface DraftRow {
+  indexes: number[];
+  chinese: string;
+  phonetic?: string;
+}
+
+export const draftRowsSchema = z.object({
   statements: z
     .array(
       z.object({
-        english: z.string().min(1),
+        indexes: z.array(z.number().int().nonnegative()).min(1),
         chinese: z.string().min(1),
         phonetic: z.string().optional(),
       }),
@@ -45,44 +53,181 @@ export function coerceCourseOutput(raw: unknown): unknown {
 }
 
 /**
- * english 只允许：字母、数字、空格、撇号、连字符。
- * 撇号必须保留——don't / it's 里它属于拼写本身，删掉会变成 "dont"，
- * 既失真也破坏铁律 1 的"逐字来自转写"；连字符同理（t-shirt）。
- * 其余标点（. , ! ? " 等）替换为空格后折叠：用户是把碎片逐词拼成句子的，
- * english 带句读会破坏拼装与逐词对照。
+ * 逐词还原 english：只允许字母、数字、撇号、连字符，其余字符**删除**（不替换为空格）。
+ * 与 align 的 normalizeToken 口径一致，且不会把一个词拆成两个 token——
+ * 这正是 "$10,000" 不会再变成 "10 000" 的原因；撇号/连字符保留（don't / t-shirt）。
  * chinese 不做清理：中文语义依赖标点（；、。（）），由模型输出直接采信。
  */
-const NON_ENGLISH_PUNCT = /[^\p{L}\p{N}\s'’-]/gu;
+const NON_WORD_CHARS = /[^\p{L}\p{N}'’-]/gu;
 
-export function stripEnglishPunctuation(text: string): string {
-  return text.replace(NON_ENGLISH_PUNCT, " ").replace(/\s+/g, " ").trim();
+export function cleanWordToken(raw: string): string {
+  return raw.replace(NON_WORD_CHARS, "");
+}
+
+/** 按编号拼回 english；token 数与编号数严格 1:1（词表已过滤纯标点词） */
+export function buildEnglishFromIndexes(indexes: number[], words: string[]): string {
+  return indexes
+    .map((i) => cleanWordToken(words[i] ?? ""))
+    .filter(Boolean)
+    .join(" ");
 }
 
 /**
- * 校验并清理一遍模型返回的 statements：逐行剥掉 english 里的标点并就地写回。
- * 返回 changes（"原文 -> 清理后"清单，供日志）与 emptyIndexes
- * （清理后 english 变空白的行号，说明该行本来只有标点，调用方应判失败重试）。
+ * 校验模型给出的行编号：每行非空、整数、在 0..N-1 内、行内升序连续、
+ * 不得逐词成行（每行至少 2 个词；本句只有 1 个词时整句行本身就是 [0]，放行），
+ * 且必须有一行恰好覆盖整句 0..N-1（连续 ⇒ 覆盖即等价）。
+ * 返回中文原因（直接进 needs_fix 界面），合法返回 null。
  */
-export function normalizeStatementsEnglish(statements: DraftStatement[]): {
-  changes: string[];
-  emptyIndexes: number[];
-} {
-  const changes: string[] = [];
-  const emptyIndexes: number[] = [];
-  statements.forEach((s, i) => {
-    const cleaned = stripEnglishPunctuation(s.english);
-    if (cleaned !== s.english) {
-      changes.push(`[${i + 1}] "${s.english}" -> "${cleaned}"`);
-      s.english = cleaned;
+export function validateRowIndexes(rows: number[][], wordCount: number): string | null {
+  if (wordCount <= 0) {
+    return "本句没有可用的词，无法生成";
+  }
+  let hasFull = false;
+  let singleWordRow = -1;
+  for (const [r, row] of rows.entries()) {
+    if (!row || row.length === 0) {
+      return `第 ${r + 1} 行没有任何词编号`;
     }
-    if (!cleaned) {
-      emptyIndexes.push(i + 1);
+    for (const [k, v] of row.entries()) {
+      if (!Number.isInteger(v) || v < 0 || v >= wordCount) {
+        return `第 ${r + 1} 行的编号 ${v} 越界（本句编号范围 0..${wordCount - 1}，编号从 0 开始）`;
+      }
+      if (k > 0 && v !== row[k - 1] + 1) {
+        return `第 ${r + 1} 行的编号必须升序连续（${row[k - 1]} 之后应为 ${row[k - 1] + 1}，实际是 ${v}）`;
+      }
     }
-  });
-  return { changes, emptyIndexes };
+    // 单词成行：越界/连续性检查之后才判，保证越界文案优先（错误原因更精确）
+    if (wordCount > 1 && row.length === 1 && singleWordRow < 0) {
+      singleWordRow = r;
+    }
+    if (row.length === wordCount && row[0] === 0) {
+      hasFull = true;
+    }
+  }
+  if (singleWordRow >= 0) {
+    return `第 ${singleWordRow + 1} 行只有一个词（编号 ${rows[singleWordRow][0]}），属于逐词成行；每行至少 2 个词，请按短语或从句片段切分`;
+  }
+  if (!hasFull) {
+    return `没有任何一行恰好覆盖本句全部 ${wordCount} 个词（应有一行编号恰为 0,1,…,${wordCount - 1}）`;
+  }
+  return null;
 }
 
-/** 结构化输出的 JSON Schema（strict 风格：全字段 required，可选用空串表达）；一次调用产出一条 statement 组装链 */
+/** 把模型的行编号映射为 statement（english 由编号还原）；越界行跳过，仅供失败快照展示 */
+export function rowsToStatements(rows: DraftRow[], words: string[]): DraftStatement[] {
+  return rows
+    .filter(
+      (row) =>
+        Array.isArray(row.indexes) &&
+        row.indexes.length > 0 &&
+        row.indexes.every((i) => Number.isInteger(i) && i >= 0 && i < words.length),
+    )
+    .map((row) => {
+      const statement: DraftStatement = {
+        english: buildEnglishFromIndexes(row.indexes, words),
+        chinese: row.chinese,
+      };
+      if (row.phonetic !== undefined) {
+        statement.phonetic = row.phonetic;
+      }
+      return statement;
+    })
+    .filter((s) => s.english.length > 0);
+}
+
+/**
+ * 从失败快照的 raw（模型上一次的原始输出，字符串）里恢复行编号输出。
+ * 解析失败 / 结构不合规 / statements 为空一律返回 null——调用方据此判定「无法按编号处理」。
+ */
+export function parseDraftRowsFromRaw(raw: string | null | undefined): DraftRow[] | null {
+  if (!raw) return null;
+  try {
+    const parsed = draftRowsSchema.safeParse(coerceCourseOutput(JSON.parse(raw)));
+    // api 的 strictNullChecks=false 会让 zod 把必填字段推断成可选；运行时已由 safeParse 校验
+    return parsed.success ? (parsed.data.statements as DraftRow[]) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 「删除所有单个单词」的结果：合格时给可用组装链，不合格时给中文原因（直接进 needs_fix 界面） */
+export interface StripWordsResult {
+  /** 被删掉的单词行数 */
+  removed: number;
+  /** 剩余输出可用的组装链（含词区间）；null 表示仍不合规，原因见 reason */
+  chain: { statements: DraftStatement[]; spans: StatementSpan[] } | null;
+  reason: string | null;
+  /** 剩余行还原出的 statement（供失败快照展示；解析不出行时为 null） */
+  statements: DraftStatement[] | null;
+  raw: string | null;
+}
+
+/**
+ * 人工「删除所有单个单词」：把上次输出里单词成行的行（N>1 时 indexes 只有 1 个词）全部丢掉，
+ * 剩余行按同一套规则重新校验——合格即作为该句的组装链（english 由编号还原、词区间直接算），
+ * 不合格则返回原因，交给用户重新选择「重试该句 / 删除该句」。
+ * 本句只有 1 个词时整句行本身就是 [0]，不算单词成行，不会被删。
+ */
+export function stripSingleWordRows(
+  rawInput: string | null | undefined,
+  wordStart: number,
+  words: string[],
+): StripWordsResult {
+  const raw = rawInput ?? null;
+  const rows = parseDraftRowsFromRaw(raw);
+  if (!rows) {
+    return {
+      removed: 0,
+      chain: null,
+      reason:
+        "上次输出里解析不出词编号（不是合法的 indexes 结构），无法删除单词行；请改用「重试该句」或「删除该句」",
+      statements: null,
+      raw,
+    };
+  }
+  const wordCount = words.length;
+  const kept = rows.filter((r) => !(wordCount > 1 && r.indexes.length === 1));
+  const removed = rows.length - kept.length;
+  const statements = rowsToStatements(kept, words);
+  if (removed === 0) {
+    return {
+      removed,
+      chain: null,
+      reason: "上次输出里没有单词成行的行，无需删除；请改用「重试该句」或「删除该句」",
+      statements,
+      raw,
+    };
+  }
+  const invalid = validateRowIndexes(
+    kept.map((r) => r.indexes),
+    wordCount,
+  );
+  if (invalid) {
+    return {
+      removed,
+      chain: null,
+      reason: `已删除 ${removed} 个单词行，但剩余 ${kept.length} 行仍不合规：${invalid}`,
+      statements,
+      raw,
+    };
+  }
+  if (statements.length !== kept.length) {
+    return {
+      removed,
+      chain: null,
+      reason: `已删除 ${removed} 个单词行，但剩余行里有 ${kept.length - statements.length} 行还原不出 english`,
+      statements,
+      raw,
+    };
+  }
+  const spans: StatementSpan[] = kept.map((r) => ({
+    wordStart: wordStart + r.indexes[0],
+    wordEnd: wordStart + r.indexes[r.indexes.length - 1] + 1,
+  }));
+  return { removed, chain: { statements, spans }, reason: null, statements, raw };
+}
+
+/** 结构化输出的 JSON Schema（strict 风格：全字段 required，可选用空串表达） */
 export const courseJsonSchema = {
   type: "object",
   additionalProperties: false,
@@ -93,9 +238,9 @@ export const courseJsonSchema = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["english", "chinese", "phonetic"],
+        required: ["indexes", "chinese", "phonetic"],
         properties: {
-          english: { type: "string" },
+          indexes: { type: "array", items: { type: "integer" } },
           chinese: { type: "string" },
           phonetic: { type: "string" },
         },
@@ -117,7 +262,7 @@ export function buildChatBody(input: {
 }): Record<string, unknown> {
   const body: Record<string, unknown> = {
     model: input.model,
-    temperature: 0,
+    temperature: 0.1,
     max_tokens: input.maxTokens,
     messages: input.messages,
     stream: true,
@@ -427,21 +572,6 @@ export async function mapWithConcurrency<T, R>(
   return results;
 }
 
-/** 归一化为可逐字比对的词序列（小写、去标点），与 align 的口径一致 */
-function tokenSequence(text: string): string {
-  return text.split(/\s+/).map(normalizeToken).filter(Boolean).join(" ");
-}
-
-/**
- * 组装链里是否存在逐字等于原句完整形式的一行（仅大小写/标点差异）。
- * 这是"模型没有把这一句丢弃或改写"的硬性校验：缩写被展开、漏词、换词都会失配。
- */
-export function containsFullSentence(statements: DraftStatement[], sentence: string): boolean {
-  const target = tokenSequence(sentence);
-  if (!target) return false;
-  return statements.some((s) => tokenSequence(s.english) === target);
-}
-
 /** 把未知结构安全转为字符串，用于失败快照里的 raw 展示 */
 function stringifyUnknown(value: unknown): string {
   try {
@@ -452,7 +582,7 @@ function stringifyUnknown(value: unknown): string {
 }
 
 /**
- * 单句「内容校验」失败（可恢复）：结构不合法 / english 去标点后为空 / 完整原句缺失。
+ * 单句「内容校验」失败（可恢复）：结构不合法 / 词编号不合法 / english 还原为空。
  * 与网络、超时、审核等致命错误区分开；调用方据此收集为可人工处理的失败项，
  * 而非让整条流水线直接中止。
  */
@@ -470,14 +600,15 @@ export class SentenceContentError extends Error {
 /** 单句组装链失败时的最大尝试次数（含首次） */
 const LLM_ATTEMPTS_PER_SENTENCE = 2;
 
-/** 单句：调用 LLM + 结构校验 + 完整原句锚点校验，产出一条 statement 组装链 */
+/** 单句：调用 LLM + 结构校验 + 词编号校验，产出一条 statement 组装链与其词区间 */
 async function generateChainForSentence(
-  sentence: string,
+  words: string[],
+  wordStart: number,
   label: string,
   note: string | undefined,
-): Promise<DraftStatement[]> {
-  const raw = await callLlmJson(buildMessages(sentence, note) as ChatMessage[]);
-  const parsed = draftSchema.safeParse(coerceCourseOutput(raw));
+): Promise<{ statements: DraftStatement[]; spans: StatementSpan[] }> {
+  const raw = await callLlmJson(buildMessages(words, note) as ChatMessage[]);
+  const parsed = draftRowsSchema.safeParse(coerceCourseOutput(raw));
   if (!parsed.success) {
     throw new SentenceContentError(
       `[llm] 输出结构校验失败（${label}）：${parsed.error.issues
@@ -489,32 +620,35 @@ async function generateChainForSentence(
     );
   }
   // api 的 strictNullChecks=false 会让 zod 把必填字段推断成可选；运行时已由 safeParse 校验
-  const statements = parsed.data.statements as DraftStatement[];
-  const { changes, emptyIndexes } = normalizeStatementsEnglish(statements);
-  if (changes.length > 0) {
-    console.log(
-      `[llm] english 标点清理（${label}，共 ${changes.length} 行，撇号/连字符保留）:\n  ${changes
-        .slice(0, 5)
-        .join("\n  ")}`,
-    );
-  }
-  if (emptyIndexes.length > 0) {
+  const rows = parsed.data.statements as DraftRow[];
+  const invalid = validateRowIndexes(
+    rows.map((r) => r.indexes),
+    words.length,
+  );
+  if (invalid) {
     throw new SentenceContentError(
-      `[llm] 输出结构校验失败（${label}）：第 ${emptyIndexes.join(", ")} 行 english 去掉标点后为空`,
-      statements,
+      `[llm] 词编号不合法（${label}）：${invalid}`,
+      rowsToStatements(rows, words),
+      raw,
     );
   }
-  if (!containsFullSentence(statements, sentence)) {
+  const statements = rowsToStatements(rows, words);
+  if (statements.length !== rows.length) {
     throw new SentenceContentError(
-      `[llm] 完整原句缺失（${label}）：输出里没有逐字等于「${sentence}」的行（可能被丢弃、漏词或把缩写展开如 don't→do not）`,
+      `[llm] 词编号还原失败（${label}）：有 ${rows.length - statements.length} 行还原出的 english 为空`,
       statements,
+      raw,
     );
   }
-  return statements;
+  const spans: StatementSpan[] = rows.map((r) => ({
+    wordStart: wordStart + r.indexes[0],
+    wordEnd: wordStart + r.indexes[r.indexes.length - 1] + 1,
+  }));
+  return { statements, spans };
 }
 
 type SentenceOutcome =
-  | { kind: "chain"; index: number; statements: DraftStatement[] }
+  | { kind: "chain"; index: number; statements: DraftStatement[]; spans: StatementSpan[] }
   | { kind: "failure"; index: number; failure: SentenceFailure }
   | { kind: "empty"; index: number };
 
@@ -527,13 +661,18 @@ export async function generateDraftCollected(
   transcript: Transcript,
   onlyIndexes?: number[],
 ): Promise<{
-  chains: Array<{ index: number; statements: DraftStatement[] }>;
+  chains: DraftChain[];
   failures: SentenceFailure[];
 }> {
+  const universe = buildTokenUniverse(transcript);
   const total = transcript.segments.length;
   const targetSet = new Set(onlyIndexes ?? transcript.segments.map((_, i) => i));
   const jobs = transcript.segments
-    .map((seg, index) => ({ index, sentence: seg.text.trim() }))
+    .map((seg, index) => ({
+      index,
+      sentence: seg.text.trim(),
+      view: sentenceWordView(universe, index),
+    }))
     .filter((j) => targetSet.has(j.index));
 
   const limit = config.llmConcurrency;
@@ -543,8 +682,14 @@ export async function generateDraftCollected(
 
   const results = await mapWithConcurrency(jobs, limit, async (job): Promise<SentenceOutcome> => {
     const label = `句 ${job.index + 1}/${total}`;
-    if (!job.sentence) {
+    if (!job.sentence || !job.view || job.view.words.length === 0) {
       return { kind: "empty", index: job.index };
+    }
+    const words = job.view.words;
+    if (words.length > 60) {
+      console.warn(
+        `[llm] ${label} 有 ${words.length} 个词（疑似段级降级的长段），编号输出较长，失败可考虑换更强模型`,
+      );
     }
     const attempts: SentenceAttempt[] = [];
     let lastContentError: SentenceContentError | null = null;
@@ -552,13 +697,18 @@ export async function generateDraftCollected(
       try {
         const note =
           attempt > 1 && lastContentError
-            ? `上一次输出不合格：${lastContentError.message}。请修正上述问题重新输出，并确保有一行 english 恰好是这句的全部词（保留缩写、不增删换词）：${job.sentence}`
+            ? `上一次输出不合格：${lastContentError.message}。请修正后重新输出：每行 statements[].indexes 必须是本句词编号组成的升序连续整数数组，每行至少包含 2 个词（本句只有 1 个词时除外），不得把单个词单独作为一行，且必须有一行 indexes 恰为 0,1,…,${words.length - 1}（编号从 0 开始，不得重复、跳号或超出范围）。`
             : undefined;
-        const chain = await generateChainForSentence(job.sentence, label, note);
+        const chain = await generateChainForSentence(words, job.view.wordStart, label, note);
         if (job.index === 0 || (job.index + 1) % 10 === 0) {
-          console.log(`[llm] ${label} 完成（${chain.length} 行）`);
+          console.log(`[llm] ${label} 完成（${chain.statements.length} 行）`);
         }
-        return { kind: "chain", index: job.index, statements: chain };
+        return {
+          kind: "chain",
+          index: job.index,
+          statements: chain.statements,
+          spans: chain.spans,
+        };
       } catch (error) {
         if (error instanceof SentenceContentError) {
           attempts.push({
@@ -582,11 +732,14 @@ export async function generateDraftCollected(
     };
   });
 
-  const chains: Array<{ index: number; statements: DraftStatement[] }> = [];
+  const chains: DraftChain[] = [];
   const failures: SentenceFailure[] = [];
   for (const r of results) {
-    if (r.kind === "chain") chains.push({ index: r.index, statements: r.statements });
-    else if (r.kind === "failure") failures.push(r.failure);
+    if (r.kind === "chain") {
+      chains.push({ index: r.index, statements: r.statements, spans: r.spans });
+    } else if (r.kind === "failure") {
+      failures.push(r.failure);
+    }
   }
   return { chains, failures };
 }
@@ -595,10 +748,7 @@ export async function generateDraftCollected(
  * CLI/本地严格路径：任一句失败即整体抛错（兼容 forgeMake）。
  * 仅线上 GUI（pipeline-runner）走 generateDraftCollected 做可恢复处理。
  */
-export async function generateDraft(
-  transcript: Transcript,
-  packTitle: string,
-): Promise<DraftCourse> {
+export async function generateDraft(transcript: Transcript): Promise<DraftChain[]> {
   const { chains, failures } = await generateDraftCollected(transcript);
   if (failures.length > 0) {
     const first = failures[0];
@@ -607,6 +757,5 @@ export async function generateDraft(
       `[llm] 句 ${first.index + 1}/${transcript.segments.length} 最终失败（已尝试 ${LLM_ATTEMPTS_PER_SENTENCE} 次）：${last?.reason ?? "未知原因"}`,
     );
   }
-  const statements = chains.flatMap((c) => c.statements);
-  return { title: packTitle, description: "", statements };
+  return chains;
 }
