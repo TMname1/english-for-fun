@@ -7,7 +7,8 @@ import { BadRequestException, Injectable, Logger, NotFoundException } from "@nes
 import type { StructureProgress } from "./core/types";
 import type { CreateForgeJobDto } from "./dto/create-forge-job.dto";
 import type { ResolveForgeFailuresDto } from "./dto/resolve-forge-failures.dto";
-import type { ResumeForgeJobDto } from "./dto/resume-forge-job.dto";
+// 【已停用 · 转录校对】仅 resumeJob 使用，该方法已注释保留（见下方 resumeJob 说明）。
+// import type { ResumeForgeJobDto } from "./dto/resume-forge-job.dto";
 import type { StartForgeJobDto } from "./dto/start-forge-job.dto";
 import type { ForgeJobRecord, ForgeJobStage } from "./job-store";
 import type { ForgeRunnerHandle } from "./runner-client";
@@ -47,7 +48,7 @@ export interface ForgeJobView {
   type: "dialogue" | "music";
   language?: string;
   description?: string;
-  /** status=awaiting_review 时附带：ASR 转录结果（word 级），供前端校对编辑 */
+  /** 【已停用 · 转录校对】awaiting_review 暂停态不再产生，该字段不再被填充；恢复校对步骤时随 getJob 一起放开 */
   transcriptJson?: unknown;
   /** status=done 时附带，结构同 course.json（ForgePayload） */
   courseJson?: unknown;
@@ -244,12 +245,13 @@ export class ForgeService {
       clips: record.clips,
     };
 
-    if (record.status === "awaiting_review") {
-      const text = await this.storage.getBuffer(`forge/${id}/transcript.json`);
-      if (text) {
-        view.transcriptJson = JSON.parse(text.toString("utf-8"));
-      }
-    }
+    // 【已停用 · 转录校对】awaiting_review 暂停态不再产生，无需回读转录供前端校对。
+    // if (record.status === "awaiting_review") {
+    //   const text = await this.storage.getBuffer(`forge/${id}/transcript.json`);
+    //   if (text) {
+    //     view.transcriptJson = JSON.parse(text.toString("utf-8"));
+    //   }
+    // }
 
     if (record.status === "done") {
       const text = await this.storage.getBuffer(`forge/${id}/course.json`);
@@ -268,9 +270,12 @@ export class ForgeService {
   }
 
   /**
-   * 校对后续跑：edited transcript 写对象存储，拉回产物到新的临时工作区，起 structure 阶段子进程。
-   * word 级编辑（改文字/删整段，不增删词、不改时间）由 course-forge 在子进程内规整为 Transcript。
+   * 【已停用 · 转录校对】resumeJob 服务于「转录后暂停 → 人工校对 → 回传 transcript.edited.json → 续跑结构化」，
+   * 该暂停步骤现已从流水线移除（转录子进程改为直接续跑结构化，见 pipeline-runner.ts）。
+   * 方法体整段注释保留；如需恢复两段式：去掉下方块注释、恢复 controller 的 resume 接口、
+   * handleDone 的 awaiting_review 暂停与前端 review 步骤（恢复步骤详见 pipeline-runner.ts 顶部说明）。
    */
+  /*
   async resumeJob(id: string, dto: ResumeForgeJobDto): Promise<{ jobId: string }> {
     const record = this.store.get(id);
     if (!record) throw new NotFoundException(`未找到任务 ${id}`);
@@ -325,6 +330,7 @@ export class ForgeService {
 
     return { jobId: id };
   }
+  */
 
   /**
    * 结构化出现失败句（needs_fix）后，前端对每个失败句选择「删除 / 重试」并续跑：
@@ -351,8 +357,10 @@ export class ForgeService {
       if (!Number.isInteger(d.index) || !failureIndexes.has(d.index)) {
         throw new BadRequestException(`句 ${d.index} 不在失败清单中`);
       }
-      if (d.action !== "delete" && d.action !== "retry") {
-        throw new BadRequestException(`句 ${d.index} 的动作必须是 delete 或 retry`);
+      if (d.action !== "delete" && d.action !== "retry" && d.action !== "strip_words") {
+        throw new BadRequestException(
+          `句 ${d.index} 的动作必须是 delete、retry 或 strip_words（删除所有单个单词）`,
+        );
       }
       if (seen.has(d.index)) {
         throw new BadRequestException(`句 ${d.index} 出现重复决策`);
@@ -363,9 +371,12 @@ export class ForgeService {
     if (missing.length > 0) {
       throw new BadRequestException(`缺少对失败句的决策：${missing.map((i) => i + 1).join(", ")}`);
     }
-    const retryCount = dto.decisions.filter((d) => d.action === "retry").length;
+    // 「删除所有单个单词」也可能救回句子，因此只要不是全部 delete，就还有句子能进课程
+    const retryOrStripCount = dto.decisions.filter(
+      (d) => d.action === "retry" || d.action === "strip_words",
+    ).length;
     const successCount = (progress.success ?? []).length;
-    if (successCount === 0 && retryCount === 0) {
+    if (successCount === 0 && retryOrStripCount === 0) {
       throw new BadRequestException("所有句子都被删除后无法生成课程，请至少保留一句");
     }
 
@@ -454,15 +465,17 @@ export class ForgeService {
     this.clearTimers(id);
     this.handles.delete(id);
 
-    // 第一段（转录）完成 → 暂停等待人工校对，不进 done
-    if (record.phase === "transcribe") {
-      this.store.update(id, {
-        status: "awaiting_review",
-        stage: "transcribed",
-        message: "转录完成，等待校对",
-      });
-      return;
-    }
+    // 【已停用 · 转录校对】第一段转录完成后不再暂停等待人工校对：转录子进程已在
+    // pipeline-runner 内直接续跑结构化，故 done 事件到来时课程已生成，按正常 done 收尾即可。
+    // 恢复"转录→校对→结构化"两段式时放开下面这段（并恢复 resumeJob、controller resume 接口、前端 review 步骤）：
+    // if (record.phase === "transcribe") {
+    //   this.store.update(id, {
+    //     status: "awaiting_review",
+    //     stage: "transcribed",
+    //     message: "转录完成，等待校对",
+    //   });
+    //   return;
+    // }
 
     this.store.update(id, {
       status: "done",

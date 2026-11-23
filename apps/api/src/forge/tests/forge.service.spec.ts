@@ -193,6 +193,31 @@ describe("ForgeService（视频切片两段式启动 + 对象存储）", () => {
     expect(storage.deleteObject).toHaveBeenCalledWith("course-video/a.mp4");
   });
 
+  it("转录完成（转录校对已停用：子进程内直接续跑结构化）：产物上传 forge/<id>/、清理临时区、进入 done", async () => {
+    const course = { courses: { statements: [] } };
+    jest.spyOn(fs, "existsSync").mockImplementation((p) => String(p).endsWith("course.json"));
+    jest.spyOn(fsp, "readFile").mockResolvedValue(Buffer.from(JSON.stringify(course)) as never);
+
+    const { jobId } = await service.createJob(fileOf("a.mp4"), baseDto);
+    await flush();
+    mockSpawn.mock.calls[0][1].onDone(join("/tmp/forge-output", "a"));
+    await flush();
+
+    expect(storage.putBuffer).toHaveBeenCalledWith(
+      "forge/a/course.json",
+      expect.any(Buffer),
+      "application/json",
+    );
+    expect(fsp.rm).toHaveBeenCalledWith(join("/tmp/forge-output", "a"), {
+      recursive: true,
+      force: true,
+    });
+    expect(store.get(jobId)!.status).toBe("done");
+  });
+
+  // 【已停用 · 转录校对】以下 resumeJob 测试对应「转录后暂停 → 人工校对 → 续跑」步骤，
+  // 该步骤已从流水线移除（见 pipeline-runner.ts 顶部说明），代码注释保留；恢复两段式时一并放开。
+  /*
   it("转写完成：JSON 产物上传 forge/<id>/、清理临时区、进入 awaiting_review；getJob 从 OSS 读转录", async () => {
     const transcript = { segments: [{ text: "hello", start: 0, end: 1 }] };
     jest.spyOn(fs, "existsSync").mockImplementation((p) => String(p).endsWith("transcript.json"));
@@ -259,6 +284,7 @@ describe("ForgeService（视频切片两段式启动 + 对象存储）", () => {
       BadRequestException,
     );
   });
+  */
 
   it("resolveFailures：非 needs_fix 状态 400", async () => {
     const { jobId } = await service.createJob(fileOf("a.mp4"), { ...baseDto, defer: true });
@@ -291,8 +317,51 @@ describe("ForgeService（视频切片两段式启动 + 对象存储）", () => {
     expect(fsp.writeFile).toHaveBeenCalledWith(
       join("/tmp/forge-output", "a", "structure.resolve.json"),
       expect.any(String),
+      "utf-8",
     );
     expect(store.get(jobId)!.status).toBe("running");
     expect(mockSpawn.mock.calls[0][0].phase).toBe("structure-resolve");
+  });
+
+  it("resolveFailures：strip_words（删除所有单个单词）被接受，且视为保留句子", async () => {
+    const { jobId } = await service.createJob(fileOf("a.mp4"), { ...baseDto, defer: true });
+    store.update(jobId, { status: "needs_fix" });
+    const progress = { success: [], failures: [{ index: 1, sentence: "Bye, V.", attempts: [] }] };
+    storage.getBuffer.mockImplementation(async (key: string) =>
+      key === "forge/a/structure.progress.json"
+        ? Buffer.from(JSON.stringify(progress))
+        : key.startsWith("forge/a/")
+          ? Buffer.from("{}")
+          : null,
+    );
+
+    // success 为空、唯一失败句选 strip_words：不能按「全部删除」报错
+    await service.resolveFailures(jobId, {
+      decisions: [{ index: 1, action: "strip_words" }],
+    } as any);
+
+    expect(fsp.writeFile).toHaveBeenCalledWith(
+      join("/tmp/forge-output", "a", "structure.resolve.json"),
+      expect.stringContaining("strip_words"),
+      "utf-8",
+    );
+    expect(store.get(jobId)!.status).toBe("running");
+  });
+
+  it("resolveFailures：未知动作仍 400", async () => {
+    const { jobId } = await service.createJob(fileOf("a.mp4"), { ...baseDto, defer: true });
+    store.update(jobId, { status: "needs_fix" });
+    const progress = { success: [], failures: [{ index: 1, sentence: "Bye, V.", attempts: [] }] };
+    storage.getBuffer.mockImplementation(async (key: string) =>
+      key === "forge/a/structure.progress.json"
+        ? Buffer.from(JSON.stringify(progress))
+        : key.startsWith("forge/a/")
+          ? Buffer.from("{}")
+          : null,
+    );
+
+    await expect(
+      service.resolveFailures(jobId, { decisions: [{ index: 1, action: "nuke" }] } as any),
+    ).rejects.toThrow(BadRequestException);
   });
 });
