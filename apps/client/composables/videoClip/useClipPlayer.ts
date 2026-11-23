@@ -7,10 +7,11 @@ const PRE_ROLL = 0.08;
 const END_TOLERANCE = 0.02;
 
 /**
- * 页面局部 <video> 的播放控制：播放头跟踪（rAF）、区间预览、播放/暂停。
+ * 页面局部媒体元素（<video> 或 <audio>）的播放控制：播放头跟踪（rAF）、区间预览、播放/暂停。
+ * 音频与视频共用：两者都实现 HTMLMediaElement 的同名接口。
  * 不复用 englishSound 单例——它绑定课程 store，混用会互相干扰。
  */
-export function useClipPlayer(videoRef: Ref<HTMLVideoElement | null>) {
+export function useClipPlayer(videoRef: Ref<HTMLMediaElement | null>) {
   const playhead = ref(0);
   const isPlaying = ref(false);
   const previewingIndex = ref<number | null>(null);
@@ -79,7 +80,7 @@ export function useClipPlayer(videoRef: Ref<HTMLVideoElement | null>) {
     }
   }
 
-  function bind(el: HTMLVideoElement) {
+  function bind(el: HTMLMediaElement) {
     const onPlay = () => {
       isPlaying.value = true;
       startTracking();

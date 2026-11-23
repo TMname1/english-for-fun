@@ -14,12 +14,12 @@
       class="space-y-4"
     >
       <div>
-        <label class="mb-1 block text-sm font-medium">视频文件</label>
+        <label class="mb-1 block text-sm font-medium">音视频文件</label>
         <input
           ref="fileInput"
           type="file"
           class="hidden"
-          :accept="VIDEO_ACCEPT"
+          :accept="MEDIA_ACCEPT"
           @change="handleFileChange"
         />
         <div class="flex items-center gap-3">
@@ -36,7 +36,8 @@
           </span>
         </div>
         <p class="mt-1 text-xs opacity-70">
-          支持 mp4 / m4v / mkv / webm / mov / avi，单文件最大 2GB
+          支持 mp4 / m4v / mkv / webm / mov / avi 与 mp3 / m4a / wav / aac，单文件最大 2GB。
+          音频只显示播放条，同样按 5 分钟切分。
         </p>
       </div>
     </div>
@@ -325,7 +326,8 @@ export type ClipUploadPayload =
 const props = defineProps<{ uploading: boolean }>();
 const emit = defineEmits<{ (e: "submit", payload: ClipUploadPayload): void }>();
 
-const VIDEO_ACCEPT = ".mp4,.m4v,.mkv,.webm,.mov,.avi";
+/** 与 apps/api/src/common/media-ext.ts 的白名单一致（含音频） */
+const MEDIA_ACCEPT = "video/*,audio/*,.mp4,.m4v,.mkv,.webm,.mov,.avi,.mp3,.m4a,.wav,.aac";
 
 const QN_OPTIONS = [
   { value: "", label: "自动最高" },

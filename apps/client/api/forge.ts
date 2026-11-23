@@ -50,6 +50,8 @@ export interface ForgeSentenceAttempt {
   reason: string;
   statements?: ForgeJobCourseStatement[] | null;
   raw?: string | null;
+  /** 该快照来自后端「逐词成行」的自动删单词补救（已自动处理过），前端不再重复提供该操作 */
+  autoStrip?: boolean;
 }
 
 /** 一个句子在全部尝试后仍失败的记录 */
@@ -65,10 +67,10 @@ export interface ForgeStructureProgress {
   failures: ForgeStructureFailure[];
 }
 
-/** 前端对每个失败句的选择：删除该句 / 重试该句 / 删除该句输出里的所有单个单词行 */
+/** 前端对每个失败句的选择：删除该句 / 重试该句（输出混着单词行由后端自动补救） */
 export interface ResolveForgeFailuresDecision {
   index: number;
-  action: "delete" | "retry" | "strip_words";
+  action: "delete" | "retry";
 }
 
 /** 校对续跑时回传的分段（被删除的段不包含） */
@@ -106,10 +108,12 @@ export interface ForgeJobView {
   error?: string;
   elapsedMs: number;
   outDir: string;
-  /** 视频预签名 URL（对象存储直连，会过期），仅供预览播放 */
+  /** 媒体预签名 URL（对象存储直连，会过期），仅供预览播放 */
   videoPath: string;
-  /** 视频对象键，入库时填到 course_packs.video */
+  /** 媒体对象键（视频或音频），入库时填到 course_packs.video */
   videoKey: string;
+  /** 媒体类型：audio 时剪辑页只渲染音频播放条 */
+  mediaKind?: "video" | "audio";
   title: string;
   type: "dialogue" | "music";
   language?: string;

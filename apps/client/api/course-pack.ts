@@ -4,6 +4,7 @@ import { useRuntimeConfig } from "#imports";
 import { ofetch } from "ofetch";
 
 import type { CoursePack, CoursePackLearning, CoursePacksItem } from "~/types";
+import { resolveMediaKind } from "~/utils/media";
 import { getHttp } from "./http";
 
 export type CoursePacksItemApiResponse = {
@@ -47,8 +48,10 @@ export interface CoursePackLearningApiResponse {
   description: string;
   /** 对象存储预签名 URL（会过期）或外部 URL */
   video: string;
-  /** true = 外部链接（走外链图标）；false = 对象存储视频（页内播放器 seek） */
+  /** true = 外部链接（走外链图标）；false = 对象存储媒体（页内播放器 seek） */
   videoIsExternal?: boolean;
+  /** 媒体类型（服务端按扩展名派生）：audio 时页内只渲染音频播放条 */
+  mediaKind?: "video" | "audio";
   statements: StatementApiResponse[];
   statementIndex: number;
 }
@@ -83,9 +86,42 @@ export async function fetchCoursePackLearning(coursePackId: string) {
     description: body.description ?? "",
     video: body.video ?? "",
     videoIsExternal: body.videoIsExternal ?? false,
+    mediaKind: resolveMediaKind(body.mediaKind, body.video),
     statements: body.statements,
     statementIndex: body.statementIndex ?? 0,
   } as CoursePackLearning;
+}
+
+/** 课程目录筛选项（服务端筛选，跨页有效） */
+export type StatementsFilter = "all" | "mastered" | "notMastered";
+
+/** 目录里的一条句子：index 是在完整有序列表里的下标，跳句时直接用它 */
+export interface StatementPageItemApiResponse extends StatementApiResponse {
+  index: number;
+  isMastered: boolean;
+}
+
+export interface StatementsPageApiResponse {
+  items: StatementPageItemApiResponse[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+}
+
+/**
+ * 课程目录分页：一次只取一页（服务端默认/最多 100 条）。
+ * 句子很多时不要拉全量，按页请求。
+ */
+export async function fetchCoursePackStatements(
+  coursePackId: string,
+  params: { page?: number; pageSize?: number; filter?: StatementsFilter } = {},
+) {
+  const http = getHttp();
+  return await http<StatementsPageApiResponse>(`/course-pack/${coursePackId}/statements`, {
+    method: "get",
+    query: params,
+  });
 }
 
 /** 完成一次课程包学习（累计 completionCount） */
@@ -176,7 +212,7 @@ export async function updateCoursePack(coursePackId: string, payload: CreateCour
 }
 
 /**
- * 上传本地视频文件到对象存储，返回对象键（入库用）与预签名预览 URL。
+ * 上传本地视频/音频文件到对象存储，返回对象键（入库用）、预签名预览 URL 与媒体类型。
  * 单独走 ofetch：让浏览器自设 multipart boundary（共享 http 实例默认 application/json 会破坏上传）。
  */
 function coursePackFetch(): $Fetch {
@@ -186,13 +222,16 @@ function coursePackFetch(): $Fetch {
 
 export async function uploadCoursePackVideo(
   file: File,
-): Promise<{ video: string; videoUrl: string }> {
+): Promise<{ video: string; videoUrl: string; mediaKind?: "video" | "audio" }> {
   const formData = new FormData();
   formData.append("videoFile", file);
   const $fetch = coursePackFetch();
-  return await $fetch<{ video: string; videoUrl: string }>("/course-pack/video", {
-    method: "post",
-    body: formData,
-    retry: 0,
-  });
+  return await $fetch<{ video: string; videoUrl: string; mediaKind?: "video" | "audio" }>(
+    "/course-pack/video",
+    {
+      method: "post",
+      body: formData,
+      retry: 0,
+    },
+  );
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { isWord, useInput } from "../question";
+import { isWord, resetQuestionInput, useInput } from "../question";
 
 describe("question", () => {
   it("should parse user input correctly", () => {
@@ -644,6 +644,27 @@ describe("question", () => {
 
       expect(inputChangedCallback).toBeCalledTimes(2);
     });
+  });
+});
+
+describe("resetQuestionInput", () => {
+  it("清空输入框与逐词状态，用于改完句子后重开本题", () => {
+    const { userInputWords, initialize, setInputValue } = useInput({
+      source: () => "i eat",
+      setInputCursorPosition: () => {},
+      getInputCursorPosition: () => 0,
+    });
+    initialize();
+    setInputValue("i ate");
+
+    expect(userInputWords.map((word) => word.userInput)).toEqual(["i", "ate"]);
+
+    resetQuestionInput();
+
+    expect(userInputWords.map((word) => word.userInput)).toEqual(["", ""]);
+    expect(userInputWords.every((word) => word.incorrect === false)).toBe(true);
+    expect(userInputWords[0].isActive).toBe(true);
+    expect(userInputWords[1].isActive).toBe(false);
   });
 });
 

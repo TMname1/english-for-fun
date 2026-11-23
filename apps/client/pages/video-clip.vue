@@ -4,10 +4,10 @@
       <h2
         class="bg-gradient-to-r from-violet-500 via-fuchsia-500 to-cyan-400 bg-clip-text text-2xl font-bold text-transparent"
       >
-        视频切片转写
+        音视频切片转写
       </h2>
       <p class="mt-1 text-sm opacity-70">
-        上传视频 → 时间轴打切点 → 勾选片段 → 只转写选中的部分 → 生成课程
+        上传音视频 → 时间轴打切点 → 勾选片段 → 只转写选中的部分 → 生成课程
       </p>
       <!--
         【已停用 · 转录校对】原流程为「…转写 → 校对 → 生成课程」，转录后会暂停让你逐句校对文字。
@@ -30,8 +30,19 @@
         v-else-if="step === 'edit'"
         class="space-y-4"
       >
+        <!-- 音频只渲染原生播放条，避免出现 <video> 黑块；两者共用同一套 seek/时长逻辑 -->
+        <audio
+          v-if="isAudioMedia"
+          ref="mediaEl"
+          :src="videoUrl"
+          controls
+          preload="auto"
+          class="w-full"
+          @loadedmetadata="handleMetadata"
+        />
         <video
-          ref="videoEl"
+          v-else
+          ref="mediaEl"
           :src="videoUrl"
           controls
           playsinline
@@ -68,8 +79,8 @@
         />
 
         <p class="text-xs opacity-60">
-          快捷键：空格 播放/暂停 · C 在播放头添加切点。5 分钟内的视频不打切点可整段转写；超过 5
-          分钟必须先切分，且单个片段不超过 5 分钟。
+          快捷键：空格 播放/暂停 · C 在播放头添加切点。5 分钟内的素材不打切点可整段转写；超过 5
+          分钟必须先切分，且单个片段不超过 5 分钟（音频按同一规则处理）。
         </p>
       </div>
 
@@ -181,6 +192,7 @@ import { useForgeJob } from "~/composables/forge/useForgeJob";
 import { validateClipSelection } from "~/composables/videoClip/clipMath";
 import { useClipEditor } from "~/composables/videoClip/useClipEditor";
 import { useClipPlayer } from "~/composables/videoClip/useClipPlayer";
+import { resolveMediaKind } from "~/utils/media";
 
 type Step = "upload" | "edit" | "working" | "review" | "fix" | "failed";
 
@@ -190,12 +202,16 @@ const submitting = ref(false);
 const importing = ref(false);
 const jobId = ref<string | null>(null);
 const videoUrl = ref("");
-const videoEl = ref<HTMLVideoElement | null>(null);
+/** 播放/预览用的媒体元素：音频与视频共用（都实现 HTMLMediaElement 接口） */
+const mediaEl = ref<HTMLMediaElement | null>(null);
+/** 媒体类型：由服务端 mediaKind 派生，回退到对象键扩展名 */
+const mediaKind = ref<"video" | "audio">("video");
+const isAudioMedia = computed(() => mediaKind.value === "audio");
 const errorText = ref("");
 const submittedClipCount = ref(1);
 
 const editor = useClipEditor();
-const player = useClipPlayer(videoEl);
+const player = useClipPlayer(mediaEl);
 
 const submitBlockReason = computed(() =>
   validateClipSelection(editor.duration.value, editor.cuts.value, editor.selectedClips.value),
@@ -267,6 +283,7 @@ async function handleUpload(payload: ClipUploadPayload) {
     jobId.value = id;
     const view = await fetchForgeJob(id);
     videoUrl.value = view.videoPath;
+    mediaKind.value = resolveMediaKind(view.mediaKind, view.videoKey ?? view.videoPath);
     editor.reset();
     step.value = "edit";
   } catch (error) {
@@ -277,8 +294,8 @@ async function handleUpload(payload: ClipUploadPayload) {
 }
 
 function handleMetadata() {
-  if (videoEl.value) {
-    editor.duration.value = videoEl.value.duration;
+  if (mediaEl.value) {
+    editor.duration.value = mediaEl.value.duration;
   }
 }
 
