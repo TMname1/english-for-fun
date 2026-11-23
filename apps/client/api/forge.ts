@@ -65,10 +65,10 @@ export interface ForgeStructureProgress {
   failures: ForgeStructureFailure[];
 }
 
-/** 前端对每个失败句的选择 */
+/** 前端对每个失败句的选择：删除该句 / 重试该句 / 删除该句输出里的所有单个单词行 */
 export interface ResolveForgeFailuresDecision {
   index: number;
-  action: "delete" | "retry";
+  action: "delete" | "retry" | "strip_words";
 }
 
 /** 校对续跑时回传的分段（被删除的段不包含） */
