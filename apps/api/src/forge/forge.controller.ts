@@ -19,7 +19,8 @@ import { diskStorage } from "multer";
 
 import { CreateForgeJobDto } from "./dto/create-forge-job.dto";
 import { ResolveForgeFailuresDto } from "./dto/resolve-forge-failures.dto";
-import { ResumeForgeJobDto } from "./dto/resume-forge-job.dto";
+// 【已停用 · 转录校对】仅 resume 接口使用，该接口已注释保留（见下方 resumeJob 说明）。
+// import { ResumeForgeJobDto } from "./dto/resume-forge-job.dto";
 import { StartForgeJobDto } from "./dto/start-forge-job.dto";
 import { ForgeService } from "./forge.service";
 
@@ -88,11 +89,16 @@ export class ForgeController {
     return this.forgeService.cancelJob(id);
   }
 
-  /** 转录后人工校对完成，续跑结构化 + 对齐；body 为 word 级编辑后的分段 */
+  /**
+   * 【已停用 · 转录校对】转录后人工校对续跑接口，配合 forge.service.resumeJob。
+   * 流水线已移除该暂停步骤，接口整段注释保留；恢复步骤见 pipeline-runner.ts 顶部说明。
+   */
+  /*
   @Post("jobs/:id/resume")
   resumeJob(@Param("id") id: string, @Body() dto: ResumeForgeJobDto) {
     return this.forgeService.resumeJob(id, dto);
   }
+  */
 
   /** 结构化出现失败句后，前端对每个失败句选择「删除 / 重试」并续跑 */
   @Post("jobs/:id/resolve")
