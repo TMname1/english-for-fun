@@ -7,8 +7,14 @@
         视频切片转写
       </h2>
       <p class="mt-1 text-sm opacity-70">
-        上传视频 → 时间轴打切点 → 勾选片段 → 只转写选中的部分 → 校对 → 生成课程
+        上传视频 → 时间轴打切点 → 勾选片段 → 只转写选中的部分 → 生成课程
       </p>
+      <!--
+        【已停用 · 转录校对】原流程为「…转写 → 校对 → 生成课程」，转录后会暂停让你逐句校对文字。
+        当前不再需要该人工校对步骤，流水线转录完成后直接续跑结构化 + 对齐。
+        校对 UI（step === "review" / ForgeTranscriptReview / handleResume / isAwaitingReview 监听）整段
+        注释保留；恢复步骤见 apps/api/src/forge/core/pipeline-runner.ts 顶部说明。
+      -->
     </div>
 
     <div
@@ -80,8 +86,8 @@
           <span class="ml-auto text-sm opacity-70">已用 {{ forge.elapsedSeconds.value }}s</span>
         </div>
         <p class="text-xs opacity-70">
-          只转写勾选的 {{ submittedClipCount }} 个片段。 转录完成后会暂停让你校对文字，之后自动继续
-          LLM 结构化与时间戳对齐。请勿关闭页面。
+          只转写勾选的 {{ submittedClipCount }} 个片段。 转录完成后会自动继续 LLM
+          结构化与时间戳对齐。请勿关闭页面。
         </p>
         <div class="flex justify-end">
           <UButton
@@ -94,17 +100,22 @@
         </div>
       </div>
 
-      <div
-        v-else-if="step === 'review' && forge.job.value"
-        class="space-y-3"
-      >
-        <h3 class="text-lg font-semibold">校对转写结果</h3>
-        <ForgeTranscriptReview
-          :job="forge.job.value"
-          @resume="handleResume"
-          @cancel="handleCancel"
-        />
-      </div>
+      <!--
+        【已停用 · 转录校对】人工校对步骤已从流水线移除，转录完成后直接续跑结构化。
+        组件、handleResume、isAwaitingReview 监听与 resume 接口（前后端）均注释保留；
+        恢复"转录→校对→结构化"两段式时一并放开（恢复步骤见 apps/api/src/forge/core/pipeline-runner.ts 顶部说明）。
+        <div
+          v-else-if="step === 'review' && forge.job.value"
+          class="space-y-3"
+        >
+          <h3 class="text-lg font-semibold">校对转写结果</h3>
+          <ForgeTranscriptReview
+            :job="forge.job.value"
+            @resume="handleResume"
+            @cancel="handleCancel"
+          />
+        </div>
+      -->
 
       <div
         v-else-if="step === 'fix' && forge.job.value"
@@ -146,19 +157,22 @@ import { navigateTo, useRuntimeConfig } from "#imports";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { toast } from "vue-sonner";
 
-import type { ResolveForgeFailuresDecision, ResumeTranscriptSegment } from "~/api/forge";
+// 【已停用 · 转录校对】ResumeTranscriptSegment 仅供校对续跑 handleResume 使用，已随之注释保留。
+import type { ResolveForgeFailuresDecision } from "~/api/forge";
 import type { ClipUploadPayload } from "~/components/VideoClip/ClipUploadForm.vue";
 import { createCoursePack } from "~/api/course-pack";
 import {
   cancelForgeJob,
   fetchForgeJob,
   resolveForgeJob,
-  resumeForgeJob,
+  // 【已停用 · 转录校对】resumeForgeJob：校对续跑接口已停用（见 pipeline-runner.ts 顶部说明）
+  // resumeForgeJob,
   startForgeJob,
   uploadForgeJob,
 } from "~/api/forge";
 import ForgeStructureFix from "~/components/ForgeImport/ForgeStructureFix.vue";
-import ForgeTranscriptReview from "~/components/ForgeImport/ForgeTranscriptReview.vue";
+// 【已停用 · 转录校对】ForgeTranscriptReview：人工校对组件已停用，文件保留未删。
+// import ForgeTranscriptReview from "~/components/ForgeImport/ForgeTranscriptReview.vue";
 import ClipTimeline from "~/components/VideoClip/ClipTimeline.vue";
 import ClipToolbar from "~/components/VideoClip/ClipToolbar.vue";
 import ClipUploadForm from "~/components/VideoClip/ClipUploadForm.vue";
@@ -202,12 +216,13 @@ function describeError(error: unknown): string {
   return String(error);
 }
 
-watch(
-  () => forge.isAwaitingReview.value,
-  (awaiting) => {
-    if (awaiting && step.value === "working") step.value = "review";
-  },
-);
+// 【已停用 · 转录校对】不再进入 review 步骤：isAwaitingReview 监听注释保留。
+// watch(
+//   () => forge.isAwaitingReview.value,
+//   (awaiting) => {
+//     if (awaiting && step.value === "working") step.value = "review";
+//   },
+// );
 watch(
   () => forge.isNeedsFix.value,
   (needs) => {
@@ -302,19 +317,20 @@ async function handleSubmitClips() {
   }
 }
 
-function handleResume(segments: ResumeTranscriptSegment[]) {
-  if (!jobId.value) return;
-  step.value = "working";
-  void (async () => {
-    try {
-      await resumeForgeJob(jobId.value!, segments);
-      forge.start(jobId.value!);
-    } catch (error) {
-      errorText.value = describeError(error);
-      step.value = "failed";
-    }
-  })();
-}
+// 【已停用 · 转录校对】校对续跑回调，随 review 步骤一起注释保留（恢复步骤见 pipeline-runner.ts 顶部说明）。
+// function handleResume(segments: ResumeTranscriptSegment[]) {
+//   if (!jobId.value) return;
+//   step.value = "working";
+//   void (async () => {
+//     try {
+//       await resumeForgeJob(jobId.value!, segments);
+//       forge.start(jobId.value!);
+//     } catch (error) {
+//       errorText.value = describeError(error);
+//       step.value = "failed";
+//     }
+//   })();
+// }
 
 function handleResolveFailures(decisions: ResolveForgeFailuresDecision[]) {
   if (!jobId.value) return;

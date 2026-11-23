@@ -1,10 +1,8 @@
 <template>
   <div class="space-y-4">
     <p class="text-sm opacity-70">
-      {{
-        failures.length
-      }}
-      个句子未通过校验。对每个句子选择「删除该句」（从课程中省略）或「重试该句」（再生成一次）。
+      {{ failures.length }}
+      个句子未通过校验。对每个句子选择「重试该句」（再生成一次）、「删除该句」（从课程中省略），或「删除所有单个单词」（丢掉这句输出里的单词行，剩余内容重新校验）。
     </p>
 
     <div
@@ -73,7 +71,7 @@
           </details>
         </div>
 
-        <div class="flex items-center gap-2">
+        <div class="flex flex-wrap items-center gap-2">
           <UButton
             size="xs"
             :color="decisionOf(f.index) === 'retry' ? 'violet' : 'gray'"
@@ -92,6 +90,27 @@
           >
             删除该句
           </UButton>
+          <UButton
+            size="xs"
+            :color="decisionOf(f.index) === 'strip_words' ? 'amber' : 'gray'"
+            variant="soft"
+            :disabled="submitting || singleWordCount(f) === 0"
+            :title="
+              singleWordCount(f) === 0
+                ? '这句的最近一次输出里没有单个单词的行'
+                : '删掉这句输出里所有只有一个词的行，剩下的内容重新校验，合格就直接通过'
+            "
+            @click="choose(f.index, 'strip_words')"
+          >
+            删除所有单个单词{{ singleWordCount(f) > 0 ? `（${singleWordCount(f)}）` : "" }}
+          </UButton>
+          <span
+            v-if="decisionOf(f.index) === 'strip_words'"
+            class="text-xs opacity-70"
+          >
+            将删除
+            {{ singleWordCount(f) }} 个单词行，剩余内容重新校验：合格即通过，不合格还要你再选一次。
+          </span>
           <span
             v-if="confirmIndex === f.index"
             class="text-xs text-red-500"
@@ -172,21 +191,30 @@ const emit = defineEmits<{
 
 const submitting = ref(false);
 const confirmIndex = ref<number | null>(null);
-const decisions = ref<Record<number, "delete" | "retry">>({});
+type Decision = ResolveForgeFailuresDecision["action"];
+const decisions = ref<Record<number, Decision>>({});
 
 const failures = computed<ForgeStructureFailure[]>(
   () => props.job.structureProgress?.failures ?? [],
 );
 const successCount = computed(() => props.job.structureProgress?.success.length ?? 0);
-const retryCount = computed(
-  () => failures.value.filter((f) => decisions.value[f.index] === "retry").length,
+/** 选择「重试」或「删除所有单个单词」都可能让该句进课程，因此都算保留 */
+const keepCount = computed(
+  () =>
+    failures.value.filter((f) => {
+      const d = decisions.value[f.index];
+      return d === "retry" || d === "strip_words";
+    }).length,
 );
 const allDecided = computed(() =>
   failures.value.every(
-    (f) => decisions.value[f.index] === "delete" || decisions.value[f.index] === "retry",
+    (f) =>
+      decisions.value[f.index] === "delete" ||
+      decisions.value[f.index] === "retry" ||
+      decisions.value[f.index] === "strip_words",
   ),
 );
-const remainingEstimate = computed(() => successCount.value + retryCount.value);
+const remainingEstimate = computed(() => successCount.value + keepCount.value);
 const canSubmit = computed(
   () =>
     failures.value.length > 0 &&
@@ -195,7 +223,7 @@ const canSubmit = computed(
     !submitting.value,
 );
 
-function decisionOf(index: number): "delete" | "retry" | undefined {
+function decisionOf(index: number): Decision | undefined {
   return decisions.value[index];
 }
 
@@ -216,7 +244,44 @@ function displayRaw(f: ForgeStructureFailure): string {
   return latestOf(f)?.raw ?? "";
 }
 
-function choose(index: number, action: "delete" | "retry") {
+function countWords(text: string): number {
+  return text.trim().split(/\s+/).filter(Boolean).length;
+}
+
+/** 从最近一次原始输出里取回行编号（模型只回 indexes）；有任何一行不合规就返回 null */
+function rawRowsOf(f: ForgeStructureFailure): Array<{ indexes: number[] }> | null {
+  const text = displayRaw(f);
+  if (!text) return null;
+  try {
+    let parsed: unknown = JSON.parse(text);
+    const wrapped = parsed as { courses?: unknown };
+    if (wrapped && Array.isArray(wrapped.courses)) parsed = wrapped.courses[0];
+    const rows = (parsed as { statements?: unknown })?.statements;
+    if (!Array.isArray(rows) || rows.length === 0) return null;
+    const valid = rows.every(
+      (r) =>
+        Array.isArray((r as { indexes?: unknown })?.indexes) &&
+        (r as { indexes: unknown[] }).indexes.length > 0,
+    );
+    return valid ? (rows as Array<{ indexes: number[] }>) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 该句最近一次输出里「单词成行」的行数（与后端 validateRowIndexes 同一口径：
+ * 本句只有 1 个词时整句行本身就是单词行，不算违规，也不删）。
+ */
+function singleWordCount(f: ForgeStructureFailure): number {
+  if (countWords(f.sentence) <= 1) return 0;
+  const rows = rawRowsOf(f);
+  if (rows) return rows.filter((r) => r.indexes.length === 1).length;
+  // 原始输出解析不出编号时，退回按 english 词数估算
+  return displayStatements(f).filter((s) => countWords(s.english) === 1).length;
+}
+
+function choose(index: number, action: Decision) {
   confirmIndex.value = null;
   decisions.value[index] = action;
 }
