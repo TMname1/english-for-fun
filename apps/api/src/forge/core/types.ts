@@ -42,14 +42,21 @@ export interface DraftStatement {
   words?: { word: string; start: number; end: number }[] | null;
 }
 
+/** 一行 statement 在转写词序列中的跨度（全局 ref 下标、半开区间），由编号直算 */
+export interface StatementSpan {
+  wordStart: number;
+  wordEnd: number;
+}
+
 /**
- * LLM 单次调用产出的单一课程。
- * "分课程"功能已删除：一个课程包只有一门课程，逐句并发生成的 statements 会合并进这一门课。
+ * 一句 LLM 结构化产物：statements 与其等长的词编号跨度。
+ * spans 用于对齐阶段直接取时间戳；旧进度快照 / 降级场景为 null。
  */
-export interface DraftCourse {
-  title: string;
-  description?: string;
+export interface DraftChain {
+  /** transcript.segments 原数组下标 */
+  index: number;
   statements: DraftStatement[];
+  spans?: (StatementSpan | null)[];
 }
 
 /** 单次结构化尝试的失败快照：reason 为校验失败原因，statements/raw 用于前端展示模型输出 */
@@ -70,14 +77,14 @@ export interface SentenceFailure {
 
 /** 结构化进度快照：成功链 + 失败清单，用于 needs_fix 后的 resolve 续跑 */
 export interface StructureProgress {
-  success: Array<{ index: number; statements: DraftStatement[] }>;
+  success: Array<{ index: number; statements: DraftStatement[]; spans?: (StatementSpan | null)[] }>;
   failures: SentenceFailure[];
 }
 
-/** 前端对每个失败句的选择 */
+/** 前端对每个失败句的选择：删除该句 / 重试该句 / 删除该句输出里的所有单词行 */
 export interface ResolveDecision {
   index: number;
-  action: "delete" | "retry";
+  action: "delete" | "retry" | "strip_words";
 }
 
 /** 最终课程包 JSON（文本课程；音频字段由后续流程填充，流水线不产出） */

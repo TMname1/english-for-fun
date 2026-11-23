@@ -1,4 +1,8 @@
-import type { DraftStatement, Transcript } from "./types";
+import type { DraftStatement, StatementSpan, Transcript } from "./types";
+import type { Token, WordRef } from "./words";
+import { buildTokenUniverse, tokenize } from "./words";
+
+export { normalizeToken } from "./words";
 
 export interface WordTiming {
   word: string;
@@ -13,7 +17,7 @@ export interface AlignedTiming {
   words: WordTiming[] | null;
 }
 
-export type AlignMatchKind = "anchor" | "fragment" | "fuzzy" | "failed";
+export type AlignMatchKind = "anchor" | "fragment" | "fuzzy" | "span" | "failed";
 
 export interface AlignEntry {
   index: number;
@@ -26,7 +30,10 @@ export interface AlignEntry {
 export interface AlignmentReport {
   wordLevel: boolean;
   total: number;
+  /** anchor + fragment（不含 span 直取） */
   exact: number;
+  /** 由词编号 span 直接取到的条数 */
+  spanned: number;
   fuzzy: number;
   failed: number;
   rate: number;
@@ -39,76 +46,11 @@ export interface AlignResult {
   report: AlignmentReport;
 }
 
-interface Token {
-  raw: string;
-  norm: string;
-}
-
-/** 转写词在扁平序列中的引用 */
-interface WordRef {
-  raw: string;
-  norm: string;
-  start: number;
-  end: number;
-}
-
 /** 完整句（预处理后一个 segment 即一句）在 WordRef 序列上的跨度 */
 interface SentenceSpan {
   wordStart: number;
   wordEnd: number;
   norms: string[];
-}
-
-export function normalizeToken(text: string): string {
-  return text.toLowerCase().replace(/[^a-z0-9]/g, "");
-}
-
-function tokenize(text: string): Token[] {
-  return text
-    .split(/\s+/)
-    .map((raw) => ({ raw, norm: normalizeToken(raw) }))
-    .filter((t) => t.norm.length > 0);
-}
-
-/**
- * 摊平转写为全局词序列。词级模式下把 whisper 的撇号粘连切分
- * （"don" + "'t"）合回一个词，保证与 statement 的 "don't" 归一化后一致。
- * 段级降级模式下按 segment.text 分词，每个 token 指向所属 segment 的时间。
- * 同时记录每个原始 segment 对应的 [wordStart, wordEnd) 区间。
- */
-function buildWordRefs(transcript: Transcript): {
-  refs: WordRef[];
-  segmentRanges: Array<{ start: number; end: number }>;
-} {
-  const refs: WordRef[] = [];
-  const segmentRanges: Array<{ start: number; end: number }> = [];
-
-  for (const seg of transcript.segments) {
-    const start = refs.length;
-    if (transcript.wordLevel && seg.words && seg.words.length > 0) {
-      for (const w of seg.words) {
-        const raw = w.word.trim();
-        if (!raw) continue;
-        // "'t" / "'s" 这类碎片并入前一个词
-        if (raw.startsWith("'") && refs.length > start) {
-          const prev = refs[refs.length - 1];
-          prev.raw += raw;
-          prev.norm = normalizeToken(prev.raw);
-          prev.end = w.end;
-          continue;
-        }
-        const norm = normalizeToken(raw);
-        if (!norm) continue;
-        refs.push({ raw, norm, start: w.start, end: w.end });
-      }
-    } else {
-      for (const t of tokenize(seg.text)) {
-        refs.push({ raw: t.raw, norm: t.norm, start: seg.start, end: seg.end });
-      }
-    }
-    segmentRanges.push({ start, end: refs.length });
-  }
-  return { refs, segmentRanges };
 }
 
 /**
@@ -201,9 +143,17 @@ function findFuzzyOccurrences(
  * Pass 2 碎片——收集全部出现位置，优先落在「下一个锚点句」span 内，
  * 其次距上一条匹配位置（游标）最近。
  * 精确失败允许 ≤1 词的模糊匹配（仅结果唯一时采信），仍失败置 null。
+ *
+ * 若调用方传入了结构化阶段产出的词编号 span（全局 ref 半开区间），
+ * 该条直接取 refs 的时间与逐词时间戳（kind = "span"），不参与上述任何猜测式匹配；
+ * 无 span / span 越界或长度不符（旧进度快照、转写被人工改过）则自动退回原匹配逻辑。
  */
-export function alignStatements(transcript: Transcript, statements: DraftStatement[]): AlignResult {
-  const { refs, segmentRanges } = buildWordRefs(transcript);
+export function alignStatements(
+  transcript: Transcript,
+  statements: DraftStatement[],
+  spans?: ReadonlyArray<StatementSpan | null | undefined>,
+): AlignResult {
+  const { refs, segmentRanges } = buildTokenUniverse(transcript);
   const sentences = buildSentenceSpans(segmentRanges, refs);
 
   const statementTokens = statements.map((s) => tokenize(s.english));
@@ -233,10 +183,47 @@ export function alignStatements(transcript: Transcript, statements: DraftStateme
       : null,
   });
 
+  // 编号直取：词编号 span 来自结构化阶段（可能含全局 ref 下标），
+  // 校验通过就直接取时间与逐词时间戳，不再参与下面的猜测式匹配。
+  const spanned = new Set<number>();
+  statements.forEach((_, i) => {
+    const span = spans?.[i];
+    if (!span) return;
+    const { wordStart, wordEnd } = span;
+    if (
+      !Number.isInteger(wordStart) ||
+      !Number.isInteger(wordEnd) ||
+      wordStart < 0 ||
+      wordEnd <= wordStart ||
+      wordEnd > refs.length
+    ) {
+      return;
+    }
+    // span 长度必须与实际词数一致（重建 english 与编号 1:1，长度不等说明快照陈旧）
+    if (wordEnd - wordStart !== statementTokens[i].length) return;
+    timings[i] = {
+      startTime: refs[wordStart].start,
+      endTime: refs[wordEnd - 1].end,
+      words: transcript.wordLevel
+        ? refs.slice(wordStart, wordEnd).map((r) => ({ word: r.raw, start: r.start, end: r.end }))
+        : null,
+    };
+    entries[i] = {
+      ...entries[i],
+      kind: "span",
+      startTime: timings[i]!.startTime,
+      endTime: timings[i]!.endTime,
+    };
+    spanned.add(i);
+  });
+
+  const pending = statements.map((_, i) => i).filter((i) => !spanned.has(i));
+
   // Pass 1：锚点句（单调对齐，游标只前进；找不到再回看已用过的区间）
   const anchorOf = new Map<number, number>(); // statement index -> sentence index
   let sentCursor = 0;
-  statementTokens.forEach((tokens, i) => {
+  pending.forEach((i) => {
+    const tokens = statementTokens[i];
     if (tokens.length === 0) return;
     const norms = tokens.map((t) => t.norm);
     let found = -1;
@@ -273,7 +260,8 @@ export function alignStatements(transcript: Transcript, statements: DraftStateme
 
   // Pass 2：按顺序逐条定位，游标为上一条匹配的结束词位置
   let cursor = 0;
-  statementTokens.forEach((tokens, i) => {
+  pending.forEach((i) => {
+    const tokens = statementTokens[i];
     if (tokens.length === 0) return;
     const norms = tokens.map((t) => t.norm);
 
@@ -344,6 +332,7 @@ export function alignStatements(transcript: Transcript, statements: DraftStateme
   });
 
   const exact = entries.filter((e) => e.kind === "anchor" || e.kind === "fragment").length;
+  const spannedCount = entries.filter((e) => e.kind === "span").length;
   const fuzzy = entries.filter((e) => e.kind === "fuzzy").length;
   const failed = entries.filter((e) => e.kind === "failed").length;
   const total = statements.length;
@@ -354,9 +343,10 @@ export function alignStatements(transcript: Transcript, statements: DraftStateme
       wordLevel: transcript.wordLevel,
       total,
       exact,
+      spanned: spannedCount,
       fuzzy,
       failed,
-      rate: total > 0 ? (exact + fuzzy) / total : 0,
+      rate: total > 0 ? (exact + spannedCount + fuzzy) / total : 0,
       entries,
     },
   };
@@ -364,8 +354,12 @@ export function alignStatements(transcript: Transcript, statements: DraftStateme
 
 export function formatAlignmentSummary(report: AlignmentReport): string {
   const granularity = report.wordLevel ? "词级" : "段级降级（无单词时间戳）";
+  const detail =
+    report.spanned > 0
+      ? `（编号直取 ${report.spanned}、精确 ${report.exact}、模糊 ${report.fuzzy}、失败 ${report.failed}）`
+      : `（精确 ${report.exact}、模糊 ${report.fuzzy}、失败 ${report.failed}）`;
   return (
-    `对齐完成（${granularity}）：${report.exact + report.fuzzy}/${report.total} 成功` +
-    `（精确 ${report.exact}、模糊 ${report.fuzzy}、失败 ${report.failed}）`
+    `对齐完成（${granularity}）：${report.exact + report.spanned + report.fuzzy}/${report.total} 成功` +
+    detail
   );
 }
