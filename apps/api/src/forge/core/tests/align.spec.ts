@@ -157,3 +157,70 @@ describe("alignStatements", () => {
     expect(formatAlignmentSummary(report)).toContain("1/2");
   });
 });
+
+describe("alignStatements 词编号 span 直取", () => {
+  it("有合法 span 时不参与匹配，时间与逐词时间戳直接来自编号", () => {
+    const transcript = wordTranscript([{ text: "I like apples." }, { text: "I like pears." }]);
+    const statements = [stmt("I like"), stmt("apples"), stmt("I like apples")];
+    // 三行都指向第一句：0..2 / 2..3 / 0..3
+    const spans = [
+      { wordStart: 0, wordEnd: 2 },
+      { wordStart: 2, wordEnd: 3 },
+      { wordStart: 0, wordEnd: 3 },
+    ];
+    const { timings, report } = alignStatements(transcript, statements, spans);
+    expect(report.entries.map((e) => e.kind)).toEqual(["span", "span", "span"]);
+    expect(report.spanned).toBe(3);
+    expect(report.rate).toBe(1);
+    expect(timings[0]).toEqual({
+      startTime: 0,
+      endTime: 1,
+      words: [
+        { word: "I", start: 0, end: 0.5 },
+        { word: "like", start: 0.5, end: 1 },
+      ],
+    });
+    expect(timings[2]!.startTime).toBe(0);
+    expect(timings[2]!.endTime).toBe(1.5);
+    // 副歌重复场景下也精确落在第一句，不会漂到第二句
+    expect(timings[1]!.startTime).toBe(1);
+  });
+
+  it("混合：有 span 的走 span，无 span 的退回原匹配逻辑", () => {
+    const transcript = wordTranscript([{ text: "I like apples." }, { text: "You like pears." }]);
+    const statements = [stmt("I"), stmt("You like"), stmt("apples")];
+    const spans = [{ wordStart: 0, wordEnd: 1 }, null, { wordStart: 2, wordEnd: 3 }];
+    const { timings, report } = alignStatements(transcript, statements, spans);
+    expect(report.entries[0].kind).toBe("span");
+    expect(report.entries[1].kind).toBe("fragment");
+    expect(report.entries[2].kind).toBe("span");
+    expect(report.spanned).toBe(2);
+    expect(timings[0]!.startTime).toBe(0);
+    expect(timings[1]!.startTime).toBe(1.5);
+    expect(timings[2]!.startTime).toBe(1);
+  });
+
+  it("越界 / 长度不符的 span 视为无 span，不抛错", () => {
+    const transcript = wordTranscript([{ text: "I like apples." }]);
+    const statements = [stmt("I like apples"), stmt("I")];
+    const spans = [
+      { wordStart: 0, wordEnd: 99 },
+      { wordStart: 0, wordEnd: 2 },
+    ];
+    const { timings, report } = alignStatements(transcript, statements, spans);
+    expect(timings[0]).not.toBeNull();
+    expect(report.entries[0].kind).toBe("anchor");
+    expect(report.entries[1].kind).toBe("fragment");
+    expect(report.spanned).toBe(0);
+  });
+
+  it("摘要里出现「编号直取」计数", () => {
+    const transcript = wordTranscript([{ text: "I like apples." }]);
+    const { report } = alignStatements(
+      transcript,
+      [stmt("I like apples")],
+      [{ wordStart: 0, wordEnd: 3 }],
+    );
+    expect(formatAlignmentSummary(report)).toContain("编号直取 1");
+  });
+});
