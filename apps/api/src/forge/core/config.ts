@@ -99,6 +99,17 @@ export const config = {
   /** API 单用户登录凭证（与 apps/api/.env 的 AUTH_USERNAME/AUTH_PASSWORD 一致），导入前自动登录 */
   authUsername: env("AUTH_USERNAME", ""),
   authPassword: env("AUTH_PASSWORD", ""),
+
+  /**
+   * 编排层实现：graph（LangGraph StateGraph，默认）| legacy（重构前的命令式阶段函数）。
+   * 出问题时设 FORGE_ORCHESTRATOR=legacy 即可回滚（运行时环境变量，无需重新构建）；
+   * 旧任务没有 graph.checkpoint.json 时会自动降级 legacy，不依赖这个开关。
+   */
+  orchestrator: (env("FORGE_ORCHESTRATOR", "graph") === "legacy" ? "legacy" : "graph") as
+    | "graph"
+    | "legacy",
+  /** 文件 checkpointer 每个线程保留的 checkpoint 份数（含最近的中断态，必须 >= 2） */
+  checkpointKeep: envInt("FORGE_GRAPH_CHECKPOINT_KEEP", 8),
 } as const;
 
 export function createRunId(date = new Date()): string {
