@@ -16,6 +16,7 @@
     "db:upload": "pnpm -F @earthworm/xingrong-courses upload",
     "forge": "pnpm -F api forge",
     "forge:import": "pnpm -F api forge:import",
+    "dev:langsmith": "pnpm -F api dev:langsmith",
     "dev:serve": "pnpm schema:build && pnpm storage:build && pnpm -F @earthworm/game-data-sdk build && pnpm -F api start:dev",
     "dev:client": "pnpm -F client dev",
     "docker:start": "docker-compose up -d",
@@ -62,7 +63,7 @@
     "ssh2": "^1.16.0",
     "tsup": "^8.0.1",
     "tsx": "^4.7.0",
-    "typescript": "^5.3.3",
+    "typescript": "5.5.4",
     "wrangler": "^4.165.0"
   },
   "dependencies": {
