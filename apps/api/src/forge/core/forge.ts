@@ -7,6 +7,7 @@ import type {
   DraftChain,
   ForgeMeta,
   ForgePayload,
+  ForgeStage,
   ResolveDecision,
   SentenceFailure,
   StructureProgress,
@@ -20,14 +21,8 @@ import { generateDraft, generateDraftCollected } from "./llm";
 import { preflightLlm } from "./preflight";
 import { preprocessTranscript } from "./preprocess";
 
-/** transcribed 表示「已转录、等待人工校对」，仅 GUI 两段式流程使用 */
-export type ForgeStage =
-  | "transcoding"
-  | "transcribing"
-  | "transcribed"
-  | "structuring"
-  | "aligning"
-  | "done";
+/** transcribed 表示「已转录、等待人工校对」，仅 GUI 两段式流程使用（已停用） */
+export type { ForgeStage } from "./types";
 
 export interface MakeOptions {
   /** 视频或音频文件路径；视频会用 ffmpeg 提取音频转写，并保留视频做时间戳同步 */
@@ -64,22 +59,25 @@ export const paths = {
   progress: (outDir: string) => resolve(outDir, "structure.progress.json"),
   // resolve 阶段的人工决策输入（delete/retry），由 service 写入 scratch
   resolve: (outDir: string) => resolve(outDir, "structure.resolve.json"),
+  // LangGraph 的文件 checkpointer：控制流状态（仅 graph 编排使用，legacy 不产出）
+  checkpoint: (outDir: string) => resolve(outDir, "graph.checkpoint.json"),
 };
 
-async function writeJson(file: string, value: unknown): Promise<void> {
+export async function writeJson(file: string, value: unknown): Promise<void> {
   await writeFile(file, `${JSON.stringify(value, null, 2)}\n`, "utf-8");
 }
 
-async function readJson<T>(file: string): Promise<T> {
+export async function readJson<T>(file: string): Promise<T> {
   return JSON.parse(await readFile(file, "utf-8")) as T;
 }
 
 /**
- * 第一段：提取音轨 + ASR 转写 + 预处理（LLM 拆句、代码合并碎片词），
- * 写出 transcript.json（预处理后）与 transcript.raw.json（原始 ASR，供回溯）。
- * GUI 流程在此暂停等待人工校对。
+ * 第一段的前半：校验媒体 + 写 meta.json + 建 .work + 规整 clips。
+ * legacy（forgeTranscribe）与 graph 编排共用，保证两条路径落盘一致。
  */
-export async function forgeTranscribe(opts: MakeOptions): Promise<string> {
+export async function prepareRun(
+  opts: MakeOptions,
+): Promise<{ outDir: string; meta: ForgeMeta; clips?: ClipRange[] }> {
   const mediaPath = resolve(opts.mediaPath);
   if (!existsSync(mediaPath)) {
     throw new Error(`[forge] 媒体文件不存在: ${mediaPath}`);
@@ -101,19 +99,36 @@ export async function forgeTranscribe(opts: MakeOptions): Promise<string> {
   };
   await writeJson(paths.meta(outDir), meta);
 
-  // 视频输入时 ffmpeg -vn 直接提取音轨；时间戳相对同一时间轴，天然与视频同步
-  opts.onStage?.("transcoding");
   await mkdir(paths.work(outDir), { recursive: true });
-  const language = opts.language ?? "en";
   const clips = opts.clips ? normalizeClips(opts.clips) : undefined;
   if (opts.clips && (!clips || clips.length === 0)) {
     throw new Error("[forge] clips 参数经规整后为空，请检查区间是否过短或越界");
   }
+  return { outDir, meta, clips };
+}
+
+/**
+ * 第一段的后半：提取音轨 → ASR → 预处理 → 写 transcript.json / transcript.raw.json / clips.json。
+ * 视频输入时 ffmpeg -vn 直接提取音轨，时间戳相对同一时间轴，天然与视频同步。
+ */
+export async function transcribeRun(args: {
+  outDir: string;
+  mediaPath: string;
+  clips?: ClipRange[];
+  language?: string;
+  onStage?: (stage: ForgeStage) => void;
+}): Promise<{ transcript: Transcript; rawTranscript: Transcript }> {
+  const { outDir } = args;
+  const mediaPath = resolve(args.mediaPath);
+  const language = args.language ?? "en";
+  const { clips } = args;
+
+  args.onStage?.("transcoding");
 
   let transcript: Transcript;
   let rawTranscript: Transcript;
   if (clips) {
-    opts.onStage?.("transcribing");
+    args.onStage?.("transcribing");
     const parts: Transcript[] = [];
     const rawParts: Transcript[] = [];
     for (const [i, clip] of clips.entries()) {
@@ -146,7 +161,7 @@ export async function forgeTranscribe(opts: MakeOptions): Promise<string> {
   } else {
     const wav = resolve(paths.work(outDir), "audio-16k.wav");
     await transcodeToWav(mediaPath, wav);
-    opts.onStage?.("transcribing");
+    args.onStage?.("transcribing");
     const { transcript: raw, sentences } = await transcribeWithRaw(wav, language);
     rawTranscript = raw;
     transcript = await preprocessTranscript(raw, sentences);
@@ -158,11 +173,28 @@ export async function forgeTranscribe(opts: MakeOptions): Promise<string> {
     `[forge] 转写 + 预处理完成：${transcript.segments.length} 个完整句（词级时间戳：${transcript.wordLevel ? "有" : "无，段级降级"}）`,
   );
 
+  return { transcript, rawTranscript };
+}
+
+/**
+ * 第一段：提取音轨 + ASR 转写 + 预处理（LLM 拆句、代码合并碎片词），
+ * 写出 transcript.json（预处理后）与 transcript.raw.json（原始 ASR，供回溯）。
+ * GUI 流程在此暂停等待人工校对。
+ */
+export async function forgeTranscribe(opts: MakeOptions): Promise<string> {
+  const { outDir, clips } = await prepareRun(opts);
+  await transcribeRun({
+    outDir,
+    mediaPath: opts.mediaPath,
+    clips,
+    language: opts.language,
+    onStage: opts.onStage,
+  });
   return outDir;
 }
 
 /** 读取结构化阶段输入：meta +（人工编辑过的）transcript，并按 clips.json 重打 clipIndex */
-async function loadStructureInput(
+export async function loadStructureInput(
   outDir: string,
 ): Promise<{ meta: ForgeMeta; transcript: Transcript }> {
   const meta = await readJson<ForgeMeta>(paths.meta(outDir));
@@ -175,7 +207,7 @@ async function loadStructureInput(
 }
 
 /** 时间戳对齐 + 合成 course.json + 写 alignment.json（结构化成功后的公共收尾） */
-async function finalizeCourse(
+export async function finalizeCourse(
   outDir: string,
   transcript: Transcript,
   meta: ForgeMeta,
@@ -282,7 +314,10 @@ export async function forgeStructureInteractive(
   return { needsFix: false };
 }
 
-function validateResolveDecisions(decisions: ResolveDecision[], progress: StructureProgress): void {
+export function validateResolveDecisions(
+  decisions: ResolveDecision[],
+  progress: StructureProgress,
+): void {
   const failureIndexes = new Set(progress.failures.map((f) => f.index));
   const seen = new Set<number>();
   for (const d of decisions) {
@@ -301,6 +336,28 @@ function validateResolveDecisions(decisions: ResolveDecision[], progress: Struct
   if (missing.length > 0) {
     throw new Error(`[forge] 缺少对失败句的决策：${missing.map((i) => i + 1).join(", ")}`);
   }
+}
+
+/**
+ * resolve 合并（纯函数）：保留未决策的成功句 → 丢弃 delete/retry 句 → 拼上本轮重试结果 → 按句序排序。
+ * 旧进度快照没有 spans，补齐为等长 null，交给 align 的兜底匹配。
+ * legacy（forgeStructureResolve）与 graph（retryBatch）共用，避免两条路径的合并语义分叉。
+ */
+export function mergeResolveChains(input: {
+  success: StructureProgress["success"];
+  deleteIndexes: Set<number>;
+  retryIndexes: Set<number>;
+  retriedChains: DraftChain[];
+}): DraftChain[] {
+  const kept: DraftChain[] = input.success
+    .filter((s) => !input.deleteIndexes.has(s.index) && !input.retryIndexes.has(s.index))
+    .map((s) => ({
+      index: s.index,
+      statements: s.statements,
+      spans:
+        s.spans && s.spans.length === s.statements.length ? s.spans : s.statements.map(() => null),
+    }));
+  return [...kept, ...input.retriedChains].sort((a, b) => a.index - b.index);
 }
 
 /** resolve 续跑：只重跑 retry 句、丢掉 delete 句，与已成功句合并后收尾 */
@@ -333,16 +390,12 @@ export async function forgeStructureResolve(
 
   const failures = [...newFailures].sort((a, b) => a.index - b.index);
 
-  // 旧进度快照没有 spans：补齐为等长 null，交给 align 的兜底匹配
-  const kept: DraftChain[] = progress.success
-    .filter((s) => !deleteSet.has(s.index) && !retrySet.has(s.index))
-    .map((s) => ({
-      index: s.index,
-      statements: s.statements,
-      spans:
-        s.spans && s.spans.length === s.statements.length ? s.spans : s.statements.map(() => null),
-    }));
-  const merged = [...kept, ...newChains].sort((a, b) => a.index - b.index);
+  const merged = mergeResolveChains({
+    success: progress.success,
+    deleteIndexes: deleteSet,
+    retryIndexes: retrySet,
+    retriedChains: newChains,
+  });
 
   if (failures.length > 0) {
     const next: StructureProgress = {

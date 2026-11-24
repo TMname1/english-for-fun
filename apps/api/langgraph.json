@@ -1,0 +1,7 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "forge": "./src/forge/core/graph/dev-entry.ts:graph"
+  },
+  "env": ".env"
+}

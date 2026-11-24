@@ -1,11 +1,10 @@
 import {
   autoStripSingleWordRows,
-  buildChatBody,
   buildEnglishFromIndexes,
+  buildModelKwargs,
   classifyLlmFailure,
   cleanWordToken,
   coerceCourseOutput,
-  collectSseContent,
   draftRowsSchema,
   extractJsonObject,
   mapWithConcurrency,
@@ -382,74 +381,28 @@ describe("coerceCourseOutput", () => {
   });
 });
 
-const ev = (obj: unknown) => `data: ${JSON.stringify(obj)}\n\n`;
-
-describe("buildChatBody", () => {
-  const base = { model: "m", maxTokens: 100, messages: [{ role: "user" as const, content: "hi" }] };
-
-  it("streams and includes reasoning_effort when configured", () => {
-    const body = buildChatBody({ ...base, reasoningEffort: "none" });
-    expect(body.stream).toBe(true);
-    expect(body.reasoning_effort).toBe("none");
-    expect(body.response_format).toBeUndefined();
+describe("buildModelKwargs", () => {
+  it("reasoning_effort 有值才发送（空串表示不发送）", () => {
+    expect(buildModelKwargs({ reasoningEffort: "none" }).reasoning_effort).toBe("none");
+    expect("reasoning_effort" in buildModelKwargs({ reasoningEffort: "" })).toBe(false);
   });
 
-  it("omits reasoning_effort when config is empty, includes response_format when given", () => {
-    const body = buildChatBody({
-      ...base,
-      reasoningEffort: "",
-      responseFormat: { type: "json_object" },
-    });
-    expect(body.reasoning_effort).toBeUndefined();
-    expect(body.response_format).toEqual({ type: "json_object" });
+  it("enable_thinking 显式设置（false / true）才发送", () => {
+    expect(buildModelKwargs({ reasoningEffort: "", enableThinking: false }).enable_thinking).toBe(
+      false,
+    );
+    expect(buildModelKwargs({ reasoningEffort: "", enableThinking: true }).enable_thinking).toBe(
+      true,
+    );
+    expect("enable_thinking" in buildModelKwargs({ reasoningEffort: "" })).toBe(false);
   });
 
-  it("includes enable_thinking when explicitly set (false or true)", () => {
+  it("response_format 按需透传（json_object 降级档位用）", () => {
     expect(
-      buildChatBody({ ...base, reasoningEffort: "", enableThinking: false }).enable_thinking,
-    ).toBe(false);
-    expect(
-      buildChatBody({ ...base, reasoningEffort: "", enableThinking: true }).enable_thinking,
-    ).toBe(true);
-  });
-
-  it("omits enable_thinking when not configured", () => {
-    const body = buildChatBody({ ...base, reasoningEffort: "" });
-    expect("enable_thinking" in body).toBe(false);
-  });
-});
-
-describe("collectSseContent", () => {
-  it("accumulates content deltas until [DONE]", () => {
-    const text =
-      ev({ choices: [{ delta: { content: "{" } }] }) +
-      ": keepalive\n" +
-      ev({ choices: [{ delta: { content: '"a":1}' } }] }) +
-      "data: [DONE]\n\n";
-    expect(collectSseContent(text)).toEqual({ content: '{"a":1}', done: true, error: null });
-  });
-
-  it("ignores reasoning deltas and handles CRLF", () => {
-    const text =
-      `data: ${JSON.stringify({ choices: [{ delta: { reasoning: "lot of thoughts", content: "x" } }] })}\r\n\r\n` +
-      `data: ${JSON.stringify({ choices: [{ delta: { content: "y" } }] })}\r\n\r\n` +
-      "data: [DONE]\r\n";
-    expect(collectSseContent(text)).toEqual({ content: "xy", done: true, error: null });
-  });
-
-  it("supports message-style final chunk (non-delta providers)", () => {
-    const text = ev({ choices: [{ message: { content: "full" } }] }) + "data: [DONE]\n\n";
-    expect(collectSseContent(text).content).toBe("full");
-  });
-
-  it("extracts error payloads (string or object form)", () => {
-    expect(collectSseContent(ev({ error: "boom" })).error).toBe("boom");
-    expect(collectSseContent(ev({ error: { message: "cuda oom" } })).error).toBe("cuda oom");
-  });
-
-  it("no [DONE] when stream truncated", () => {
-    const r = collectSseContent(ev({ choices: [{ delta: { content: "half" } }] }));
-    expect(r).toEqual({ content: "half", done: false, error: null });
+      buildModelKwargs({ reasoningEffort: "", responseFormat: { type: "json_object" } })
+        .response_format,
+    ).toEqual({ type: "json_object" });
+    expect("response_format" in buildModelKwargs({ reasoningEffort: "" })).toBe(false);
   });
 });
 

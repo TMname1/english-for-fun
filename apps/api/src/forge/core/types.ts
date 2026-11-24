@@ -5,6 +5,15 @@ export interface TranscriptWord {
   end: number;
 }
 
+/** 流水线阶段；`transcribed` 表示「已转录、等待人工校对」，仅已停用的两段式流程使用 */
+export type ForgeStage =
+  | "transcoding"
+  | "transcribing"
+  | "transcribed"
+  | "structuring"
+  | "aligning"
+  | "done";
+
 /** 用户选中的视频时间区间（秒，相对原视频绝对时间） */
 export interface ClipRange {
   start: number;

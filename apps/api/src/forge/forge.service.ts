@@ -31,6 +31,17 @@ const ARTIFACT_FILES = [
   "alignment.json",
   "course.json",
   "structure.progress.json",
+  // graph 编排的控制流状态（legacy 不产出）；resolve 续跑靠它从 interrupt 恢复
+  "graph.checkpoint.json",
+];
+
+/** resolve 续跑需要从对象存储回拉到本地 scratch 的产物（含 checkpoint，缺失时自动降级 legacy） */
+const RESOLVE_INPUT_FILES = [
+  "meta.json",
+  "transcript.json",
+  "clips.json",
+  "structure.progress.json",
+  "graph.checkpoint.json",
 ];
 
 export interface ForgeJobView {
@@ -348,6 +359,10 @@ export class ForgeService {
     if (record.status !== "needs_fix") {
       throw new BadRequestException(`任务 ${id} 当前状态 ${record.status}，无法处理失败句`);
     }
+    // 上一轮子进程尚未退出时不能再起一个，否则两个进程会写同一份 checkpoint / scratch
+    if (this.handles.has(id)) {
+      throw new BadRequestException(`任务 ${id} 上一轮处理尚未结束，请稍后重试`);
+    }
     if (!Array.isArray(dto?.decisions) || dto.decisions.length === 0) {
       throw new BadRequestException("decisions 不能为空");
     }
@@ -383,7 +398,7 @@ export class ForgeService {
     }
 
     await mkdir(record.outDir, { recursive: true });
-    for (const name of ["meta.json", "transcript.json", "clips.json", "structure.progress.json"]) {
+    for (const name of RESOLVE_INPUT_FILES) {
       const buf = await this.storage.getBuffer(`forge/${id}/${name}`);
       if (buf) {
         await writeFile(join(record.outDir, name), buf);

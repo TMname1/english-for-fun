@@ -42,7 +42,9 @@ RUN pnpm deploy --filter=api --prod /prod/api \
  && test -d /prod/api/drizzle/meta \
  && test -f /prod/api/node_modules/@earthworm/schema/dist/index.js \
  && test -f /prod/api/node_modules/@earthworm/storage/dist/index.js \
- && test -f /prod/api/node_modules/@earthworm/game-data-sdk/dist/index.js
+ && test -f /prod/api/node_modules/@earthworm/game-data-sdk/dist/index.js \
+ && test -f /prod/api/node_modules/@langchain/langgraph/package.json \
+ && test -f /prod/api/node_modules/@langchain/openai/package.json
 
 ########## runtime：只带运行所需产物 ##########
 FROM node:20-bookworm-slim
