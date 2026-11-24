@@ -25,8 +25,10 @@ export interface CoursePackLearning {
   description: string;
   /** 对象存储预签名 URL（会过期）或外部 URL */
   video: string;
-  /** true = 外部链接；false = 对象存储视频（页内播放器 seek） */
+  /** true = 外部链接；false = 对象存储媒体（页内播放器 seek） */
   videoIsExternal?: boolean;
+  /** 媒体类型：audio 时只渲染音频播放条（服务端按扩展名派生） */
+  mediaKind?: "video" | "audio";
   statements: Statement[];
   statementIndex: number;
 }

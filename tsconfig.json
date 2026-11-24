@@ -21,6 +21,9 @@
     "**/nuxt.d.ts",
     "**/examples/**",
     "**/playground/**",
-    "**/test/**"
+    "**/test/**",
+    "**/tests/**",
+    "**/*.spec.ts",
+    "**/*.e2e-spec.ts"
   ]
 }

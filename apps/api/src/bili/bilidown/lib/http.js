@@ -1,3 +1,7 @@
+import { randomUUID } from "node:crypto";
+
+import { cookieString, parseCookieString } from "./storage.js";
+
 // HTTP 层：复刻原项目主进程的 onBeforeSendHeaders 鉴权头改写。
 // B 站 CDN(bilivideo.com) 靠 Referer/UA 防盗链，这里统一注入。
 export const UA =
@@ -38,4 +42,36 @@ export async function fetchJson(
     if (json.code !== -1) throw new Error(`API code=${json.code} ${json.message || ""} @ ${url}`);
   }
   return json;
+}
+
+// 服务器（机房 IP）裸调 web-interface 接口会被 B 站风控成 HTTP 412，带上访客指纹 buvid3 即放行；
+// 家宽 IP 不挑这条，所以只在云端复现。值取自 finger/spi，进程内取一次全程复用。
+const SPI_URL = "https://api.bilibili.com/x/frontend/finger/spi";
+let buvid3Promise = null;
+
+async function fetchBuvid3() {
+  const res = await fetch(SPI_URL, {
+    headers: biliHeaders(),
+    signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status} @ ${SPI_URL}`);
+  const b3 = (await res.json())?.data?.b_3;
+  if (!b3) throw new Error(`SPI 响应里没有 b_3 @ ${SPI_URL}`);
+  return b3;
+}
+
+export function getBuvid3() {
+  if (!buvid3Promise) {
+    // SPI 自身被风控/不可达时按官方格式造一个，实测同样能过
+    buvid3Promise = fetchBuvid3().catch(() => `${randomUUID().toUpperCase()}infoc`);
+  }
+  return buvid3Promise;
+}
+
+/** 把访客指纹并进 Cookie 头；调用方已带 buvid3 时以调用方的为准。 */
+export async function withBuvid3(cookieStr = "") {
+  const jar = parseCookieString(cookieStr);
+  if (jar.buvid3) return cookieStr;
+  jar.buvid3 = await getBuvid3();
+  return cookieString(jar);
 }

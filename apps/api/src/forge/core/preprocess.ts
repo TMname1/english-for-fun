@@ -29,18 +29,27 @@ const preprocessSchema = z.object({
   sentences: z.array(z.array(z.number().int().nonnegative()).min(1)).min(1),
 });
 
-const PREPROCESS_SYSTEM_PROMPT = `你在为「蚯蚓学英语」预处理英文语音转写结果：把一段连续转写按语义拆分成一个个完整句子。
+const PREPROCESS_SYSTEM_PROMPT = `你在为「蚯蚓学英语」预处理英文语音转写结果：把一段连续转写划分成一个个完整句子。
 
 输入是整段文本和按顺序编号的词表（i 为词编号，word 为词文本，start/end 为秒级时间戳，可参考停顿）。
 注意：转写可能把一个词拦腰拆成相邻的多个碎片（如 "Genu"+"inely"、"I"+"'"+"ve"），它们属于同一个词，必须划在同一句，不得拆开。
 
+划分原则——尽量保留长难句，句子尽量越长越好：
+1. 默认不拆：长句里带多个从句、并列成分、插入语、修饰语时，把这些内容留在同一句，保持句子的完整结构。
+2. 只有在确实出现两个语义独立、各自都有完整主语和谓语的句子时，才把它们切开。
+3. 以下情况都不算句子边界，不要因此切分：逗号/分号处的停顿、and/but/or/so 等并列连接、which/who/that 等引导的定语从句、because/although/if/when/while 等引导的状语从句、同位语、插入语、列举。
+4. 不要为了"长"把两个不相干的句子合并：语义独立就切开，仍属于同一句的意思就保留在一起。
+
 铁律：
-1. 按你对语义的理解划分完整句子，不局限于标点；每句应是一个意思完整的句子。
+1. 每句应是一个意思完整的句子，按你对语义的理解划分，不局限于标点。
 2. 输出每句包含的词编号：各句编号升序排列，合起来恰好不重不漏地覆盖全部编号（0 到 N-1），句内编号也必须升序连续。
 3. 不得增删改任何词，不得调整词序。
 
-示例——词表编号 0..5 对应 "I like the food. It is good."：
-输出：{"sentences":[[0,1,2,3],[4,5]]}`;
+示例 1——词表编号 0..5 对应 "I like the food. It is good."（两个独立句，切开）：
+输出：{"sentences":[[0,1,2,3],[4,5]]}
+
+示例 2——词表编号 0..12 对应 "The book that she recommended, which I found in the library, was difficult."（一个长难句，定语从句和逗号都不切）
+输出：{"sentences":[[0,1,2,3,4,5,6,7,8,9,10,11,12]]}`;
 
 export function buildPreprocessMessages(
   text: string,
@@ -58,7 +67,7 @@ export function buildPreprocessMessages(
     {
       role: "user",
       content:
-        `请把下面的转写按语义拆分成完整句子，输出每句包含的词编号。\n` +
+        `请把下面的转写按语义划分成完整句子（尽量保留长难句，只在真正的独立句处切开），输出每句包含的词编号。\n` +
         `整段文本：${text}\n词表（共 ${words.length} 个编号 0..${words.length - 1}）：\n${JSON.stringify(list)}` +
         (note ? `\n\n${note}` : ""),
     },

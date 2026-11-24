@@ -2,12 +2,21 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
-import type { ClipRange, ForgeMeta, ForgePayload, Transcript } from "./types";
+import type {
+  ClipRange,
+  DraftChain,
+  ForgeMeta,
+  ForgePayload,
+  ResolveDecision,
+  SentenceFailure,
+  StructureProgress,
+  Transcript,
+} from "./types";
 import { alignStatements, formatAlignmentSummary } from "./align";
 import { transcodeToWav, transcribeWithRaw } from "./asr";
 import { mergeClipTranscripts, normalizeClips, offsetTranscript, tagClipBoundaries } from "./clips";
 import { config, createRunId } from "./config";
-import { generateDraft } from "./llm";
+import { generateDraft, generateDraftCollected } from "./llm";
 import { preflightLlm } from "./preflight";
 import { preprocessTranscript } from "./preprocess";
 
@@ -51,6 +60,10 @@ export const paths = {
   course: (outDir: string) => resolve(outDir, "course.json"),
   alignment: (outDir: string) => resolve(outDir, "alignment.json"),
   work: (outDir: string) => resolve(outDir, ".work"),
+  // 结构化进度快照（成功链 + 失败清单），needs_fix 后 resolve 续跑用
+  progress: (outDir: string) => resolve(outDir, "structure.progress.json"),
+  // resolve 阶段的人工决策输入（delete/retry），由 service 写入 scratch
+  resolve: (outDir: string) => resolve(outDir, "structure.resolve.json"),
 };
 
 async function writeJson(file: string, value: unknown): Promise<void> {
@@ -148,35 +161,35 @@ export async function forgeTranscribe(opts: MakeOptions): Promise<string> {
   return outDir;
 }
 
-/**
- * 第二段：读取（人工编辑过的）transcript.json 与 meta.json，做 LLM 结构化 + 时间戳对齐，
- * 合成 course.json。word 级编辑只改词文字、保留每词 start/end 与词数，故对齐时间天然稳定。
- */
-export async function forgeFromTranscript(opts: FromTranscriptOptions): Promise<string> {
-  const outDir = resolve(opts.outDir);
+/** 读取结构化阶段输入：meta +（人工编辑过的）transcript，并按 clips.json 重打 clipIndex */
+async function loadStructureInput(
+  outDir: string,
+): Promise<{ meta: ForgeMeta; transcript: Transcript }> {
   const meta = await readJson<ForgeMeta>(paths.meta(outDir));
   const transcript = await readJson<Transcript>(paths.transcript(outDir));
-  const isVideo = Boolean(meta.videoPath);
-
-  // 切片流程：按独立落盘的 clips.json 重打 clipIndex，禁止 LLM 预拼跨 clip 拼句
   if (existsSync(paths.clips(outDir))) {
     const clips = await readJson<ClipRange[]>(paths.clips(outDir));
     transcript.segments = tagClipBoundaries(transcript.segments, clips);
   }
+  return { meta, transcript };
+}
 
-  opts.onStage?.("structuring");
-  if (config.llmPreflight) {
-    await preflightLlm();
-  }
-  const draft = await generateDraft(transcript, meta.title);
-  console.log(
-    `[forge] 结构化完成：1 课（单一课程，逐句并发生成的组装链已按句序合并）/ ${draft.statements.length} 条 statement`,
+/** 时间戳对齐 + 合成 course.json + 写 alignment.json（结构化成功后的公共收尾） */
+async function finalizeCourse(
+  outDir: string,
+  transcript: Transcript,
+  meta: ForgeMeta,
+  chains: DraftChain[],
+): Promise<void> {
+  const isVideo = Boolean(meta.videoPath);
+  const ordered = [...chains].sort((a, b) => a.index - b.index);
+  const statements = ordered.flatMap((c) => c.statements);
+  // 与 statements 等长：缺 span 的链（旧进度快照 / 空句）补 null，交给 align 的兜底匹配
+  const spans = ordered.flatMap((c) =>
+    c.spans && c.spans.length === c.statements.length ? c.spans : c.statements.map(() => null),
   );
-
-  // 时间戳对齐：把转写的词级时间映射回每条 statement（视频同步播放的数据来源）
-  opts.onStage?.("aligning");
-  const { timings, report } = alignStatements(transcript, draft.statements);
-  draft.statements.forEach((statement, i) => {
+  const { timings, report } = alignStatements(transcript, statements, spans);
+  statements.forEach((statement, i) => {
     const timing = timings[i];
     if (timing) {
       statement.startTime = timing.startTime;
@@ -195,21 +208,159 @@ export async function forgeFromTranscript(opts: FromTranscriptOptions): Promise<
     console.log(`[forge] 提示：输入不是视频文件，时间戳仅供音频同步，导入后前端仍走 TTS/音频回退`);
   }
 
-  // Step 3 产物：直接由内存中的 draft + meta 合成 course.json（不再落 draft.json，不产出音频切片）
   const payload: ForgePayload = {
     title: meta.title,
     description: meta.description,
     cover: "",
     courses: {
-      title: draft.title,
-      description: draft.description ?? "",
-      statements: draft.statements,
+      title: meta.title,
+      description: "",
+      statements,
     },
   };
   await writeJson(paths.course(outDir), payload);
+}
+
+/**
+ * 第二段（严格/CLI 路径）：读取（人工编辑过的）transcript.json 与 meta.json，
+ * 做 LLM 结构化 + 时间戳对齐，合成 course.json。任一句失败即整体抛错。
+ */
+export async function forgeFromTranscript(opts: FromTranscriptOptions): Promise<string> {
+  const outDir = resolve(opts.outDir);
+  const { meta, transcript } = await loadStructureInput(outDir);
+
+  opts.onStage?.("structuring");
+  if (config.llmPreflight) {
+    await preflightLlm();
+  }
+  const chains = await generateDraft(transcript);
+  const statementCount = chains.reduce((n, c) => n + c.statements.length, 0);
+  console.log(
+    `[forge] 结构化完成：1 课（单一课程，逐句并发生成的组装链已按句序合并）/ ${statementCount} 条 statement`,
+  );
+
+  opts.onStage?.("aligning");
+  await finalizeCourse(outDir, transcript, meta, chains);
   opts.onStage?.("done");
   console.log(`[forge] 产物目录：${outDir}`);
   return outDir;
+}
+
+/** 线上 GUI 结构化：内容校验失败收集为 needs_fix，而不是整体抛错 */
+export async function forgeStructureInteractive(
+  opts: FromTranscriptOptions,
+): Promise<{ needsFix: boolean }> {
+  const outDir = resolve(opts.outDir);
+  const { meta, transcript } = await loadStructureInput(outDir);
+
+  opts.onStage?.("structuring");
+  if (config.llmPreflight) {
+    await preflightLlm();
+  }
+  const { chains, failures } = await generateDraftCollected(transcript);
+  if (failures.length > 0) {
+    const progress: StructureProgress = {
+      success: chains.map((c) => ({
+        index: c.index,
+        statements: c.statements,
+        spans: c.spans,
+      })),
+      failures,
+    };
+    await writeJson(paths.progress(outDir), progress);
+    console.log(`[forge] 结构化有 ${failures.length} 句未通过校验，已落盘进度等待人工处理`);
+    return { needsFix: true };
+  }
+
+  const statementCount = chains.reduce((n, c) => n + c.statements.length, 0);
+  console.log(
+    `[forge] 结构化完成：1 课（单一课程，逐句并发生成的组装链已按句序合并）/ ${statementCount} 条 statement`,
+  );
+  opts.onStage?.("aligning");
+  await finalizeCourse(outDir, transcript, meta, chains);
+  opts.onStage?.("done");
+  return { needsFix: false };
+}
+
+function validateResolveDecisions(decisions: ResolveDecision[], progress: StructureProgress): void {
+  const failureIndexes = new Set(progress.failures.map((f) => f.index));
+  const seen = new Set<number>();
+  for (const d of decisions) {
+    if (!Number.isInteger(d.index) || !failureIndexes.has(d.index)) {
+      throw new Error(`[forge] 无效决策：句 ${d.index} 不在失败清单中`);
+    }
+    if (d.action !== "delete" && d.action !== "retry") {
+      throw new Error(`[forge] 无效决策动作：${String(d.action)}`);
+    }
+    if (seen.has(d.index)) {
+      throw new Error(`[forge] 重复决策：句 ${d.index}`);
+    }
+    seen.add(d.index);
+  }
+  const missing = [...failureIndexes].filter((i) => !seen.has(i));
+  if (missing.length > 0) {
+    throw new Error(`[forge] 缺少对失败句的决策：${missing.map((i) => i + 1).join(", ")}`);
+  }
+}
+
+/** resolve 续跑：只重跑 retry 句、丢掉 delete 句，与已成功句合并后收尾 */
+export async function forgeStructureResolve(
+  opts: FromTranscriptOptions,
+): Promise<{ needsFix: boolean }> {
+  const outDir = resolve(opts.outDir);
+  const { meta, transcript } = await loadStructureInput(outDir);
+  const progress = await readJson<StructureProgress>(paths.progress(outDir));
+  const resolveRaw = await readJson<{ decisions?: ResolveDecision[] }>(paths.resolve(outDir));
+  const decisions = resolveRaw?.decisions ?? [];
+  validateResolveDecisions(decisions, progress);
+
+  const deleteSet = new Set(decisions.filter((d) => d.action === "delete").map((d) => d.index));
+  const retrySet = new Set(decisions.filter((d) => d.action === "retry").map((d) => d.index));
+
+  opts.onStage?.("structuring");
+  if (config.llmPreflight) {
+    await preflightLlm();
+  }
+
+  const retryIndexes = [...retrySet].sort((a, b) => a - b);
+  let newChains: DraftChain[] = [];
+  let newFailures: SentenceFailure[] = [];
+  if (retryIndexes.length > 0) {
+    const result = await generateDraftCollected(transcript, retryIndexes);
+    newChains = result.chains;
+    newFailures = result.failures;
+  }
+
+  const failures = [...newFailures].sort((a, b) => a.index - b.index);
+
+  // 旧进度快照没有 spans：补齐为等长 null，交给 align 的兜底匹配
+  const kept: DraftChain[] = progress.success
+    .filter((s) => !deleteSet.has(s.index) && !retrySet.has(s.index))
+    .map((s) => ({
+      index: s.index,
+      statements: s.statements,
+      spans:
+        s.spans && s.spans.length === s.statements.length ? s.spans : s.statements.map(() => null),
+    }));
+  const merged = [...kept, ...newChains].sort((a, b) => a.index - b.index);
+
+  if (failures.length > 0) {
+    const next: StructureProgress = {
+      success: merged.map((c) => ({ index: c.index, statements: c.statements, spans: c.spans })),
+      failures,
+    };
+    await writeJson(paths.progress(outDir), next);
+    console.log(`[forge] 处理后仍有 ${failures.length} 句未通过校验，已更新进度等待人工处理`);
+    return { needsFix: true };
+  }
+
+  if (merged.every((c) => c.statements.length === 0)) {
+    throw new Error("[forge] 处理后没有任何句子，无法生成课程");
+  }
+  opts.onStage?.("aligning");
+  await finalizeCourse(outDir, transcript, meta, merged);
+  opts.onStage?.("done");
+  return { needsFix: false };
 }
 
 /** CLI 一次性跑完整条流水线（串联两段），保留以兼容 `pnpm forge` */

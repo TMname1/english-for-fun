@@ -1,6 +1,6 @@
 import { DbType } from "src/global/providers/db.provider";
 
-import { coursePack, statement, userCourseProgress } from "@earthworm/schema";
+import { coursePack, masteredElements, statement, userCourseProgress } from "@earthworm/schema";
 
 type CoursePackInsert = typeof coursePack.$inferInsert;
 
@@ -59,6 +59,16 @@ export async function insertUserCourseProgress(
       coursePackId,
       statementIndex,
     })
+    .returning();
+
+  return entity;
+}
+
+/** 与 MasteredElementService 写入口径一致：content 存成 JSON 字符串（jsonb 里是字符串标量） */
+export async function insertMasteredElement(db: DbType, english: string) {
+  const [entity] = await db
+    .insert(masteredElements)
+    .values({ content: JSON.stringify({ english }) })
     .returning();
 
   return entity;

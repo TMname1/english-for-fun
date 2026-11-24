@@ -4,11 +4,15 @@ import { extname, join } from "node:path";
 
 import { BadRequestException, Injectable, Logger, NotFoundException } from "@nestjs/common";
 
+import type { StructureProgress } from "./core/types";
 import type { CreateForgeJobDto } from "./dto/create-forge-job.dto";
-import type { ResumeForgeJobDto } from "./dto/resume-forge-job.dto";
+import type { ResolveForgeFailuresDto } from "./dto/resolve-forge-failures.dto";
+// 【已停用 · 转录校对】仅 resumeJob 使用，该方法已注释保留（见下方 resumeJob 说明）。
+// import type { ResumeForgeJobDto } from "./dto/resume-forge-job.dto";
 import type { StartForgeJobDto } from "./dto/start-forge-job.dto";
 import type { ForgeJobRecord, ForgeJobStage } from "./job-store";
 import type { ForgeRunnerHandle } from "./runner-client";
+import { mediaKindOf } from "../common/media-ext";
 import { StorageService } from "../storage/storage.service";
 import { JobStore } from "./job-store";
 import { FORGE_OUTPUT_ROOT, spawnForgeRunner } from "./runner-client";
@@ -26,6 +30,7 @@ const ARTIFACT_FILES = [
   "clips.json",
   "alignment.json",
   "course.json",
+  "structure.progress.json",
 ];
 
 export interface ForgeJobView {
@@ -38,16 +43,20 @@ export interface ForgeJobView {
   outDir: string;
   /** 预签名 URL，前端预览播放用（会过期，不可入库） */
   videoPath: string;
-  /** 视频对象键，前端入库时填到 course_packs.video */
+  /** 视频/音频对象键，前端入库时填到 course_packs.video */
   videoKey: string;
+  /** 媒体类型：前端据此决定渲染 <video> 还是 <audio> 播放条 */
+  mediaKind: "video" | "audio";
   title: string;
   type: "dialogue" | "music";
   language?: string;
   description?: string;
-  /** status=awaiting_review 时附带：ASR 转录结果（word 级），供前端校对编辑 */
+  /** 【已停用 · 转录校对】awaiting_review 暂停态不再产生，该字段不再被填充；恢复校对步骤时随 getJob 一起放开 */
   transcriptJson?: unknown;
   /** status=done 时附带，结构同 course.json（ForgePayload） */
   courseJson?: unknown;
+  /** status=needs_fix 时附带：结构化成功链 + 失败清单（供前端删除/重试） */
+  structureProgress?: StructureProgress;
   /** 视频切片流程：选中的时间区间（秒） */
   clips?: { start: number; end: number }[];
 }
@@ -66,7 +75,8 @@ export class ForgeService {
   async createJob(file: Express.Multer.File, dto: CreateForgeJobDto): Promise<{ jobId: string }> {
     const videoKey = `course-video/${file.filename}`;
     try {
-      await this.storage.uploadFile(videoKey, file.path);
+      // 透传 Content-Type：对象存储按它回给浏览器，音频/视频元素才能正确解码播放
+      await this.storage.uploadFile(videoKey, file.path, file.mimetype);
     } finally {
       await rm(file.path, { force: true }).catch(() => {});
     }
@@ -132,6 +142,7 @@ export class ForgeService {
       startedAt: Date.now(),
       outDir,
       videoKey: `course-video/${input.fileName}`,
+      mediaKind: mediaKindOf(input.fileName),
       title: input.title,
       type: input.type,
       language: input.language ?? "en",
@@ -202,6 +213,7 @@ export class ForgeService {
         {
           onStage: (stage) => this.handleStage(record.id, stage),
           onDone: () => void this.handleDone(record.id),
+          onNeedsFix: () => void this.handleNeedsFix(record.id),
           onError: (msg) => this.handleError(record.id, msg),
         },
       );
@@ -231,6 +243,7 @@ export class ForgeService {
       outDir: record.outDir,
       videoPath: await this.storage.presignGet(record.videoKey),
       videoKey: record.videoKey,
+      mediaKind: record.mediaKind ?? mediaKindOf(record.videoKey),
       title: record.title,
       type: record.type,
       language: record.language,
@@ -238,12 +251,13 @@ export class ForgeService {
       clips: record.clips,
     };
 
-    if (record.status === "awaiting_review") {
-      const text = await this.storage.getBuffer(`forge/${id}/transcript.json`);
-      if (text) {
-        view.transcriptJson = JSON.parse(text.toString("utf-8"));
-      }
-    }
+    // 【已停用 · 转录校对】awaiting_review 暂停态不再产生，无需回读转录供前端校对。
+    // if (record.status === "awaiting_review") {
+    //   const text = await this.storage.getBuffer(`forge/${id}/transcript.json`);
+    //   if (text) {
+    //     view.transcriptJson = JSON.parse(text.toString("utf-8"));
+    //   }
+    // }
 
     if (record.status === "done") {
       const text = await this.storage.getBuffer(`forge/${id}/course.json`);
@@ -251,13 +265,23 @@ export class ForgeService {
         view.courseJson = JSON.parse(text.toString("utf-8"));
       }
     }
+
+    if (record.status === "needs_fix") {
+      const text = await this.storage.getBuffer(`forge/${id}/structure.progress.json`);
+      if (text) {
+        view.structureProgress = JSON.parse(text.toString("utf-8"));
+      }
+    }
     return view;
   }
 
   /**
-   * 校对后续跑：edited transcript 写对象存储，拉回产物到新的临时工作区，起 structure 阶段子进程。
-   * word 级编辑（改文字/删整段，不增删词、不改时间）由 course-forge 在子进程内规整为 Transcript。
+   * 【已停用 · 转录校对】resumeJob 服务于「转录后暂停 → 人工校对 → 回传 transcript.edited.json → 续跑结构化」，
+   * 该暂停步骤现已从流水线移除（转录子进程改为直接续跑结构化，见 pipeline-runner.ts）。
+   * 方法体整段注释保留；如需恢复两段式：去掉下方块注释、恢复 controller 的 resume 接口、
+   * handleDone 的 awaiting_review 暂停与前端 review 步骤（恢复步骤详见 pipeline-runner.ts 顶部说明）。
    */
+  /*
   async resumeJob(id: string, dto: ResumeForgeJobDto): Promise<{ jobId: string }> {
     const record = this.store.get(id);
     if (!record) throw new NotFoundException(`未找到任务 ${id}`);
@@ -300,6 +324,94 @@ export class ForgeService {
       {
         onStage: (stage) => this.handleStage(id, stage),
         onDone: () => void this.handleDone(id),
+        onNeedsFix: () => void this.handleNeedsFix(id),
+        onError: (msg) => this.handleError(id, msg),
+      },
+    );
+    this.handles.set(id, handle);
+    this.timeouts.set(
+      id,
+      setTimeout(() => this.handleTimeout(id), JOB_TIMEOUT_MS),
+    );
+
+    return { jobId: id };
+  }
+  */
+
+  /**
+   * 结构化出现失败句（needs_fix）后，前端对每个失败句选择「删除 / 重试」并续跑：
+   * 决策写回对象存储进度快照 + 临时 resolve 文件，起 structure-resolve 阶段子进程。
+   */
+  async resolveFailures(id: string, dto: ResolveForgeFailuresDto): Promise<{ jobId: string }> {
+    const record = this.store.get(id);
+    if (!record) throw new NotFoundException(`未找到任务 ${id}`);
+    if (record.status !== "needs_fix") {
+      throw new BadRequestException(`任务 ${id} 当前状态 ${record.status}，无法处理失败句`);
+    }
+    if (!Array.isArray(dto?.decisions) || dto.decisions.length === 0) {
+      throw new BadRequestException("decisions 不能为空");
+    }
+
+    const progressBuf = await this.storage.getBuffer(`forge/${id}/structure.progress.json`);
+    if (!progressBuf) {
+      throw new BadRequestException("缺少结构化进度快照，无法处理失败句");
+    }
+    const progress = JSON.parse(progressBuf.toString("utf-8")) as StructureProgress;
+    const failureIndexes = new Set((progress.failures ?? []).map((f) => f.index));
+    const seen = new Set<number>();
+    for (const d of dto.decisions) {
+      if (!Number.isInteger(d.index) || !failureIndexes.has(d.index)) {
+        throw new BadRequestException(`句 ${d.index} 不在失败清单中`);
+      }
+      if (d.action !== "delete" && d.action !== "retry") {
+        throw new BadRequestException(`句 ${d.index} 的动作必须是 delete 或 retry`);
+      }
+      if (seen.has(d.index)) {
+        throw new BadRequestException(`句 ${d.index} 出现重复决策`);
+      }
+      seen.add(d.index);
+    }
+    const missing = [...failureIndexes].filter((i) => !seen.has(i));
+    if (missing.length > 0) {
+      throw new BadRequestException(`缺少对失败句的决策：${missing.map((i) => i + 1).join(", ")}`);
+    }
+    // 「重试」可能救回句子，因此只要不是全部 delete，就还有句子能进课程
+    const retryCount = dto.decisions.filter((d) => d.action === "retry").length;
+    const successCount = (progress.success ?? []).length;
+    if (successCount === 0 && retryCount === 0) {
+      throw new BadRequestException("所有句子都被删除后无法生成课程，请至少保留一句");
+    }
+
+    await mkdir(record.outDir, { recursive: true });
+    for (const name of ["meta.json", "transcript.json", "clips.json", "structure.progress.json"]) {
+      const buf = await this.storage.getBuffer(`forge/${id}/${name}`);
+      if (buf) {
+        await writeFile(join(record.outDir, name), buf);
+      }
+    }
+    await writeFile(
+      join(record.outDir, "structure.resolve.json"),
+      `${JSON.stringify({ decisions: dto.decisions }, null, 2)}\n`,
+      "utf-8",
+    );
+
+    this.store.update(id, {
+      status: "running",
+      stage: "structuring",
+      message: "按选择继续：重试/删除后重新结构化中…",
+      phase: "structure-resolve",
+    });
+
+    const handle = spawnForgeRunner(
+      {
+        phase: "structure-resolve",
+        language: record.language,
+        outDir: record.outDir,
+      },
+      {
+        onStage: (stage) => this.handleStage(id, stage),
+        onDone: () => void this.handleDone(id),
+        onNeedsFix: () => void this.handleNeedsFix(id),
         onError: (msg) => this.handleError(id, msg),
       },
     );
@@ -318,7 +430,8 @@ export class ForgeService {
     if (
       record.status !== "running" &&
       record.status !== "pending" &&
-      record.status !== "awaiting_review"
+      record.status !== "awaiting_review" &&
+      record.status !== "needs_fix"
     ) {
       return { cancelled: false };
     }
@@ -354,21 +467,44 @@ export class ForgeService {
     this.clearTimers(id);
     this.handles.delete(id);
 
-    // 第一段（转录）完成 → 暂停等待人工校对，不进 done
-    if (record.phase === "transcribe") {
-      this.store.update(id, {
-        status: "awaiting_review",
-        stage: "transcribed",
-        message: "转录完成，等待校对",
-      });
-      return;
-    }
+    // 【已停用 · 转录校对】第一段转录完成后不再暂停等待人工校对：转录子进程已在
+    // pipeline-runner 内直接续跑结构化，故 done 事件到来时课程已生成，按正常 done 收尾即可。
+    // 恢复"转录→校对→结构化"两段式时放开下面这段（并恢复 resumeJob、controller resume 接口、前端 review 步骤）：
+    // if (record.phase === "transcribe") {
+    //   this.store.update(id, {
+    //     status: "awaiting_review",
+    //     stage: "transcribed",
+    //     message: "转录完成，等待校对",
+    //   });
+    //   return;
+    // }
 
     this.store.update(id, {
       status: "done",
       stage: "done",
       message: "已完成",
       finishedAt: Date.now(),
+    });
+  }
+
+  /** 结构化有失败句：上传进度快照后再清理临时区，进入 needs_fix 等待人工删除/重试 */
+  private async handleNeedsFix(id: string): Promise<void> {
+    const record = this.store.get(id);
+    if (!record || record.status !== "running") return;
+
+    try {
+      await this.uploadArtifacts(record);
+    } catch (error) {
+      this.handleError(id, `进度快照上传对象存储失败：${(error as Error)?.message ?? error}`);
+      return;
+    }
+    this.cleanupScratch(record);
+    this.clearTimers(id);
+    this.handles.delete(id);
+    this.store.update(id, {
+      status: "needs_fix",
+      stage: "structuring",
+      message: "有句子未通过校验，等待处理",
     });
   }
 

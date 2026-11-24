@@ -43,6 +43,24 @@ let currentEditWord: Word;
 const userInputWords = reactive<Word[]>([]);
 let stopWatchEffect: WatchStopHandle;
 
+/**
+ * 把当前题目重开一遍：清空输入框、逐词输入与错误标记，模式退回 Input。
+ * 句子文本本身的拆词由 setupUserInputWords 里的 watchEffect 监听 source 自动重建，
+ * 因此「改完句子后重新出题」= resetQuestionInput() + showQuestion()。
+ */
+export function resetQuestionInput() {
+  inputValue.value = "";
+  mode.value = Mode.Input;
+  userInputWords.forEach((word) => {
+    word.userInput = "";
+    word.incorrect = false;
+    word.isActive = false;
+  });
+  if (userInputWords[0]) {
+    userInputWords[0].isActive = true;
+  }
+}
+
 export function useInput({
   source,
   setInputCursorPosition,

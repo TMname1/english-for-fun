@@ -39,7 +39,7 @@
 
           <div class="flex flex-col gap-2 rounded-lg border p-3 dark:border-gray-700">
             <div class="flex items-center justify-between gap-3">
-              <span class="text-sm font-medium">配套视频（本地文件）</span>
+              <span class="text-sm font-medium">配套音视频（本地文件）</span>
               <span class="truncate text-xs opacity-70">{{
                 currentVideoLabel(packForm.video)
               }}</span>
@@ -53,7 +53,7 @@
                 :loading="isUploadingVideo"
                 @click="openVideoPicker('add')"
               >
-                {{ packForm.video ? "替换视频" : "上传本地视频" }}
+                {{ packForm.video ? "替换媒体" : "上传本地音视频" }}
               </UButton>
               <UButton
                 v-if="packForm.video"
@@ -68,7 +68,7 @@
             </div>
             <UInput
               v-model="packForm.video"
-              placeholder="或填写对象键 course-video/xxx.mp4 / 外部 URL（可选）"
+              placeholder="或填写对象键 course-video/xxx.mp4|mp3 / 外部 URL（可选）"
             />
           </div>
 
@@ -213,7 +213,7 @@
                   </div>
                   <div class="flex flex-col gap-2 rounded-lg border p-3 dark:border-gray-700">
                     <div class="flex items-center justify-between gap-3">
-                      <span class="text-sm font-medium">配套视频（本地文件）</span>
+                      <span class="text-sm font-medium">配套音视频（本地文件）</span>
                       <span class="truncate text-xs opacity-70">
                         {{ currentVideoLabel(editPackForm.video) }}
                       </span>
@@ -227,7 +227,7 @@
                         :loading="isUploadingVideo"
                         @click="openVideoPicker('edit')"
                       >
-                        {{ editPackForm.video ? "替换视频" : "上传本地视频" }}
+                        {{ editPackForm.video ? "替换媒体" : "上传本地音视频" }}
                       </UButton>
                       <UButton
                         v-if="editPackForm.video"
@@ -242,7 +242,7 @@
                     </div>
                     <UInput
                       v-model="editPackForm.video"
-                      placeholder="或填写对象键 course-video/xxx.mp4 / 外部 URL（可选）"
+                      placeholder="或填写对象键 course-video/xxx.mp4|mp3 / 外部 URL（可选）"
                     />
                   </div>
                   <div class="flex flex-col gap-3 rounded-lg border p-4 dark:border-gray-700">
@@ -341,7 +341,7 @@
     <input
       ref="videoInput"
       type="file"
-      accept="video/*,.mp4,.m4v,.mkv,.webm,.mov,.avi"
+      accept="video/*,audio/*,.mp4,.m4v,.mkv,.webm,.mov,.avi,.mp3,.m4a,.wav,.aac"
       class="hidden"
       @change="handleVideoFile"
     />
@@ -420,7 +420,7 @@ function openVideoPicker(target: "add" | "edit") {
 
 function currentVideoLabel(video: string): string {
   const value = video?.trim();
-  if (!value) return "未选择视频";
+  if (!value) return "未选择媒体";
   if (/^https?:\/\//i.test(value)) return `外部链接：${value}`;
   return `已上传：${value.split("/").pop()}`;
 }
@@ -443,10 +443,10 @@ async function handleVideoFile(event: Event) {
     const { video } = await uploadCoursePackVideo(file);
     if (videoTarget.value === "add") packForm.value.video = video;
     else editPackForm.value.video = video;
-    toast.success("视频上传成功");
+    toast.success("媒体上传成功");
   } catch (error: unknown) {
     const message = (error as { message?: string })?.message;
-    errorMessage.value = message ? `视频上传失败：${message}` : "视频上传失败，请稍后重试";
+    errorMessage.value = message ? `媒体上传失败：${message}` : "媒体上传失败，请稍后重试";
   } finally {
     isUploadingVideo.value = false;
   }

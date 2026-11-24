@@ -58,9 +58,19 @@
           />
         </UTooltip>
       </div>
+
+      <div @click="openStatementEditModal">
+        <UTooltip text="修改当前句子">
+          <UIcon
+            name="i-ph-note-pencil"
+            class="clickable-item h-6 w-6"
+          />
+        </UTooltip>
+      </div>
     </div>
 
     <MainCourseContents v-model:isOpen="isOpenCourseContents"></MainCourseContents>
+    <StatementEditModal />
   </div>
 
   <CommonProgressBar
@@ -75,12 +85,14 @@ import { computed, ref } from "vue";
 
 import Dialog from "~/components/common/Dialog.vue";
 import { useQuestionInput } from "~/components/main/QuestionInput/questionInputHelper";
+import StatementEditModal from "~/components/main/StatementEditModal.vue";
 import { courseTimer } from "~/composables/courses/courseTimer";
 import { useGameMode } from "~/composables/main/game";
 import { clearQuestionInput } from "~/composables/main/question";
 import { useCourseContents } from "~/composables/main/useCourseContents";
 import { useGamePause } from "~/composables/main/useGamePause";
 import { useGameSetting } from "~/composables/main/useGameSetting";
+import { useStatementEdit } from "~/composables/main/useStatementEdit";
 import { useGamePlayMode } from "~/composables/user/gamePlayMode";
 import { parseShortcut, useShortcutKeyMode } from "~/composables/user/shortcutKey";
 import { useCourseStore } from "~/store/course";
@@ -93,6 +105,7 @@ const { openCourseContents } = useCourseContents();
 const { handleDoAgain } = useDoAgain();
 const { pauseGame } = useGamePause();
 const { openGameSettingModal } = useGameSetting();
+const { openStatementEditModal } = useStatementEdit();
 const modal = useModal();
 
 const currentCourseInfo = computed(() => {

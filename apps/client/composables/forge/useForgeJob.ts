@@ -34,7 +34,8 @@ export function useForgeJob() {
         view.status === "done" ||
         view.status === "failed" ||
         view.status === "cancelled" ||
-        view.status === "awaiting_review"
+        view.status === "awaiting_review" ||
+        view.status === "needs_fix"
       ) {
         stopPolling();
       }
@@ -75,6 +76,7 @@ export function useForgeJob() {
   const isFailed = computed(() => job.value?.status === "failed");
   const isCancelled = computed(() => job.value?.status === "cancelled");
   const isAwaitingReview = computed(() => job.value?.status === "awaiting_review");
+  const isNeedsFix = computed(() => job.value?.status === "needs_fix");
   const isTerminal = computed(() => isDone.value || isFailed.value || isCancelled.value);
   const elapsedSeconds = computed(() => (job.value ? Math.floor(job.value.elapsedMs / 1000) : 0));
   const errorText = computed(() => job.value?.error ?? "");
@@ -87,6 +89,7 @@ export function useForgeJob() {
     isFailed,
     isCancelled,
     isAwaitingReview,
+    isNeedsFix,
     isTerminal,
     elapsedSeconds,
     errorText,

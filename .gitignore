@@ -145,3 +145,6 @@ temp/
 
 # forge CLI 本地产物
 apps/api/output/
+
+# workbuddy 本地产物
+.workbuddy/

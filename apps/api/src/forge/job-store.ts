@@ -6,6 +6,7 @@ export type ForgeJobStatus =
   | "pending"
   | "running"
   | "awaiting_review"
+  | "needs_fix"
   | "done"
   | "failed"
   | "cancelled";
@@ -19,7 +20,7 @@ export type ForgeJobStage =
   | "aligning"
   | "done";
 
-export type ForgePhase = "transcribe" | "structure";
+export type ForgePhase = "transcribe" | "structure" | "structure-resolve";
 
 export interface ForgeJobRecord {
   id: string;
@@ -31,8 +32,10 @@ export interface ForgeJobRecord {
   finishedAt?: number;
   /** 流水线本地临时产物目录（scratch）；持久产物在对象存储 forge/<id>/ */
   outDir: string;
-  /** 视频对象键，如 course-video/xxx.mp4 */
+  /** 视频/音频对象键，如 course-video/xxx.mp4、course-video/xxx.mp3 */
   videoKey: string;
+  /** 媒体类型（由上传文件扩展名决定）：前端据此渲染视频画面或音频播放条 */
+  mediaKind?: "video" | "audio";
   /** 标题 / 类型，前端轮询回显用 */
   title: string;
   type: "dialogue" | "music";

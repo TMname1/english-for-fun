@@ -1,16 +1,18 @@
-import type { DraftStatement } from "../types";
 import {
+  autoStripSingleWordRows,
   buildChatBody,
+  buildEnglishFromIndexes,
   classifyLlmFailure,
+  cleanWordToken,
   coerceCourseOutput,
   collectSseContent,
-  containsFullSentence,
-  draftSchema,
+  draftRowsSchema,
   extractJsonObject,
   mapWithConcurrency,
   messagesWithJsonKeyword,
-  normalizeStatementsEnglish,
-  stripEnglishPunctuation,
+  rowsToStatements,
+  stripSingleWordRows,
+  validateRowIndexes,
 } from "../llm";
 
 describe("extractJsonObject", () => {
@@ -34,42 +36,304 @@ describe("extractJsonObject", () => {
   });
 });
 
-describe("draftSchema", () => {
-  it("接受只含 statements 的单句组装链", () => {
+describe("draftRowsSchema", () => {
+  it("接受只含编号的行", () => {
     expect(
-      draftSchema.safeParse({
-        statements: [{ english: "I", chinese: "我", phonetic: "/aɪ/" }],
+      draftRowsSchema.safeParse({
+        statements: [{ indexes: [0, 1], chinese: "我喜欢", phonetic: "/aɪ/ /laɪk/" }],
       }).success,
     ).toBe(true);
   });
 
-  it("拒绝缺 chinese / 空 statements / 缺 statements", () => {
-    expect(draftSchema.safeParse({ statements: [{ english: "I" }] }).success).toBe(false);
-    expect(draftSchema.safeParse({ statements: [] }).success).toBe(false);
-    expect(draftSchema.safeParse({}).success).toBe(false);
+  it("拒绝字符串编号 / 空编号 / 缺 chinese / 空 statements", () => {
+    const base = { statements: [{ indexes: ["I", "like"], chinese: "我喜欢" }] };
+    expect(draftRowsSchema.safeParse(base).success).toBe(false);
+    expect(
+      draftRowsSchema.safeParse({ statements: [{ indexes: [], chinese: "我" }] }).success,
+    ).toBe(false);
+    expect(draftRowsSchema.safeParse({ statements: [{ indexes: [0] }] }).success).toBe(false);
+    expect(draftRowsSchema.safeParse({ statements: [] }).success).toBe(false);
+    expect(draftRowsSchema.safeParse({}).success).toBe(false);
   });
 });
 
-describe("containsFullSentence", () => {
-  const chain = (lines: string[]): DraftStatement[] =>
-    lines.map((english) => ({ english, chinese: "译" }));
+describe("cleanWordToken", () => {
+  it("逐词删标点，不把一个词拆成两个 token", () => {
+    expect(cleanWordToken("$10,000")).toBe("10000");
+    expect(cleanWordToken("food.")).toBe("food");
+    expect(cleanWordToken("U.S.")).toBe("US");
+    expect(cleanWordToken("10:30")).toBe("1030");
+    expect(cleanWordToken("“Hi”")).toBe("Hi");
+  });
 
-  it("链里有逐字等于原句的行（忽略大小写/标点）判定为存在", () => {
-    expect(containsFullSentence(chain(["I", "like", "I like the food."]), "I like the food!")).toBe(
-      true,
+  it("保留撇号（直/弯）与连字符", () => {
+    expect(cleanWordToken("don't")).toBe("don't");
+    expect(cleanWordToken("don’t")).toBe("don’t");
+    expect(cleanWordToken("well-known")).toBe("well-known");
+  });
+});
+
+describe("buildEnglishFromIndexes", () => {
+  // 纯标点词不会进编号词表（buildTokenUniverse 已过滤），所以这里只有 3 个词
+  const words = ["It", "costs", "$10,000"];
+
+  it("按编号还原，token 数 === 编号数（$10,000 仍是 1 个词）", () => {
+    const english = buildEnglishFromIndexes([0, 1, 2], words);
+    expect(english).toBe("It costs 10000");
+    expect(english.split(" ")).toHaveLength(3);
+  });
+
+  it("碎片行只拼该片段的词", () => {
+    expect(buildEnglishFromIndexes([1, 2], words)).toBe("costs 10000");
+  });
+});
+
+describe("validateRowIndexes", () => {
+  it("合法链：升序连续且有一行覆盖整句", () => {
+    expect(
+      validateRowIndexes(
+        [
+          [2, 3],
+          [0, 1],
+          [0, 1, 2, 3],
+        ],
+        4,
+      ),
+    ).toBeNull();
+  });
+
+  it("空行 / 越界 / 跳号 / 倒序 都被拒", () => {
+    expect(validateRowIndexes([[]], 4)).toContain("没有任何词编号");
+    expect(validateRowIndexes([[0, 1, 2, 3], [4]], 4)).toContain("越界");
+    expect(
+      validateRowIndexes(
+        [
+          [0, 2],
+          [0, 1, 2, 3],
+        ],
+        4,
+      ),
+    ).toContain("升序连续");
+    expect(
+      validateRowIndexes(
+        [
+          [2, 1],
+          [0, 1, 2, 3],
+        ],
+        4,
+      ),
+    ).toContain("升序连续");
+  });
+
+  it("缺少整句行要报出来", () => {
+    const reason = validateRowIndexes(
+      [
+        [0, 1],
+        [2, 3],
+      ],
+      4,
     );
+    expect(reason).toContain("没有任何一行恰好覆盖");
+    expect(reason).toContain("0,1,…,3");
   });
 
-  it("缩写被展开判为不存在（don't -> do not 失配）", () => {
-    expect(containsFullSentence(chain(["I", "do not like it"]), "I don't like it.")).toBe(false);
+  it("单词成行被拒（N>1）", () => {
+    const reason = validateRowIndexes([[0], [1], [2, 3], [0, 1, 2, 3]], 4);
+    expect(reason).toContain("只有一个词");
+    expect(reason).toContain("逐词成行");
+    // 定位到第一个违规行（第 1 行）
+    expect(reason).toContain("第 1 行");
   });
 
-  it("漏词 / 完全没有完整行判为不存在", () => {
-    expect(containsFullSentence(chain(["I", "like", "the food"]), "I like the food.")).toBe(false);
+  it("N===1 的整句行 [0] 放行", () => {
+    expect(validateRowIndexes([[0]], 1)).toBeNull();
   });
 
-  it("空原句不存在", () => {
-    expect(containsFullSentence(chain(["I"]), "   ")).toBe(false);
+  it("越界判定优先于单词成行（文案不回归）", () => {
+    expect(validateRowIndexes([[0, 1, 2, 3], [4]], 4)).toContain("越界");
+  });
+
+  it("编号从 0 开始的提示出现在越界文案里", () => {
+    expect(validateRowIndexes([[0, 1, 2, 3, 4]], 4)).toContain("编号从 0 开始");
+  });
+});
+
+describe("rowsToStatements", () => {
+  const words = ["I", "like", "the", "food."];
+
+  it("english 由编号还原，越界行被跳过", () => {
+    const statements = rowsToStatements(
+      [
+        { indexes: [0, 1], chinese: "我喜欢", phonetic: "/aɪ/ /laɪk/" },
+        { indexes: [0, 9], chinese: "坏行" },
+      ],
+      words,
+    );
+    expect(statements).toEqual([{ english: "I like", chinese: "我喜欢", phonetic: "/aɪ/ /laɪk/" }]);
+  });
+});
+
+describe("stripSingleWordRows", () => {
+  const words = ["I", "like", "the", "food."];
+  const raw = (rows: unknown) => JSON.stringify({ statements: rows });
+
+  it("删掉单词行后合格：english 由编号还原、span 相对本句词起点", () => {
+    const result = stripSingleWordRows(
+      raw([
+        { indexes: [0], chinese: "我", phonetic: "/aɪ/" },
+        { indexes: [1], chinese: "喜欢", phonetic: "/laɪk/" },
+        { indexes: [0, 1], chinese: "我喜欢", phonetic: "/aɪ/ /laɪk/" },
+        { indexes: [2, 3], chinese: "这个食物" },
+        { indexes: [0, 1, 2, 3], chinese: "我喜欢这个食物" },
+      ]),
+      10,
+      words,
+    );
+    expect(result.removed).toBe(2);
+    expect(result.reason).toBeNull();
+    expect(result.chain?.statements.map((s) => s.english)).toEqual([
+      "I like",
+      "the food",
+      "I like the food",
+    ]);
+    expect(result.chain?.spans).toEqual([
+      { wordStart: 10, wordEnd: 12 },
+      { wordStart: 12, wordEnd: 14 },
+      { wordStart: 10, wordEnd: 14 },
+    ]);
+  });
+
+  it("删完仍缺整句行：不合格并给出原因 + 剩余行快照", () => {
+    const result = stripSingleWordRows(
+      raw([
+        { indexes: [0], chinese: "我" },
+        { indexes: [0, 1], chinese: "我喜欢" },
+        { indexes: [2, 3], chinese: "这个食物" },
+      ]),
+      0,
+      words,
+    );
+    expect(result.removed).toBe(1);
+    expect(result.chain).toBeNull();
+    expect(result.reason).toContain("没有任何一行恰好覆盖");
+    expect(result.statements?.map((s) => s.english)).toEqual(["I like", "the food"]);
+  });
+
+  it("没有单词行时明确告知无需删除", () => {
+    const result = stripSingleWordRows(raw([{ indexes: [0, 1, 2, 3], chinese: "整句" }]), 0, words);
+    expect(result.removed).toBe(0);
+    expect(result.chain).toBeNull();
+    expect(result.reason).toContain("没有单词成行");
+  });
+
+  it("本句只有 1 个词时整句行 [0] 不算单词行", () => {
+    const result = stripSingleWordRows(raw([{ indexes: [0], chinese: "嗯" }]), 0, ["Oh"]);
+    expect(result.removed).toBe(0);
+    expect(result.chain).toBeNull();
+    expect(result.reason).toContain("没有单词成行");
+  });
+
+  it("raw 解析不出编号时提示改用重试或删除", () => {
+    for (const bad of [null, "", "not json", JSON.stringify({ statements: [] })]) {
+      const result = stripSingleWordRows(bad, 0, words);
+      expect(result.removed).toBe(0);
+      expect(result.chain).toBeNull();
+      expect(result.reason).toContain("请改用「重试该句」或「删除该句」");
+    }
+  });
+
+  it('兼容 {"courses":[...]} 旧包裹', () => {
+    const result = stripSingleWordRows(
+      JSON.stringify({
+        courses: [
+          {
+            statements: [
+              { indexes: [2], chinese: "这个" },
+              { indexes: [0, 1, 2, 3], chinese: "整句" },
+            ],
+          },
+        ],
+      }),
+      0,
+      words,
+    );
+    expect(result.removed).toBe(1);
+    expect(result.chain?.statements.map((s) => s.english)).toEqual(["I like the food"]);
+  });
+});
+
+describe("autoStripSingleWordRows", () => {
+  const words = ["I", "like", "the", "food."];
+  const raw = (rows: unknown) => JSON.stringify({ statements: rows });
+
+  it("输出混着单词行：删掉后合格，直接给可用组装链、不给失败快照", () => {
+    const out = autoStripSingleWordRows(
+      raw([
+        { indexes: [0], chinese: "我" },
+        { indexes: [1], chinese: "喜欢" },
+        { indexes: [0, 1], chinese: "我喜欢" },
+        { indexes: [0, 1, 2, 3], chinese: "我喜欢这个食物" },
+      ]),
+      5,
+      words,
+    );
+    expect(out?.removed).toBe(2);
+    expect(out?.chain?.statements.map((s) => s.english)).toEqual(["I like", "I like the food"]);
+    expect(out?.chain?.spans).toEqual([
+      { wordStart: 5, wordEnd: 7 },
+      { wordStart: 5, wordEnd: 9 },
+    ]);
+    expect(out?.attempt).toBeNull();
+  });
+
+  it("删完仍不合规：给带 autoStrip 标记的失败快照（交给用户）", () => {
+    const out = autoStripSingleWordRows(
+      raw([
+        { indexes: [0], chinese: "我" },
+        { indexes: [0, 1], chinese: "我喜欢" },
+        { indexes: [2, 3], chinese: "这个食物" },
+      ]),
+      0,
+      words,
+    );
+    expect(out?.chain).toBeNull();
+    expect(out?.attempt?.autoStrip).toBe(true);
+    expect(out?.attempt?.reason).toContain("已自动删除 1 个单词行");
+    expect(out?.attempt?.reason).toContain("没有任何一行恰好覆盖");
+    expect(out?.attempt?.statements?.map((s) => s.english)).toEqual(["I like", "the food"]);
+  });
+
+  it("与失败原因无关：越界等原因只要输出混着单词行，同样先删一遍", () => {
+    const out = autoStripSingleWordRows(
+      raw([
+        { indexes: [0], chinese: "我" },
+        { indexes: [1, 2], chinese: "喜欢这个" },
+        { indexes: [3, 4], chinese: "食物" },
+      ]),
+      0,
+      words,
+    );
+    expect(out?.removed).toBe(1);
+    expect(out?.chain).toBeNull();
+    expect(out?.attempt?.autoStrip).toBe(true);
+    expect(out?.attempt?.reason).toContain("越界");
+  });
+
+  it("输出里没有单词行时完全不动（返回 null，保留原失败原因）", () => {
+    expect(
+      autoStripSingleWordRows(
+        raw([
+          { indexes: [0, 1], chinese: "我喜欢" },
+          { indexes: [2, 3], chinese: "这个食物" },
+        ]),
+        0,
+        words,
+      ),
+    ).toBeNull();
+  });
+
+  it("原始输出解析不出编号时完全不动", () => {
+    expect(autoStripSingleWordRows("not json", 0, words)).toBeNull();
   });
 });
 
@@ -115,45 +379,6 @@ describe("coerceCourseOutput", () => {
 
   it("passes a single course object through unchanged", () => {
     expect(coerceCourseOutput(course)).toBe(course);
-  });
-});
-
-describe("stripEnglishPunctuation", () => {
-  it("去掉句读标点并折叠多余空格", () => {
-    expect(stripEnglishPunctuation("I like the food.")).toBe("I like the food");
-    expect(stripEnglishPunctuation('  "Hi there!"  ')).toBe("Hi there");
-    expect(stripEnglishPunctuation("well, actually... yes")).toBe("well actually yes");
-  });
-
-  it("保留撇号（直/弯）与连字符", () => {
-    expect(stripEnglishPunctuation("don't like")).toBe("don't like");
-    expect(stripEnglishPunctuation("don’t like!")).toBe("don’t like");
-    expect(stripEnglishPunctuation("a well-known t-shirt")).toBe("a well-known t-shirt");
-  });
-
-  it("chinese 式全角标点同样从 english 中剥除", () => {
-    expect(stripEnglishPunctuation("I like the food。")).toBe("I like the food");
-  });
-});
-
-describe("normalizeStatementsEnglish", () => {
-  it("就地清理 english 并返回变更清单", () => {
-    const statements: DraftStatement[] = [
-      { english: "I", chinese: "我" },
-      { english: "I like the food.", chinese: "我喜欢这个食物。" },
-    ];
-    const { changes, emptyIndexes } = normalizeStatementsEnglish(statements);
-    expect(statements[1].english).toBe("I like the food");
-    expect(changes).toHaveLength(1);
-    expect(changes[0]).toContain("I like the food");
-    expect(emptyIndexes).toEqual([]);
-    // chinese 的标点不受影响
-    expect(statements[1].chinese).toBe("我喜欢这个食物。");
-  });
-
-  it("整行只有标点时记入 emptyIndexes", () => {
-    const statements: DraftStatement[] = [{ english: "...", chinese: "……" }];
-    expect(normalizeStatementsEnglish(statements).emptyIndexes).toEqual([1]);
   });
 });
 

@@ -17,13 +17,15 @@ import {
 import { FileInterceptor } from "@nestjs/platform-express";
 import { diskStorage } from "multer";
 
+import { isAllowedMediaExt, MEDIA_EXT_LABELS } from "../common/media-ext";
 import { CreateForgeJobDto } from "./dto/create-forge-job.dto";
-import { ResumeForgeJobDto } from "./dto/resume-forge-job.dto";
+import { ResolveForgeFailuresDto } from "./dto/resolve-forge-failures.dto";
+// 【已停用 · 转录校对】仅 resume 接口使用，该接口已注释保留（见下方 resumeJob 说明）。
+// import { ResumeForgeJobDto } from "./dto/resume-forge-job.dto";
 import { StartForgeJobDto } from "./dto/start-forge-job.dto";
 import { ForgeService } from "./forge.service";
 
-/** 与 src/forge/core/forge.ts 的 VIDEO_EXT 白名单保持一致 */
-const VIDEO_EXT_WHITELIST = new Set([".mp4", ".m4v", ".mkv", ".webm", ".mov", ".avi"]);
+/** 音视频统一白名单（见 src/common/media-ext.ts），与流水线支持的 mediaPath 类型一致 */
 const MAX_VIDEO_BYTES = 2 * 1024 * 1024 * 1024;
 /** multer 落盘只是中转，service 上传对象存储后即删 */
 const UPLOAD_TMP_DIR = join(tmpdir(), "earthworm-uploads");
@@ -51,8 +53,13 @@ export class ForgeController {
       limits: { fileSize: MAX_VIDEO_BYTES },
       fileFilter: (_req, file, cb) => {
         const ext = extname(file.originalname).toLowerCase();
-        if (!VIDEO_EXT_WHITELIST.has(ext)) {
-          cb(new BadRequestException(`不支持的视频格式：${ext || "(无扩展名)"}`), false);
+        if (!isAllowedMediaExt(ext)) {
+          cb(
+            new BadRequestException(
+              `不支持的媒体格式：${ext || "(无扩展名)"}（支持 ${MEDIA_EXT_LABELS}）`,
+            ),
+            false,
+          );
           return;
         }
         cb(null, true);
@@ -64,7 +71,7 @@ export class ForgeController {
     @Body() dto: CreateForgeJobDto,
   ) {
     if (!file) {
-      throw new BadRequestException("缺少视频文件 videoFile");
+      throw new BadRequestException("缺少媒体文件 videoFile");
     }
     return await this.forgeService.createJob(file, dto);
   }
@@ -87,9 +94,20 @@ export class ForgeController {
     return this.forgeService.cancelJob(id);
   }
 
-  /** 转录后人工校对完成，续跑结构化 + 对齐；body 为 word 级编辑后的分段 */
+  /**
+   * 【已停用 · 转录校对】转录后人工校对续跑接口，配合 forge.service.resumeJob。
+   * 流水线已移除该暂停步骤，接口整段注释保留；恢复步骤见 pipeline-runner.ts 顶部说明。
+   */
+  /*
   @Post("jobs/:id/resume")
   resumeJob(@Param("id") id: string, @Body() dto: ResumeForgeJobDto) {
     return this.forgeService.resumeJob(id, dto);
+  }
+  */
+
+  /** 结构化出现失败句后，前端对每个失败句选择「删除 / 重试」并续跑 */
+  @Post("jobs/:id/resolve")
+  resolveFailures(@Param("id") id: string, @Body() dto: ResolveForgeFailuresDto) {
+    return this.forgeService.resolveFailures(id, dto);
   }
 }

@@ -3,9 +3,9 @@ import type { ClipRange, Transcript, TranscriptSegment } from "./types";
 const EPS = 0.05;
 const MIN_CLIP_SECONDS = 0.1;
 
-/** 排序、去重、丢弃过短区间、clamp 到 [0, duration]；返回按时间升序且互不重叠的 clips */
+/** 排序、丢弃过短区间、clamp 到 [0, duration]；返回按时间升序的 clips（不合并，相邻分段各自保留） */
 export function normalizeClips(clips: ClipRange[], duration?: number): ClipRange[] {
-  const sorted = clips
+  return clips
     .filter((c) => Number.isFinite(c.start) && Number.isFinite(c.end))
     .map((c) => ({
       start: Math.max(0, c.start),
@@ -13,18 +13,6 @@ export function normalizeClips(clips: ClipRange[], duration?: number): ClipRange
     }))
     .filter((c) => c.end - c.start >= MIN_CLIP_SECONDS)
     .sort((a, b) => a.start - b.start);
-
-  const result: ClipRange[] = [];
-  for (const clip of sorted) {
-    const prev = result[result.length - 1];
-    if (prev && clip.start < prev.end + EPS) {
-      // 重叠或紧邻：并入前一个区间
-      prev.end = Math.max(prev.end, clip.end);
-      continue;
-    }
-    result.push({ ...clip });
-  }
-  return result;
 }
 
 /** 把单个 clip 的转写时间戳（相对 clip 起点）加回偏移，映射到原视频绝对时间 */

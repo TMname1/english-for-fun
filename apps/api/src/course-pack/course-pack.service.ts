@@ -1,6 +1,6 @@
-import { Inject, Injectable, Logger, NotFoundException } from "@nestjs/common";
+import { BadRequestException, Inject, Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
-import { asc, eq } from "drizzle-orm";
+import { asc, eq, sql } from "drizzle-orm";
 
 import type { CreateCoursePack } from "@earthworm/game-data-sdk";
 import {
@@ -11,10 +11,36 @@ import {
 } from "@earthworm/game-data-sdk";
 import { coursePack, statement } from "@earthworm/schema";
 import type { CreateCoursePackDto } from "./dto/create-course-pack.dto";
+import { mediaKindOf } from "../common/media-ext";
 import { CourseHistoryService } from "../course-history/course-history.service";
 import { DB, DbType } from "../global/providers/db.provider";
 import { StorageService } from "../storage/storage.service";
 import { UserCourseProgressService } from "../user-course-progress/user-course-progress.service";
+
+/** 课程目录分页：默认与上限都是 100 条/页（句子很多时避免一次性把全量下发给前端） */
+export const DEFAULT_STATEMENTS_PAGE_SIZE = 100;
+export const MAX_STATEMENTS_PAGE_SIZE = 100;
+
+export type StatementsFilter = "all" | "mastered" | "notMastered";
+
+export interface StatementsPageQuery {
+  page?: string;
+  pageSize?: string;
+  filter?: string;
+}
+
+/** 目录分页查询的原始行（下标是句子在完整有序列表里的位置，跨页唯一） */
+type StatementsPageRow = {
+  index: number;
+  order: number;
+  english: string;
+  chinese: string;
+  soundmark: string;
+  start_time: number | null;
+  end_time: number | null;
+  words: unknown;
+  is_mastered: boolean;
+};
 
 @Injectable()
 export class CoursePackService {
@@ -59,6 +85,7 @@ export class CoursePackService {
       ...pack,
       video: await this.storage.presignVideoUrl(pack.video),
       videoIsExternal: /^https?:\/\//i.test(pack.video ?? ""),
+      mediaKind: mediaKindOf(pack.video),
       completionCount,
     };
   }
@@ -83,8 +110,113 @@ export class CoursePackService {
       ...pack,
       video: await this.storage.presignVideoUrl(pack.video),
       videoIsExternal: /^https?:\/\//i.test(pack.video ?? ""),
+      mediaKind: mediaKindOf(pack.video),
       statements,
       statementIndex,
+    };
+  }
+
+  /**
+   * 课程目录分页：仅按需取一页（默认/最多 100 条），服务端按掌握状态筛选。
+   *
+   * - index 是句子在完整有序列表（order asc）里的下标，跨页唯一，前端据此跳句；
+   *   不能用 offset + 页内下标代替，筛选后的列表下标会被压缩。
+   * - 掌握状态在服务端关联 mastered_elements 判断（全局已掌握表，忽略大小写），
+   *   因此「已掌握/未掌握」筛选也是跨页完整的。
+   */
+  async findStatementsPage(coursePackId: string, query: StatementsPageQuery = {}) {
+    await this.findOne(coursePackId);
+
+    const page = Math.max(1, Number.parseInt(query.page ?? "", 10) || 1);
+    const pageSize = Math.min(
+      Math.max(1, Number.parseInt(query.pageSize ?? "", 10) || DEFAULT_STATEMENTS_PAGE_SIZE),
+      MAX_STATEMENTS_PAGE_SIZE,
+    );
+    const filter = normalizeStatementsFilter(query.filter);
+
+    // mastered_elements.content 是 jsonb 里的「字符串标量」，而且被 stringify 了两层
+    // （服务层 JSON.stringify 一次 + drizzle jsonb 映射再一次），取出来的文本外面还包着一层 JSON 字符串。
+    // 这里最多剥两层：既兼容历史上直接存对象/存一层字符串的行，也只在这张表上解析一次并去重，
+    // 避免每行句子都去解一遍 jsonb。
+    const masteredCte = sql`mastered as (
+      select distinct lower(obj ->> 'english') as eng
+      from (
+        select case
+          when jsonb_typeof(lvl1) = 'string' and left(lvl1 #>> '{}', 1) = '{'
+            then (lvl1 #>> '{}')::jsonb
+          else lvl1
+        end as obj
+        from (
+          select case
+            when jsonb_typeof(content) = 'string'
+              and left(content #>> '{}', 1) in ('{', '"')
+              then (content #>> '{}')::jsonb
+            else content
+          end as lvl1
+          from mastered_elements
+        ) unwrapped_once
+      ) unwrapped_twice
+      where jsonb_typeof(obj) = 'object'
+    )`;
+
+    const isMasteredExpr = sql`lower(s.english) in (select eng from mastered where eng is not null)`;
+
+    const queryCte = sql`with ${masteredCte}, ordered as (
+      select
+        s."order",
+        s.english,
+        s.chinese,
+        s.soundmark,
+        s.start_time,
+        s.end_time,
+        s.words,
+        (row_number() over (order by s."order"))::int - 1 as "index",
+        ${isMasteredExpr} as is_mastered
+      from statements s
+      where s.course_pack_id = ${coursePackId}
+    )`;
+
+    // 筛选放在 CTE 外层：row_number 必须按完整列表算，index 才不会因筛选被压缩；
+    // 外层只能用 CTE 暴露的列，不能引用 CTE 内部的 s.
+    const filterCondition =
+      filter === "mastered"
+        ? sql`is_mastered`
+        : filter === "notMastered"
+          ? sql`not is_mastered`
+          : sql`true`;
+
+    const rows = await this.db.execute<StatementsPageRow>(sql`
+      ${queryCte}
+      select "index", "order", english, chinese, soundmark, start_time, end_time, words, is_mastered
+      from ordered
+      where ${filterCondition}
+      order by "index"
+      limit ${pageSize} offset ${(page - 1) * pageSize}
+    `);
+
+    const countRows = await this.db.execute<{ count: number }>(sql`
+      ${queryCte}
+      select count(*)::int as count from ordered where ${filterCondition}
+    `);
+
+    const total = countRows[0]?.count ?? 0;
+
+    return {
+      items: rows.map((row) => ({
+        index: row.index,
+        order: row.order,
+        english: row.english,
+        chinese: row.chinese,
+        soundmark: row.soundmark,
+        startTime: row.start_time,
+        endTime: row.end_time,
+        words: row.words,
+        isMastered: row.is_mastered,
+      })),
+      total,
+      page,
+      pageSize,
+      totalPages: Math.max(1, Math.ceil(total / pageSize)),
     };
   }
 
@@ -112,6 +244,7 @@ export class CoursePackService {
       description: pack.description ?? "",
       cover: pack.cover ?? "",
       video: pack.video ?? "",
+      mediaKind: mediaKindOf(pack.video),
       statements: rows.map((row) => ({
         english: row.english,
         chinese: row.chinese,
@@ -244,4 +377,11 @@ export class CoursePackService {
     });
     this.gameDataSdkReady = true;
   }
+}
+
+/** filter 参数归一化：非法值直接 400，避免拼错参数时静默退化成全量 */
+function normalizeStatementsFilter(filter: string | undefined): StatementsFilter {
+  if (!filter || filter === "all") return "all";
+  if (filter === "mastered" || filter === "notMastered") return filter;
+  throw new BadRequestException(`不支持的 filter：${filter}（可选 all / mastered / notMastered）`);
 }

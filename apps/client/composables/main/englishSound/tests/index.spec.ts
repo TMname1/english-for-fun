@@ -43,7 +43,6 @@ describe("useCurrentStatementEnglishSound", () => {
 
     const courseStore = useCourseStore();
     courseStore.currentStatement = {
-      id: "1",
       order: 1,
       english: "I",
       soundmark: "/I/",
@@ -68,7 +67,6 @@ describe("useCurrentStatementEnglishSound", () => {
     // update english value
     const courseStore = useCourseStore();
     courseStore.currentStatement = {
-      id: "2",
       order: 2,
       english: "like",
       soundmark: "/like/",
@@ -85,7 +83,6 @@ describe("useCurrentStatementEnglishSound", () => {
 
     const courseStore = useCourseStore();
     courseStore.currentStatement = {
-      id: "1",
       order: 1,
       english: "I",
       soundmark: "/I/",

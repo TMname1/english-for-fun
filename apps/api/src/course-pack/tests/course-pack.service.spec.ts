@@ -5,7 +5,7 @@ import { eq } from "drizzle-orm";
 
 import { coursePack } from "@earthworm/schema";
 import type { DbType } from "../../global/providers/db.provider";
-import { insertCoursePack, insertStatement } from "../../../test/fixture/db";
+import { insertCoursePack, insertMasteredElement, insertStatement } from "../../../test/fixture/db";
 import { cleanDB, testImportModules } from "../../../test/helper/utils";
 import { endDB } from "../../common/db";
 import { CourseHistoryService } from "../../course-history/course-history.service";
@@ -90,6 +90,7 @@ describe("CoursePackService", () => {
 
       expect(result.video).toBe("https://oss.test/course-video/x.mp4?sig");
       expect(result.videoIsExternal).toBe(false);
+      expect(result.mediaKind).toBe("video");
     });
 
     it("should pass external video URLs through untouched", async () => {
@@ -101,6 +102,15 @@ describe("CoursePackService", () => {
 
       expect(result.video).toBe("https://example.com/v.mp4");
       expect(result.videoIsExternal).toBe(true);
+      expect(result.mediaKind).toBe("video");
+    });
+
+    it("should mark audio media so the player renders a bar instead of a picture", async () => {
+      const coursePackEntity = await insertCoursePack(db, { video: "course-video/song.mp3" });
+
+      const result = await coursePackService.findOneWithCompletion(coursePackEntity.id);
+
+      expect(result.mediaKind).toBe("audio");
     });
   });
 
@@ -128,6 +138,110 @@ describe("CoursePackService", () => {
 
       expect(result.video).toBe("https://oss.test/course-video/x.mp4?sig");
       expect(result.videoIsExternal).toBe(false);
+      expect(result.mediaKind).toBe("video");
+    });
+
+    it("should mark audio media as audio", async () => {
+      const coursePackEntity = await insertCoursePack(db, { video: "course-video/song.m4a" });
+
+      const result = await coursePackService.findLearning(coursePackEntity.id);
+
+      expect(result.mediaKind).toBe("audio");
+    });
+
+    it("should default to video when the pack has no media", async () => {
+      const coursePackEntity = await insertCoursePack(db);
+
+      const result = await coursePackService.findLearning(coursePackEntity.id);
+
+      expect(result.mediaKind).toBe("video");
+    });
+  });
+
+  describe("findStatementsPage", () => {
+    async function seedPack(count: number) {
+      const pack = await insertCoursePack(db);
+      for (let i = 1; i <= count; i++) {
+        await insertStatement(db, pack.id, i, { english: `sentence-${i}` });
+      }
+      return pack;
+    }
+
+    it("should return only one page of statements with absolute indexes", async () => {
+      const pack = await seedPack(5);
+
+      const first = await coursePackService.findStatementsPage(pack.id, {
+        page: "1",
+        pageSize: "2",
+      });
+
+      expect(first.items).toHaveLength(2);
+      expect(first.items.map((item) => item.index)).toEqual([0, 1]);
+      expect(first.items[0].english).toBe("sentence-1");
+      expect(first.total).toBe(5);
+      expect(first.totalPages).toBe(3);
+
+      const last = await coursePackService.findStatementsPage(pack.id, {
+        page: "3",
+        pageSize: "2",
+      });
+
+      expect(last.items).toHaveLength(1);
+      expect(last.items[0].index).toBe(4);
+    });
+
+    it("should default to page 1 and cap pageSize at 100", async () => {
+      const pack = await seedPack(3);
+
+      const result = await coursePackService.findStatementsPage(pack.id, { pageSize: "1000" });
+
+      expect(result.page).toBe(1);
+      expect(result.pageSize).toBe(100);
+      expect(result.items).toHaveLength(3);
+    });
+
+    it("should return an empty page when page is beyond the end", async () => {
+      const pack = await seedPack(2);
+
+      const result = await coursePackService.findStatementsPage(pack.id, { page: "9" });
+
+      expect(result.items).toEqual([]);
+      expect(result.total).toBe(2);
+      expect(result.totalPages).toBe(1);
+    });
+
+    it("should filter mastered statements and keep absolute indexes", async () => {
+      const pack = await seedPack(4);
+      await insertMasteredElement(db, "SENTENCE-2");
+
+      const mastered = await coursePackService.findStatementsPage(pack.id, { filter: "mastered" });
+
+      expect(mastered.total).toBe(1);
+      expect(mastered.items[0].index).toBe(1);
+      expect(mastered.items[0].isMastered).toBe(true);
+
+      const notMastered = await coursePackService.findStatementsPage(pack.id, {
+        filter: "notMastered",
+      });
+
+      expect(notMastered.total).toBe(3);
+      // 被筛掉的句子不压缩下标：第 2 句（index 1）缺失后仍是 0,2,3
+      expect(notMastered.items.map((item) => item.index)).toEqual([0, 2, 3]);
+      expect(notMastered.items.every((item) => item.isMastered === false)).toBe(true);
+    });
+
+    it("should reject unknown filter values", async () => {
+      const pack = await seedPack(1);
+
+      await expect(
+        coursePackService.findStatementsPage(pack.id, { filter: "whatever" }),
+      ).rejects.toThrow("不支持的 filter");
+    });
+
+    it("should throw NotFoundException when course pack ID does not exist", async () => {
+      await expect(coursePackService.findStatementsPage(createId())).rejects.toThrow(
+        NotFoundException,
+      );
     });
   });
 
@@ -159,6 +273,7 @@ describe("CoursePackService", () => {
         description: "描述",
         cover: "c.png",
         video: "course-video/e2e.mp4",
+        mediaKind: "video",
         statements: [
           { english: "one", chinese: "一", phonetic: "/1/" },
           { english: "two", chinese: "二", phonetic: "/2/", startTime: 3, endTime: 4 },

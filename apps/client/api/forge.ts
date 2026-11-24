@@ -45,6 +45,34 @@ export interface ForgeTranscript {
   segments: ForgeTranscriptSegment[];
 }
 
+/** 单次结构化尝试的失败快照 */
+export interface ForgeSentenceAttempt {
+  reason: string;
+  statements?: ForgeJobCourseStatement[] | null;
+  raw?: string | null;
+  /** 该快照来自后端「逐词成行」的自动删单词补救（已自动处理过），前端不再重复提供该操作 */
+  autoStrip?: boolean;
+}
+
+/** 一个句子在全部尝试后仍失败的记录 */
+export interface ForgeStructureFailure {
+  index: number;
+  sentence: string;
+  attempts: ForgeSentenceAttempt[];
+}
+
+/** 结构化进度快照：成功链 + 失败清单（needs_fix 状态返回） */
+export interface ForgeStructureProgress {
+  success: Array<{ index: number; statements: ForgeJobCourseStatement[] }>;
+  failures: ForgeStructureFailure[];
+}
+
+/** 前端对每个失败句的选择：删除该句 / 重试该句（输出混着单词行由后端自动补救） */
+export interface ResolveForgeFailuresDecision {
+  index: number;
+  action: "delete" | "retry";
+}
+
 /** 校对续跑时回传的分段（被删除的段不包含） */
 export interface ResumeTranscriptSegment {
   id: number;
@@ -58,6 +86,7 @@ export type ForgeJobStatusValue =
   | "pending"
   | "running"
   | "awaiting_review"
+  | "needs_fix"
   | "done"
   | "failed"
   | "cancelled";
@@ -79,10 +108,12 @@ export interface ForgeJobView {
   error?: string;
   elapsedMs: number;
   outDir: string;
-  /** 视频预签名 URL（对象存储直连，会过期），仅供预览播放 */
+  /** 媒体预签名 URL（对象存储直连，会过期），仅供预览播放 */
   videoPath: string;
-  /** 视频对象键，入库时填到 course_packs.video */
+  /** 媒体对象键（视频或音频），入库时填到 course_packs.video */
   videoKey: string;
+  /** 媒体类型：audio 时剪辑页只渲染音频播放条 */
+  mediaKind?: "video" | "audio";
   title: string;
   type: "dialogue" | "music";
   language?: string;
@@ -90,6 +121,8 @@ export interface ForgeJobView {
   /** status=awaiting_review 时附带：ASR 转录结果，供 word 级校对 */
   transcriptJson?: ForgeTranscript;
   courseJson?: ForgeJobCourseJson;
+  /** status=needs_fix 时附带：结构化成功链 + 失败清单 */
+  structureProgress?: ForgeStructureProgress;
   /** 视频切片流程：选中的时间区间（秒） */
   clips?: { start: number; end: number }[];
 }
@@ -161,6 +194,19 @@ export async function resumeForgeJob(
   return await $fetch<{ jobId: string }>(`/forge/jobs/${jobId}/resume`, {
     method: "post",
     body: { segments },
+    retry: 0,
+  });
+}
+
+/** 结构化失败句处理后：对每个失败句提交 delete/retry 决策并续跑 */
+export async function resolveForgeJob(
+  jobId: string,
+  decisions: ResolveForgeFailuresDecision[],
+): Promise<{ jobId: string }> {
+  const $fetch = forgeFetch();
+  return await $fetch<{ jobId: string }>(`/forge/jobs/${jobId}/resolve`, {
+    method: "post",
+    body: { decisions },
     retry: 0,
   });
 }
