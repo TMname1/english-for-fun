@@ -59,7 +59,7 @@ docker tag docker.m.daocloud.io/library/node:20-bookworm-slim node:20-bookworm-s
 docker build --platform linux/amd64 -f apps/api/Dockerfile -t earthworm-api:local .
 ```
 
-Dockerfile 内置 8 项产物自检（入口/迁移/forge/ffmpeg/三个 workspace 包），缺任何一项构建当场失败。
+Dockerfile 内置 10 项产物自检（入口/迁移/forge/ffmpeg/drizzle meta/三个 workspace 包/两个 LangGraph 包），缺任何一项构建当场失败。
 ffmpeg-static 从 GitHub 下载二进制若超时：给 Docker Desktop 配代理，或在 Dockerfile builder 段临时加
 `ENV FFMPEG_BINARIES_URL=https://registry.npmmirror.com/-/binary/ffmpeg-static`。
 

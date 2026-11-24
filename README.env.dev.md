@@ -153,7 +153,20 @@ API_BASE="http://localhost:3001"
 
 ### 3.4 流水线运行时变量（由后端自动注入，**无需手动配置**）
 
-后端通过 `runner-client` 以子进程方式跑 `pipeline-runner`，会传入：`FORGE_PHASE`（`transcribe`\|`structure`）、`FORGE_OUT_DIR`、`FORGE_MEDIA_PATH`、`FORGE_TITLE`、`FORGE_TYPE`（`dialogue`\|`music`）、`FORGE_CLIPS`（`[{start,end}]` JSON）、`FORGE_LANGUAGE`、`FORGE_DESC`。仅在手动跑 CLI/子进程时才需要了解。
+后端通过 `runner-client` 以子进程方式跑 `pipeline-runner`，会传入：`FORGE_PHASE`（`transcribe`\|`structure`\|`structure-resolve`）、`FORGE_OUT_DIR`、`FORGE_MEDIA_PATH`、`FORGE_TITLE`、`FORGE_TYPE`（`dialogue`\|`music`）、`FORGE_CLIPS`（`[{start,end}]` JSON）、`FORGE_LANGUAGE`、`FORGE_DESC`。仅在手动跑 CLI/子进程时才需要了解。
+
+### 3.5 编排层开关与 LangSmith 调试（可选）
+
+| 变量                          | 必填 | 默认值                            | 用途                                                                                                                    |
+| ----------------------------- | ---- | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `FORGE_ORCHESTRATOR`          | 否   | `graph`                           | 编排层实现：`graph`（LangGraph `StateGraph`）/ `legacy`（重构前的命令式阶段函数）。改回 `legacy` 即回滚，无需重新构建。 |
+| `FORGE_GRAPH_CHECKPOINT_KEEP` | 否   | `8`                               | 每个任务保留的 checkpoint 份数（含最近的中断态，须 ≥2）；调小可减小 `graph.checkpoint.json`。                           |
+| `LANGSMITH_TRACING`           | 否   | `false`                           | 设为 `true` 才把图的节点/LLM 调用上报到 LangSmith（需要 `LANGSMITH_API_KEY`）；只在本机调图时不用开。                   |
+| `LANGSMITH_ENDPOINT`          | 否   | `https://api.smith.langchain.com` | LangSmith 域名；EU 区改成 `https://eu.api.smith.langchain.com`。                                                        |
+| `LANGSMITH_API_KEY`           | 否   | 空                                | 上报 tracing / 用 Studio 时填。                                                                                         |
+
+本地只想调 forge 的图（不需要 DB、OSS 和整个 Nest）：根目录 `pnpm dev:langsmith` 起 LangGraph Studio
+（图 API `:2024`，Studio 链接见启动横幅），入口与 Input 示例见 `apps/api/src/forge/core/README.md` §8.2。
 
 ### 最小可用配置（在 `apps/api/.env` 的 FORGE\_\* 段填 Key，参考 `.env.example`）
 

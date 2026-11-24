@@ -110,12 +110,14 @@ S3_PRESIGN_EXPIRES_SECONDS="21600"
 后端发起的流水线子进程自动继承 API 进程的环境变量，**无需单独配置**。
 在生产服务器上手动跑 CLI（如 `forge:import`）时读的也是同一文件：
 
-| 变量                          | 生产取值                                | 说明                          |
-| ----------------------------- | --------------------------------------- | ----------------------------- |
-| `FORGE_API_URL`               | 生产 API 地址                           | 课程导入目标。                |
-| `AUTH_*`                      | 与生产 API 一致                         | 导入前自动登录用。            |
-| `S3_*`                        | 与上文 OSS 配置一致                     | 视频与 JSON 产物上传目标。    |
-| `FORGE_ASR_*` / `FORGE_LLM_*` | 同 dev（见 `README.env.dev.md` 第三节） | ASR / LLM 的 Key 与模型配置。 |
+| 变量                          | 生产取值                                | 说明                                                                                               |
+| ----------------------------- | --------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `FORGE_API_URL`               | 生产 API 地址                           | 课程导入目标。                                                                                     |
+| `AUTH_*`                      | 与生产 API 一致                         | 导入前自动登录用。                                                                                 |
+| `S3_*`                        | 与上文 OSS 配置一致                     | 视频与 JSON 产物上传目标。                                                                         |
+| `FORGE_ASR_*` / `FORGE_LLM_*` | 同 dev（见 `README.env.dev.md` 第三节） | ASR / LLM 的 Key 与模型配置。                                                                      |
+| `FORGE_ORCHESTRATOR`          | 不填（默认 `graph`）                    | 编排层实现；线上排障时可临时设 `legacy` 回滚到命令式实现，改完重启进程即生效，无需重新构建镜像。   |
+| `LANGSMITH_*`                 | 不填                                    | 仅当需要把线上跑图/LLM 调用上报 LangSmith 时填（`LANGSMITH_TRACING=true` + `LANGSMITH_API_KEY`）。 |
 
 ## 四、不需要部署 / 配置的项
 
@@ -128,7 +130,7 @@ S3_PRESIGN_EXPIRES_SECONDS="21600"
 
 1. 管理页上传一个视频 → OSS 控制台出现 `course-video/<name>` → 创建课程包 → 学习页可播放、可 seek。
 2. TTS 发音一次 → OSS 出现 `tts/<hash>.mp3`，第二次请求命中缓存。
-3. （若开启 forge）上传 → 切片 → 转写 → 校对 → 入库，OSS 出现 `forge/<jobId>/*.json`。
+3. （若开启 forge）上传 → 切片 → 转写 → 结构化（有失败句时前端 resolve）→ 入库，OSS 出现 `forge/<jobId>/*.json`（含 `graph.checkpoint.json`）。
 4. 服务器本地临时目录（`os.tmpdir()/earthworm-*`）任务结束后无残留。
 5. 删除一个课程包 → OSS 控制台对应 `course-video/<name>` 与 `forge/<id>/` 消失（若无其他包引用该视频）。
 
