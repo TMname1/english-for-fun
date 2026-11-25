@@ -85,7 +85,8 @@ export async function prepareRun(
   const isVideo = VIDEO_EXT.test(mediaPath);
 
   const runId = createRunId();
-  const outDir = resolve(opts.outDir ?? resolve(config.defaultOutRoot, runId));
+  // 用 `||` 而不是 `??`：state/dev 入口传空串时要回落到默认目录，否则 resolve("") 会写到 cwd
+  const outDir = resolve(opts.outDir || resolve(config.defaultOutRoot, runId));
   await mkdir(outDir, { recursive: true });
 
   const meta: ForgeMeta = {

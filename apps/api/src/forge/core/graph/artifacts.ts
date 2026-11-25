@@ -45,8 +45,16 @@ export class ForgeArtifacts implements ForgeArtifactSource {
   /** 校验媒体 + 写 meta.json + 规整 clips（clips 规整结果回写 state，供 transcribe 用） */
   async prepare(state: ForgeStateType): Promise<ForgeStateUpdate> {
     const { mediaPath, title, type } = state.params;
-    if (!mediaPath) throw new Error("[forge] 缺少媒体文件路径（FORGE_MEDIA_PATH）");
-    if (!title) throw new Error("[forge] 缺少课程包标题（FORGE_TITLE）");
+    // 入口的 ForgeParams 已把这两项设为必填；走到这里说明是绕过类型直接 invoke 图
+    // （Studio / 脚本 / 单测），或从旧 checkpoint 还原出残缺 state。
+    if (!mediaPath) {
+      throw new Error(
+        "[forge] 缺少媒体文件路径（FORGE_MEDIA_PATH）：直接调图时须由入口传 params.mediaPath（绝对路径）",
+      );
+    }
+    if (!title) {
+      throw new Error("[forge] 缺少课程包标题（FORGE_TITLE）：直接调图时须由入口传 params.title");
+    }
 
     const { outDir, clips } = await prepareRun({
       mediaPath,
@@ -67,9 +75,17 @@ export class ForgeArtifacts implements ForgeArtifactSource {
 
   /** 转码 → ASR → 预处理 → 写 transcript.json / transcript.raw.json / clips.json */
   async transcribe(state: ForgeStateType): Promise<ForgeStateUpdate> {
+    // 入口处已由 ForgeParams 强制必填；这里兜底「state 是从 checkpoint 还原来的残缺值」
+    const mediaPath = state.params.mediaPath;
+    if (!mediaPath) {
+      throw new Error(
+        "[forge] state 里缺少 mediaPath，transcribe 无法开始（prepare 未执行或入口未传参）",
+      );
+    }
+
     const { transcript } = await transcribeRun({
       outDir: state.outDir,
-      mediaPath: state.params.mediaPath!,
+      mediaPath,
       clips: state.params.clips,
       language: state.params.language,
       onStage: this.emitStage,

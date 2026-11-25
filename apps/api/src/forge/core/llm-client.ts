@@ -8,9 +8,14 @@
  *   4. `maxRetries: 0`：重试与降级都由本文件控制，避免 SDK 与降级链双重放大；
  *   5. 降级成功后缓存档位（进程内），后续句子直达，不必每句先失败一次。
  */
+import { basename } from "node:path";
+import type { CallbackHandler } from "@langfuse/langchain";
+
+import { BaseLanguageModel } from "@langchain/core/language_models/base";
 import { ChatOpenAI } from "@langchain/openai";
 
 import { config } from "./config";
+import { insideGraphInvoke, isFallbackTracingDisabled, newHandler } from "./tracing";
 
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
@@ -61,6 +66,84 @@ export function buildModelKwargs(input: {
   return kwargs;
 }
 
+/**
+ * legacy（命令式）编排的追踪兜底。
+ *
+ * legacy 路径没有 `graph.invoke` 这个根，callbacks 无从经 AsyncLocalStorage 继承，
+ * 只能在模型构造器上挂。**图内必须返回空数组** —— 否则同一句 LLM 调用会被 run.ts
+ * 的图根 handler 与这里的 handler 各报一次（CallbackManager.addHandler 不去重）。
+ *
+ * 判断用 `insideGraphInvoke()` 而不是 `config.orchestrator`：图因 checkpoint 不可用而
+ * 降级 legacy 时，orchestrator 仍是 graph，但实际跑的是 legacy，那种情况必须挂。
+ * Studio 入口同理（根 handler 挂在 invoke config 上，不走上面的计数，见 studio-trace.ts），
+ * 由 `isFallbackTracingDisabled()` 一次性关掉。
+ */
+let legacyHandlerReady = false;
+let legacyHandler: CallbackHandler | null = null;
+
+function legacyCallbacks(): CallbackHandler[] {
+  if (insideGraphInvoke() || isFallbackTracingDisabled()) return [];
+  if (!legacyHandlerReady) {
+    legacyHandlerReady = true;
+    const outDir = process.env.FORGE_OUT_DIR;
+    legacyHandler = newHandler({
+      // pipeline-runner 会把产物目录放进 FORGE_OUT_DIR，用它当会话 id 把一轮任务串起来
+      sessionId: outDir ? basename(outDir) : undefined,
+      tags: ["forge:legacy"],
+    });
+  }
+  return legacyHandler ? [legacyHandler] : [];
+}
+
+/**
+ * 字符估算 token 数（与 LangChain 自己的兜底口径一致：约 4 字符 = 1 token）。
+ *
+ * 为什么需要它：见 `disableTiktokenDownload`。
+ */
+export function estimateNumTokens(content: unknown): number {
+  const text =
+    typeof content === "string"
+      ? content
+      : Array.isArray(content)
+        ? content
+            .map((part) =>
+              typeof part === "string" ? part : (part as { text?: string })?.text ?? "",
+            )
+            .join("")
+        : "";
+  return Math.ceil(text.length / 4);
+}
+
+/**
+ * 断掉 LangChain 的 **tiktoken 在线下载**（进程级，幂等）。
+ *
+ * 坑（2026-11 实测，排查 dev:serve 卡死的真凶）：
+ *   `@langchain/openai` 的流式 `_generate`（chat_models/completions.js，`if (params.stream)` 分支）
+ *   在流读完之后**无条件**调 `_getEstimatedTokenCountFromPrompt` → `getNumTokensFromMessages`
+ *   → `getNumTokens` → `@langchain/core` 的 `encodingForModel`，而后者是
+ *   `fetch("https://tiktoken.pages.dev/js/<encoding>.json")` —— **每次调用都要从 CDN 下词表**。
+ *   该域名在国内/受限网络下不可达：请求要重试到超时（`AsyncCaller` 6 次退避，实测 2~3 分钟），
+ *   而且 `getEncoding` 的进程内 cache 在**失败时会被 delete**，于是下一次调用再重付一遍。
+ *
+ *   结果：一次 `.invoke()` = 真实生成（几秒） + 词表下载超时（几分钟）。25 句 / 并发 10 → 十几分钟，
+ *   前端一直停在"ASR 转写中…"，看起来就是卡死。`dev:langsmith`（Studio）进程常驻、缓存命中后不再下载，
+ *   而 `dev:serve` 每个任务都是全新子进程（冷缓存），所以只有它必现。
+ *
+ * 这个估算值只写进 `llmOutput.estimatedTokenUsage`（追踪/usage 展示），不影响流水线任何结果，
+ * 因此把 `getNumTokens` 覆盖成字符估算：不联网、零耗时、语义等价于 LangChain 自己的降级分支。
+ *
+ * 注意必须打在**原型**上：`withStructuredOutput` 会用 `withConfig()` 把模型包成 RunnableBinding，
+ * 真正执行 `_generate` 的实例不一定是 buildModel 返回的那一个（实例级覆盖实测无效）。
+ * 本模块只被 forge 使用（pipeline-runner 子进程 / CLI），进程内没有别的 LangChain 用途。
+ */
+let tiktokenDisabled = false;
+
+export function disableTiktokenDownload(): void {
+  if (tiktokenDisabled) return;
+  tiktokenDisabled = true;
+  BaseLanguageModel.prototype.getNumTokens = async (content: unknown) => estimateNumTokens(content);
+}
+
 /** 构造 ChatOpenAI：始终流式（同重构前的 stream:true），超时 20 分钟，不自动重试 */
 export function buildModel(
   model: string = config.llmModel,
@@ -72,7 +155,9 @@ export function buildModel(
       reasoningEffort: config.llmReasoningEffort,
       enableThinking: config.llmEnableThinking,
     });
-  return new ChatOpenAI({
+  const callbacks = legacyCallbacks();
+  disableTiktokenDownload();
+  const chat = new ChatOpenAI({
     model,
     apiKey: config.llmApiKey || "ollama",
     temperature: 0.1,
@@ -82,7 +167,9 @@ export function buildModel(
     maxRetries: 0,
     configuration: { baseURL: config.llmBaseUrl },
     modelKwargs,
+    ...(callbacks.length > 0 ? { callbacks } : {}),
   });
+  return chat;
 }
 
 /** 从可能带 markdown 围栏/杂文本的模型输出里提取第一个完整 JSON 对象 */

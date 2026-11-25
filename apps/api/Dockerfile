@@ -3,7 +3,7 @@
 # 部署说明见根目录 README.backend.md
 
 ########## builder：在 Linux 环境安装依赖并编译 ##########
-FROM node:20-bookworm-slim AS builder
+FROM node:22-bookworm-slim AS builder
 ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
     CYPRESS_INSTALL_BINARY=0 \
     SKIP_INSTALL_SIMPLE_GIT_HOOKS=1
@@ -47,7 +47,7 @@ RUN pnpm deploy --filter=api --prod /prod/api \
  && test -f /prod/api/node_modules/@langchain/openai/package.json
 
 ########## runtime：只带运行所需产物 ##########
-FROM node:20-bookworm-slim
+FROM node:22-bookworm-slim
 ENV NODE_ENV=prod PORT=3001
 WORKDIR /app
 COPY --from=builder --chown=node:node /prod/api ./

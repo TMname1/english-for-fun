@@ -36,6 +36,18 @@ async function flush() {
   for (let i = 0; i < 20; i++) await Promise.resolve();
 }
 
+/**
+ * 取第 n 次 spawn 的入参，并按 transcribe 阶段收窄（本文件只覆盖 transcribe 链路）。
+ * ForgeRunnerParams 是按阶段的可辨识联合，直接读 `.clips` / `.mediaPath` 会报「属性不存在」。
+ */
+function spawnParams(n = 0) {
+  const params = mockSpawn.mock.calls[n][0];
+  if (params.phase !== "transcribe") {
+    throw new Error(`期望 transcribe 阶段入参，实际为 ${params.phase}`);
+  }
+  return params;
+}
+
 const baseDto = { title: "测试课程", type: "dialogue" as const };
 
 describe("ForgeService（视频切片两段式启动 + 对象存储）", () => {
@@ -126,8 +138,8 @@ describe("ForgeService（视频切片两段式启动 + 对象存储）", () => {
       join("/tmp/forge-output", "a", "source.mp4"),
     );
     expect(mockSpawn).toHaveBeenCalledTimes(1);
-    expect(mockSpawn.mock.calls[0][0].clips).toBeUndefined();
-    expect(mockSpawn.mock.calls[0][0].mediaPath).toBe(join("/tmp/forge-output", "a", "source.mp4"));
+    expect(spawnParams().clips).toBeUndefined();
+    expect(spawnParams().mediaPath).toBe(join("/tmp/forge-output", "a", "source.mp4"));
   });
 
   it("拉取视频失败 → 任务 failed，不启动子进程", async () => {
@@ -151,7 +163,7 @@ describe("ForgeService（视频切片两段式启动 + 对象存储）", () => {
     await flush();
 
     expect(store.get(jobId)!.status).toBe("running");
-    expect(mockSpawn.mock.calls[0][0].clips).toEqual(clips);
+    expect(spawnParams().clips).toEqual(clips);
 
     const view = await service.getJob(jobId);
     expect(view.clips).toEqual(clips);
@@ -163,7 +175,7 @@ describe("ForgeService（视频切片两段式启动 + 对象存储）", () => {
     const { jobId } = await service.createJob(fileOf("a.mp4"), { ...baseDto, defer: true });
     service.startTranscription(jobId, {});
     await flush();
-    expect(mockSpawn.mock.calls[0][0].clips).toBeUndefined();
+    expect(spawnParams().clips).toBeUndefined();
   });
 
   it("非法 clips 返回 400：空数组 / 过短 / 超过 5 分钟 / 乱序重叠", async () => {

@@ -39,6 +39,7 @@ import type { ClipRange } from "./types";
 import { config } from "./config";
 import { forgeStructureInteractive, forgeStructureResolve, forgeTranscribe } from "./forge";
 import { runForgeGraph } from "./graph/run";
+import { flushTracing } from "./tracing";
 
 // 【已停用 · 转录校对】以下导入仅供 structure（人工编辑续跑）分支使用，该分支现已注释保留。
 // 恢复"转录→校对→结构化"两段式时一并放开（见 main() 内说明）。
@@ -78,16 +79,35 @@ function readClips(): ClipRange[] | undefined {
   return parsed;
 }
 
-interface PhaseInput {
-  phase: "transcribe" | "structure" | "structure-resolve";
-  outDir: string;
-  type: "dialogue" | "music";
-  mediaPath?: string;
-  title?: string;
-  description?: string;
-  language: string;
-  clips?: ClipRange[];
-}
+/**
+ * 各阶段的入参。用可辨识联合表达「谁必填什么」：
+ * - transcribe 必须给 mediaPath / title（缺了 prepare 必然失败，见 graph/state.ts 的 ForgeParams）；
+ * - structure / structure-resolve 的 state 由 outDir 里的产物与 checkpoint 还原，不再要求媒体。
+ *
+ * 刻意写成扁平对象而不是 `Common & {...}` 交叉类型：交叉类型上的判别属性收窄不可靠，
+ * 会让 `input.mediaPath` 在后面仍被判为「属性不存在」。
+ */
+type PhaseInput =
+  | {
+      phase: "transcribe";
+      outDir: string;
+      type: "dialogue" | "music";
+      /** 源媒体绝对路径（FORGE_MEDIA_PATH，必填） */
+      mediaPath: string;
+      /** 课程包标题（FORGE_TITLE，必填） */
+      title: string;
+      description?: string;
+      language: string;
+      clips?: ClipRange[];
+    }
+  | {
+      phase: "structure" | "structure-resolve";
+      outDir: string;
+      /** 续跑阶段不写 meta.json，type 仅作占位 */
+      type: "dialogue" | "music";
+      description?: string;
+      language: string;
+    };
 
 /** 从环境变量汇总一次运行的入参（legacy 与 graph 两套编排共用） */
 function readPhaseInput(): PhaseInput {
@@ -95,27 +115,29 @@ function readPhaseInput(): PhaseInput {
   const phase =
     phaseRaw === "structure" || phaseRaw === "structure-resolve" ? phaseRaw : "transcribe";
   const outDir = requireEnv("FORGE_OUT_DIR");
+  const description = process.env.FORGE_DESC?.trim() || undefined;
+  const language = process.env.FORGE_LANGUAGE?.trim() || "en";
 
-  // 只有 transcribe 阶段需要 type（写进 meta.json）；resolve 阶段保持宽容，与重构前一致
-  let type: "dialogue" | "music" = "dialogue";
   if (phase === "transcribe") {
+    // 只有 transcribe 阶段需要 type（写进 meta.json）
     const raw = requireEnv("FORGE_TYPE");
     if (raw !== "dialogue" && raw !== "music") {
       throw new Error(`FORGE_TYPE 必须是 dialogue 或 music，收到 ${raw}`);
     }
-    type = raw;
+    return {
+      phase,
+      outDir,
+      type: raw,
+      mediaPath: requireEnv("FORGE_MEDIA_PATH"),
+      title: requireEnv("FORGE_TITLE"),
+      description,
+      language,
+      clips: readClips(),
+    };
   }
 
-  return {
-    phase,
-    outDir,
-    type,
-    mediaPath: phase === "transcribe" ? requireEnv("FORGE_MEDIA_PATH") : undefined,
-    title: phase === "transcribe" ? requireEnv("FORGE_TITLE") : undefined,
-    description: process.env.FORGE_DESC?.trim() || undefined,
-    language: process.env.FORGE_LANGUAGE?.trim() || "en",
-    clips: phase === "transcribe" ? readClips() : undefined,
-  };
+  // resolve 阶段保持宽容，与重构前一致
+  return { phase, outDir, type: "dialogue", description, language };
 }
 
 /** 历史实现：命令式阶段函数串联（保留为一行回滚路径） */
@@ -156,9 +178,19 @@ async function runLegacyPhase(input: PhaseInput): Promise<void> {
   //   });
   //   emit(result.needsFix ? { event: "needs_fix", outDir: input.outDir } : { event: "done", outDir: input.outDir });
   // } else {
+  if (input.phase !== "transcribe") {
+    // 只剩 structure（已停用）：以前会带着 undefined 的 mediaPath 掉进转写里报错，现在直接说清楚。
+    // 用 `!== "transcribe"` 而不是 `=== "structure"` 是因为联合成员的 phase 是字面量联合，
+    // 否定式收窄才能把 transcribe 这一支单独留下（`=== "structure"` 只会收窄属性、不剔除成员）。
+    throw new Error(
+      "[forge] FORGE_PHASE=structure 已停用（转录校对两段式已下线）：请改用 transcribe 或 structure-resolve",
+    );
+  }
+
+  // 走到这里只剩 transcribe：mediaPath / title 由 PhaseInput 联合类型强制必填
   const finalDir = await forgeTranscribe({
-    mediaPath: input.mediaPath!,
-    title: input.title!,
+    mediaPath: input.mediaPath,
+    title: input.title,
     type: input.type,
     description: input.description,
     language: input.language,
@@ -188,20 +220,24 @@ async function runGraphPhase(input: PhaseInput): Promise<void> {
     return runLegacyPhase(input);
   }
 
+  const jobId = basename(input.outDir);
+  // fresh 与续跑的参数形状不同（见 GraphRunInput）：transcribe 必须给全，resolve 只给定位信息
   const outcome = await runForgeGraph(
-    {
-      phase: input.phase,
-      jobId: basename(input.outDir),
-      outDir: input.outDir,
-      params: {
-        mediaPath: input.mediaPath,
-        title: input.title,
-        description: input.description,
-        type: input.type,
-        language: input.language,
-        clips: input.clips,
-      },
-    },
+    input.phase === "transcribe"
+      ? {
+          phase: "transcribe",
+          jobId,
+          outDir: input.outDir,
+          params: {
+            mediaPath: input.mediaPath,
+            title: input.title,
+            description: input.description,
+            type: input.type,
+            language: input.language,
+            clips: input.clips,
+          },
+        }
+      : { phase: "structure-resolve", jobId, outDir: input.outDir },
     (stage: ForgeStage) => emit({ event: "stage", stage }),
   );
 
@@ -224,9 +260,13 @@ async function main(): Promise<void> {
     } else {
       await runLegacyPhase(input);
     }
+    // Langfuse 的 span 是后台批量上报的，process.exit() 前必须把队列刷干净，
+    // 否则最后一批（通常是 finalize 和收尾的 LLM 调用）会直接丢失。
+    await flushTracing();
     process.exit(0);
   } catch (error) {
     emit({ event: "error", message: error instanceof Error ? error.message : String(error) });
+    await flushTracing();
     process.exit(1);
   }
 }

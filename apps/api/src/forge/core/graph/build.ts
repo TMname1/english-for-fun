@@ -21,9 +21,9 @@ import type { ForgeArtifactSource } from "./artifacts";
 import type { StageEmitter } from "./events";
 import { ForgeArtifacts } from "./artifacts";
 import { createNodes } from "./nodes";
-import { ForgeState } from "./state";
+import { ForgeInputSchema, ForgeState } from "./state";
 
-/** 拓扑版本：节点/边有结构变化时 +1，旧 checkpoint 会被判为不可用并降级 legacy */
+/** 拓扑版本：节点/边/state 定义有结构变化时 +1，旧 checkpoint 会被判为不可用并降级 legacy */
 export const GRAPH_VERSION = 1;
 
 export interface ForgeGraphDeps {
@@ -63,7 +63,17 @@ export function buildForgeGraph(deps: ForgeGraphDeps): ForgeGraphBuilder {
   const artifacts = deps.artifacts ?? new ForgeArtifacts(deps.emitStage);
   const nodes = createNodes(artifacts);
 
-  return new StateGraph(ForgeState)
+  // state 用 Annotation（要 default / 覆盖语义），另外挂一份 zod 的 `input`：
+  // Studio 的 Input 面板与 invoke 入参校验都以它为准，这样 `params.mediaPath` / `title`
+  // 才会显示成必填（Annotation 静态解析出来的 schema 里 required 恒为空，见 state.ts 顶部说明）。
+  // 运行时是官方支持的 `{ state, input }` 形式，只是这版类型把 `_inputDefinition` 钉成
+  // `AnnotationRoot`，所以这里显式转一次 —— 状态/更新的类型仍由 ForgeGraphBuilder 保证。
+  const builder = new StateGraph({
+    state: ForgeState,
+    input: ForgeInputSchema,
+  }) as unknown as ForgeGraphBuilder;
+
+  return builder
     .addNode("prepare", nodes.prepare)
     .addNode("transcribe", nodes.transcribe)
     .addNode("structureBatch", nodes.structureBatch)

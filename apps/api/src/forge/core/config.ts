@@ -110,6 +110,18 @@ export const config = {
     | "legacy",
   /** 文件 checkpointer 每个线程保留的 checkpoint 份数（含最近的中断态，必须 >= 2） */
   checkpointKeep: envInt("FORGE_GRAPH_CHECKPOINT_KEEP", 8),
+
+  /**
+   * Langfuse 追踪：本地自托管（http://localhost:3002）或 Langfuse Cloud。
+   * PUBLIC/SECRET 任一为空则整条追踪链路自动禁用（fail-open，不影响流水线）。
+   * LANGFUSE_TRACING=0 可强制关闭，用于排障时排除追踪干扰。
+   */
+  langfuseEnabled: env("LANGFUSE_TRACING", "1") !== "0",
+  langfusePublicKey: env("LANGFUSE_PUBLIC_KEY", ""),
+  langfuseSecretKey: env("LANGFUSE_SECRET_KEY", ""),
+  langfuseBaseUrl: env("LANGFUSE_BASE_URL", "https://cloud.langfuse.com"),
+  /** 环境标识（Langfuse 里按 environment 过滤） */
+  langfuseEnvironment: env("LANGFUSE_TRACING_ENVIRONMENT", "development"),
 } as const;
 
 export function createRunId(date = new Date()): string {

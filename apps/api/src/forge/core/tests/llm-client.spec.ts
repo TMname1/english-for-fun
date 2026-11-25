@@ -2,9 +2,15 @@
  * 降级链单测：mock 掉 @langchain/openai，驱动 jsonSchema → jsonObject → text 三档。
  * 这里只验证「按什么顺序试、什么时候放弃、能力缓存是否生效」，真实请求行为不覆盖。
  */
+import { BaseLanguageModel } from "@langchain/core/language_models/base";
 import { ChatOpenAI } from "@langchain/openai";
 
-import { callLlmJson, resetRungCache } from "../llm-client";
+import {
+  callLlmJson,
+  disableTiktokenDownload,
+  estimateNumTokens,
+  resetRungCache,
+} from "../llm-client";
 
 jest.mock("@langchain/openai", () => ({
   ChatOpenAI: jest.fn(),
@@ -134,3 +140,22 @@ function mockTextOnly() {
     invoke: async () => ({ content: '{"a":3}' }),
   }));
 }
+
+describe("token 估算（不依赖 tiktoken 在线词表）", () => {
+  // 回归：@langchain/openai 的流式 _generate 收尾会调 getNumTokens 估 token，
+  // 原生实现要从 tiktoken.pages.dev 下词表，受限网络下每次调用要等 2~3 分钟才降级。
+  it("estimateNumTokens 按 4 字符≈1 token 估算，content 数组拼正文", () => {
+    expect(estimateNumTokens("abcdefgh")).toBe(2);
+    expect(estimateNumTokens([{ type: "text", text: "abcd" }, "efgh"])).toBe(2);
+    expect(estimateNumTokens(undefined)).toBe(0);
+  });
+
+  it("disableTiktokenDownload 幂等，且覆盖后的 getNumTokens 立即返回、不联网", async () => {
+    disableTiktokenDownload();
+    disableTiktokenDownload();
+    const proto = BaseLanguageModel.prototype as unknown as {
+      getNumTokens: (content: unknown) => Promise<number>;
+    };
+    await expect(proto.getNumTokens("abcdefghijkl")).resolves.toBe(3);
+  });
+});

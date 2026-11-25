@@ -13,19 +13,32 @@ const RUNNER_ENTRY = join(__dirname, "core", "pipeline-runner.js");
 /** 流水线本地临时工作区（ffmpeg/ASR 必须操作本地文件）；持久产物在对象存储 forge/<jobId>/ */
 export const FORGE_OUTPUT_ROOT = join(tmpdir(), "earthworm-forge");
 
-export interface ForgeRunnerParams {
-  /** transcribe：跑「提取音轨 + ASR 转写」后暂停；structure：读 outDir 下编辑过的 transcript 续跑；structure-resolve：按人工决策重试/删除失败句后续跑 */
-  phase: "transcribe" | "structure" | "structure-resolve";
-  /** transcribe 阶段必填；structure 阶段不需要 */
-  mediaPath?: string;
-  title?: string;
-  type?: "dialogue" | "music";
-  description?: string;
-  language?: string;
-  outDir: string;
-  /** 选中的时间区间（秒）；缺省转写整段 */
-  clips?: { start: number; end: number }[];
-}
+/**
+ * 子进程入参。按阶段做可辨识联合，把真正必填的字段钉在类型上：
+ * - transcribe：mediaPath / title / type / outDir 必填（缺任一项子进程启动即失败）；
+ * - structure / structure-resolve：只读 outDir 下的产物与 checkpoint，媒体信息不需要。
+ */
+export type ForgeRunnerParams =
+  | {
+      phase: "transcribe";
+      /** 源媒体绝对路径（ffmpeg / ASR 读本地文件） */
+      mediaPath: string;
+      /** 课程包标题，写进 meta.json */
+      title: string;
+      type: "dialogue" | "music";
+      outDir: string;
+      language?: string;
+      description?: string;
+      /** 选中的时间区间（秒）；缺省转写整段 */
+      clips?: { start: number; end: number }[];
+    }
+  | {
+      phase: "structure" | "structure-resolve";
+      outDir: string;
+      language?: string;
+      description?: string;
+      type?: "dialogue" | "music";
+    };
 
 export interface ForgeRunnerEvents {
   onStage: (stage: ForgeJobStage) => void;
@@ -91,6 +104,12 @@ export function spawnForgeRunner(
   let stderrLength = 0;
   child.stderr.setEncoding("utf8");
   child.stderr.on("data", (chunk: string) => {
+    // 实时透传：子进程把 console 劫持到了 stderr，这里不转发的话，任务"卡住"时父进程
+    // 完全看不到它在干什么（旧实现只留最后 600 字，且只在退出时才用）。多行 chunk 按行拆。
+    for (const line of chunk.split(/\r?\n/)) {
+      const text = line.trim();
+      if (text) console.log(`[forge:${params.phase}] ${text}`);
+    }
     stderrChunks.push(chunk);
     stderrLength += chunk.length;
     while (stderrLength > STDERR_BUFFER_MAX && stderrChunks.length > 1) {

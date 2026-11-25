@@ -39,7 +39,17 @@ function fakeArtifacts(overrides: Partial<ForgeArtifactSource> = {}) {
   return { artifacts: { ...base, ...overrides } as ForgeArtifactSource, calls };
 }
 
-const initialState = { jobId: "job-1", outDir: "/tmp/forge-job-1" };
+// 图的 input 由 ForgeInputSchema 校验，params.mediaPath / title 必填（见 state.ts）
+const initialState = {
+  jobId: "job-1",
+  outDir: "/tmp/forge-job-1",
+  params: {
+    mediaPath: "/tmp/demo.mp4",
+    title: "测试课程",
+    type: "dialogue" as const,
+    language: "en",
+  },
+};
 
 describe("Forge 图拓扑（fresh 路径）", () => {
   it("无失败句时 prepare → transcribe → structureBatch → finalize，且不进入 reviewGate", async () => {
