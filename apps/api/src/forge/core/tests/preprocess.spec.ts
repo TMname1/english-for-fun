@@ -1,7 +1,12 @@
 import type { QwenAsrWord } from "../asr";
 import { asrSegmentParts, buildTranscriptFromSentences } from "../asr";
 import { callLlmJson } from "../llm";
-import { mergeWordGroup, preprocessTranscript, validatePartition } from "../preprocess";
+import {
+  buildPreprocessMessages,
+  mergeWordGroup,
+  preprocessTranscript,
+  validatePartition,
+} from "../preprocess";
 
 jest.mock("../llm", () => ({
   ...jest.requireActual("../llm"),
@@ -100,6 +105,73 @@ describe("mergeWordGroup", () => {
       { word: "a", start: 0.11, end: 0.2 },
       { word: "goaded", start: 0.2, end: 0.4 },
     ]);
+  });
+});
+
+describe("buildPreprocessMessages", () => {
+  it("词表只发编号与词文本，不发 start/end 时间戳", () => {
+    const { raw } = fragmentFixture();
+    const parts = asrSegmentParts(raw[0])!;
+    const [system, user] = buildPreprocessMessages(parts.text, parts.words);
+
+    // 提示词与本机实际发送的词表必须一致：都不提时间戳
+    expect(system.content).not.toMatch(/start\/end/);
+    expect(system.content).not.toContain("可参考停顿");
+    expect(user.content).not.toContain('"start"');
+    expect(user.content).not.toContain('"end"');
+
+    const lastLine = user.content.split("\n").pop() as string;
+    const list = JSON.parse(lastLine) as Array<{ i: number; word: string }>;
+    // 编号与过滤后的 ASR 词 1:1，碎片词各自可见（i 0/1/2 = I / ' / ve）
+    expect(list).toHaveLength(parts.words.length);
+    expect(list.map((x) => x.i)).toEqual(parts.words.map((_, i) => i));
+    expect(list.map((x) => x.word)).toEqual(parts.words.map((w) => w.word.word));
+    expect(Object.keys(list[0])).toEqual(["i", "word"]);
+    // 新契约：user 消息要求同时给句级中文，system 说明里也提到中文翻译
+    expect(user.content).toContain("chinese");
+    expect(system.content).toContain("中文");
+  });
+});
+
+describe("句级中文", () => {
+  it("新契约：每句中文落到 segment.chinese", async () => {
+    const { raw, transcript } = fragmentFixture();
+    jest.mocked(callLlmJson).mockResolvedValue({
+      sentences: [
+        { words: [0, 1, 2, 3, 4], chinese: "我玩过塞尔达。" },
+        { words: [5, 6, 7], chinese: "真的很好玩。" },
+      ],
+    });
+
+    const out = await preprocessTranscript(transcript, raw);
+    expect(out.segments.map((s) => s.text)).toEqual(["I've played Zelda.", "Genuinely fun."]);
+    expect(out.segments.map((s) => s.chinese)).toEqual(["我玩过塞尔达。", "真的很好玩。"]);
+  });
+
+  it("旧契约 number[][]：仍可用，只是没有 chinese", async () => {
+    const { raw, transcript } = fragmentFixture();
+    jest.mocked(callLlmJson).mockResolvedValue({
+      sentences: [
+        [0, 1, 2, 3, 4],
+        [5, 6, 7],
+      ],
+    });
+
+    const out = await preprocessTranscript(transcript, raw);
+    expect(out.segments).toHaveLength(2);
+    expect(out.segments.every((s) => s.chinese === undefined)).toBe(true);
+  });
+
+  it("chinese 缺失或空白：告警降级，不抛错", async () => {
+    const { raw, transcript } = fragmentFixture();
+    jest.mocked(callLlmJson).mockResolvedValue({
+      sentences: [{ words: [0, 1, 2, 3, 4, 5, 6, 7], chinese: "   " }],
+    });
+
+    const out = await preprocessTranscript(transcript, raw);
+    expect(out.segments).toHaveLength(1);
+    expect(out.segments[0].chinese).toBeUndefined();
+    expect(out.segments[0].text).toBe("I've played Zelda. Genuinely fun.");
   });
 });
 

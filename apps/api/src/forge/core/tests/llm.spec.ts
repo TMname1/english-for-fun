@@ -9,10 +9,12 @@ import {
   extractJsonObject,
   mapWithConcurrency,
   messagesWithJsonKeyword,
+  overrideFullRowChinese,
   rowsToStatements,
   stripSingleWordRows,
   validateRowIndexes,
 } from "../llm";
+import { buildMessages } from "../prompt";
 
 describe("extractJsonObject", () => {
   it("parses plain json", () => {
@@ -472,5 +474,81 @@ describe("messagesWithJsonKeyword", () => {
   it("json_schema 与纯文本分支原样返回", () => {
     expect(messagesWithJsonKeyword(msgs, { type: "json_schema", json_schema: {} })).toBe(msgs);
     expect(messagesWithJsonKeyword(msgs, undefined)).toBe(msgs);
+  });
+});
+
+describe("overrideFullRowChinese", () => {
+  const rows = (): { indexes: number[]; chinese: string }[] => [
+    { indexes: [0, 1], chinese: "我喜欢" },
+    { indexes: [2, 3], chinese: "这个食物" },
+    { indexes: [0, 1, 2, 3], chinese: "模型自己译的整句" },
+  ];
+
+  it("整句行被权威中文覆盖，碎片行不动", () => {
+    const out = overrideFullRowChinese(rows(), 4, "我喜欢这个食物。");
+    expect(out.map((r) => r.chinese)).toEqual(["我喜欢", "这个食物", "我喜欢这个食物。"]);
+  });
+
+  it("重复的整句行全部覆盖（校验不禁止重复）", () => {
+    const out = overrideFullRowChinese(
+      [
+        { indexes: [0, 1, 2, 3], chinese: "a" },
+        { indexes: [0, 1, 2, 3], chinese: "b" },
+      ],
+      4,
+      "权威译文",
+    );
+    expect(out.map((r) => r.chinese)).toEqual(["权威译文", "权威译文"]);
+  });
+
+  it("无整句行 / 无参 / 空白串：原样返回", () => {
+    expect(overrideFullRowChinese([{ indexes: [0, 1], chinese: "我喜欢" }], 4, "整句")).toEqual([
+      { indexes: [0, 1], chinese: "我喜欢" },
+    ]);
+    expect(overrideFullRowChinese(rows(), 4, undefined)[2].chinese).toBe("模型自己译的整句");
+    expect(overrideFullRowChinese(rows(), 4, "   ")[2].chinese).toBe("模型自己译的整句");
+  });
+
+  it("stripSingleWordRows 带句级中文：删单词行后整句行仍是权威中文", () => {
+    const raw = JSON.stringify({
+      statements: [
+        { indexes: [0], chinese: "我" },
+        { indexes: [0, 1, 2, 3], chinese: "模型译的整句" },
+      ],
+    });
+    const result = stripSingleWordRows(raw, 0, ["I", "like", "the", "food"], "我喜欢这个食物。");
+    expect(result.chain).not.toBeNull();
+    const last = result.chain!.statements[result.chain!.statements.length - 1];
+    expect(last.chinese).toBe("我喜欢这个食物。");
+  });
+
+  it("autoStripSingleWordRows 带句级中文：自动补救后的整句行同样是权威中文", () => {
+    const raw = JSON.stringify({
+      statements: [
+        { indexes: [0], chinese: "我" },
+        { indexes: [1], chinese: "喜欢" },
+        { indexes: [0, 1, 2, 3], chinese: "模型译的整句" },
+      ],
+    });
+    const out = autoStripSingleWordRows(raw, 0, ["I", "like", "the", "food"], "我喜欢这个食物。");
+    const statements = out!.chain!.statements;
+    expect(statements[statements.length - 1].chinese).toBe("我喜欢这个食物。");
+  });
+});
+
+describe("buildMessages 权威中文", () => {
+  const words = ["I", "like", "the", "food."];
+
+  it("给了句级中文：user 消息带上【本句权威中文】与使用规则", () => {
+    const [, user] = buildMessages(words, undefined, "我喜欢这个食物。");
+    expect(user.content).toContain("【本句权威中文】我喜欢这个食物。");
+    expect(user.content).toContain("原样");
+    // 词表仍是「编号 词」逐行，不受影响
+    expect(user.content).toContain("3 food.");
+  });
+
+  it("没给句级中文：不含该段（旧行为不变）", () => {
+    const [, user] = buildMessages(words);
+    expect(user.content).not.toContain("本句权威中文");
   });
 });

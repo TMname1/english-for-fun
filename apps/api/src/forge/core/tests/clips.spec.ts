@@ -1,4 +1,4 @@
-import type { Transcript } from "../types";
+import type { Transcript, TranscriptSegment } from "../types";
 import {
   mergeClipTranscripts,
   normalizeClips,
@@ -123,5 +123,34 @@ describe("tagClipBoundaries", () => {
   it("falls back to nearest preceding clip for out-of-range starts", () => {
     const tagged = tagClipBoundaries([{ id: 0, start: 12, end: 13, text: "gap" }], clips);
     expect(tagged[0].clipIndex).toBe(0);
+  });
+});
+
+describe("句级中文随 clip 处理保留", () => {
+  const seg = (text: string, chinese: string): TranscriptSegment => ({
+    id: 0,
+    start: 0,
+    end: 1,
+    text,
+    chinese,
+    words: [{ word: text, start: 0, end: 1 }],
+  });
+
+  it("offsetTranscript / tagClipBoundaries / mergeClipTranscripts 都不丢 chinese", () => {
+    const t: Transcript = { wordLevel: true, language: "en", segments: [seg("Hi.", "你好。")] };
+
+    const shifted = offsetTranscript(t, 10);
+    expect(shifted.segments[0].chinese).toBe("你好。");
+    expect(t.segments[0].chinese).toBe("你好。");
+
+    const tagged = tagClipBoundaries(shifted.segments, [{ start: 10, end: 11 }]);
+    expect(tagged[0].chinese).toBe("你好。");
+
+    const merged = mergeClipTranscripts([
+      { wordLevel: true, language: "en", segments: [seg("Hi.", "你好。")] },
+      { wordLevel: true, language: "en", segments: [seg("Yo.", "哟。")] },
+    ]);
+    expect(merged.segments.map((s) => s.chinese)).toEqual(["你好。", "哟。"]);
+    expect(merged.segments.map((s) => s.id)).toEqual([0, 1]);
   });
 });

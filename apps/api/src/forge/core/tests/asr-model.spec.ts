@@ -1,6 +1,6 @@
 /**
  * ASR ChatModel 单测：只验证「怎么发请求、怎么把原生响应搬回 LangChain 消息」，
- * 不覆盖真实 DashScope 行为（真实探测见 scripts/probe-asr.ts）。
+ * 不覆盖真实 DashScope 行为（端到端链路走 transcribe 子图，见 graph/transcribe-*.ts）。
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { LLMResult } from "@langchain/core/outputs";
