@@ -1,4 +1,5 @@
 import {
+  asrInputSummary,
   asrSegmentParts,
   buildTranscriptFromSentences,
   parseSyncSentence,
@@ -172,5 +173,33 @@ describe("transcodeToWav", () => {
       "pcm_s16le",
       "out.wav",
     ]);
+  });
+
+  it("ffmpeg 失败时给出可照做的原因清单（而不是裸 stderr）", async () => {
+    const { runFfmpeg } = await import("../util");
+    jest
+      .mocked(runFfmpeg)
+      .mockRejectedValueOnce(new Error("ffmpeg 执行失败: Error opening input: Invalid data"));
+
+    await expect(transcodeToWav("broken.mp4", "out.wav")).rejects.toThrow(
+      /无法从这个文件提取音频：broken\.mp4[\s\S]*文件损坏[\s\S]*Invalid data/,
+    );
+  });
+});
+
+describe("asrInputSummary", () => {
+  it("给出格式/采样率/时长/体积/语言，但不含 base64 载荷", () => {
+    const text = asrInputSummary({
+      wavName: "audio-16k.wav",
+      durationSec: 57,
+      audioBytes: 1824000,
+      language: "en",
+    });
+    expect(text).toContain("audio-16k.wav");
+    expect(text).toContain("16 kHz");
+    expect(text).toContain("57.0s");
+    expect(text).toContain("1.74 MB");
+    expect(text).toContain("语言提示：en");
+    expect(text).not.toContain("base64,");
   });
 });

@@ -31,6 +31,22 @@ import { z } from "zod";
 import type { ClipRange, DraftChain, ForgeStage, ResolveDecision } from "../types";
 
 /**
+ * ASR 语言白名单。
+ *
+ * 与前端 `ClipUploadForm` 的 select、`CreateForgeJobDto` 的 `@IsIn(["en","zh","ja"])`
+ * 保持一致；写成 `as const` 是为了让 zod 产出真正的 JSON Schema `enum`，
+ * Studio 的 Input 面板才会把它渲染成下拉框（与 `type` 一样），而不是让用户手填一个
+ * 可能拼错、直到 ASR 阶段才暴露的语言代码。
+ */
+export const FORGE_LANGUAGES = ["en", "zh", "ja"] as const;
+export type ForgeLanguage = (typeof FORGE_LANGUAGES)[number];
+
+/** 运行时白名单校验（环境变量 / 旧 checkpoint 这类「字符串来自外部」的边界用） */
+export function isForgeLanguage(value: string): value is ForgeLanguage {
+  return (FORGE_LANGUAGES as readonly string[]).includes(value);
+}
+
+/**
  * fresh（transcribe）阶段的入参（**入口与 state 的类型来源**）。
  *
  * `mediaPath` / `title` 是 `prepare` 写 `meta.json` 的必需品，缺了必然启动即失败，
@@ -44,7 +60,8 @@ export interface ForgeParams {
   title: string;
   description?: string;
   type: "dialogue" | "music";
-  language: string;
+  /** ASR 语言提示；只接受 `FORGE_LANGUAGES` 里的值（Studio 下拉框同源） */
+  language: ForgeLanguage;
   /** 已规整（排序 / 越界裁剪）后的切片区间；缺省转写整段 */
   clips?: ClipRange[];
 }
@@ -58,7 +75,8 @@ export const ForgeParamsSchema = z.object({
   title: z.string().describe("课程包标题，写进 meta.json"),
   description: z.string().optional(),
   type: z.enum(["dialogue", "music"]),
-  language: z.string(),
+  // 必须是 enum（而不是 z.string()），否则 Studio 给的是自由输入框
+  language: z.enum(FORGE_LANGUAGES).describe("ASR 语言：en 英语 / zh 中文 / ja 日语"),
   clips: z
     .array(z.object({ start: z.number(), end: z.number() }))
     .optional()

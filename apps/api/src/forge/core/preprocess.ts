@@ -1,10 +1,12 @@
 import { z } from "zod";
 
 import type { AsrSegmentParts, AsrWordInfo, QwenAsrSentence } from "./asr";
+import type { ManagedPrompt } from "./prompt-store";
 import type { Transcript, TranscriptSegment, TranscriptWord } from "./types";
 import { asrSegmentParts } from "./asr";
 import { config } from "./config";
 import { callLlmJson, mapWithConcurrency } from "./llm";
+import { getManagedPrompt, withPrompt } from "./prompt-store";
 
 /**
  * 预处理：ASR 同步返回整段 text + 碎片词表（一个词可能被拦腰拆成 "Genu"+"inely"、
@@ -29,7 +31,11 @@ const preprocessSchema = z.object({
   sentences: z.array(z.array(z.number().int().nonnegative()).min(1)).min(1),
 });
 
-const PREPROCESS_SYSTEM_PROMPT = `你在为「蚯蚓学英语」预处理英文语音转写结果：把一段连续转写划分成一个个完整句子。
+/**
+ * 预处理系统提示词（**本地兜底**）：正常运行时从 Langfuse Prompt Management 拉取，
+ * 未配置 key / 拉取失败 / LANGFUSE_PROMPTS=0 时用这份；名字见 PREPROCESS_PROMPT_NAME。
+ */
+export const PREPROCESS_SYSTEM_PROMPT = `你在为「蚯蚓学英语」预处理英文语音转写结果：把一段连续转写划分成一个个完整句子。
 
 输入是整段文本和按顺序编号的词表（i 为词编号，word 为词文本，start/end 为秒级时间戳，可参考停顿）。
 注意：转写可能把一个词拦腰拆成相邻的多个碎片（如 "Genu"+"inely"、"I"+"'"+"ve"），它们属于同一个词，必须划在同一句，不得拆开。
@@ -51,10 +57,19 @@ const PREPROCESS_SYSTEM_PROMPT = `你在为「蚯蚓学英语」预处理英文�
 示例 2——词表编号 0..12 对应 "The book that she recommended, which I found in the library, was difficult."（一个长难句，定语从句和逗号都不切）
 输出：{"sentences":[[0,1,2,3,4,5,6,7,8,9,10,11,12]]}`;
 
+/** 拆句提示词在 Langfuse 中的名字（可用 FORGE_PROMPT_PREPROCESS_NAME 覆盖） */
+export const PREPROCESS_PROMPT_NAME = config.preprocessPromptName;
+
+/** 取拆句提示词：Langfuse 优先，失败回退 PREPROCESS_SYSTEM_PROMPT */
+export function loadPreprocessPrompt(): Promise<ManagedPrompt> {
+  return getManagedPrompt(PREPROCESS_PROMPT_NAME, PREPROCESS_SYSTEM_PROMPT);
+}
+
 export function buildPreprocessMessages(
   text: string,
   words: AsrWordInfo[],
   note?: string,
+  systemPrompt: string = PREPROCESS_SYSTEM_PROMPT,
 ): Array<{ role: "system" | "user"; content: string }> {
   const list = words.map((w, i) => ({
     i,
@@ -63,7 +78,7 @@ export function buildPreprocessMessages(
     end: w.word.end,
   }));
   return [
-    { role: "system", content: PREPROCESS_SYSTEM_PROMPT },
+    { role: "system", content: systemPrompt },
     {
       role: "user",
       content:
@@ -129,6 +144,8 @@ function segmentFromWords(words: TranscriptWord[], id: number): TranscriptSegmen
 /** 单个 ASR 段：LLM 拆句 + 校验 + 合并，失败重试一次后仍不合格则抛错 */
 async function splitSegment(parts: AsrSegmentParts, label: string): Promise<TranscriptSegment[]> {
   const attempts = 2;
+  // 提示词只取一次（进程内有缓存），失败重试复用同一版本，避免两次尝试用了不同版本的提示词
+  const prompt = await loadPreprocessPrompt();
   let lastError: unknown;
   for (let attempt = 1; attempt <= attempts; attempt++) {
     try {
@@ -136,10 +153,12 @@ async function splitSegment(parts: AsrSegmentParts, label: string): Promise<Tran
         attempt > 1
           ? `上一次输出不合格：${(lastError as Error).message}。请重新输出：各句词编号合起来恰好不重不漏覆盖 0..${parts.words.length - 1}，升序连续。`
           : undefined;
-      const raw = await callLlmJson(
-        buildPreprocessMessages(parts.text, parts.words, note),
-        preprocessJsonSchema,
-        config.preprocessModel,
+      const raw = await withPrompt(prompt, () =>
+        callLlmJson(
+          buildPreprocessMessages(parts.text, parts.words, note, prompt.text),
+          preprocessJsonSchema,
+          config.preprocessModel,
+        ),
       );
       const parsed = preprocessSchema.safeParse(raw);
       if (!parsed.success) {

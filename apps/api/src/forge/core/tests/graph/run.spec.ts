@@ -12,7 +12,7 @@ import { GRAPH_VERSION } from "../../graph/build";
 import { FileCheckpointSaver } from "../../graph/file-checkpointer";
 import { runForgeGraph } from "../../graph/run";
 
-const params = { type: "dialogue" as const, language: "en" };
+const params = { type: "dialogue" as const, language: "en" as const };
 
 async function seedCheckpoint(outDir: string, threadId: string, graphVersion = GRAPH_VERSION) {
   const saver = new FileCheckpointSaver(paths.checkpoint(outDir), { graphVersion });

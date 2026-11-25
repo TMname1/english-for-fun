@@ -140,6 +140,11 @@ if (state.round >= MAX_REVIEW_ROUNDS) throw new Error("[forge] 已连续 N 轮�
   （`buildGenerator(program)` 走默认参数），所以**用 `Annotation.Root` 定义 state 时，
   Studio 里所有字段永远显示 optional**，改 TS 的 `?` 没用。挂 zod `input` 后走运行时
   `toJsonSchema`，`params.required = ["mediaPath","title","type","language"]` 才生效。
+- **Studio 表单里「下拉框 vs 输入框」也由 schema 决定**：`z.enum(...)` 会转成 JSON Schema 的
+  `enum`，Studio 渲染成下拉选择；`z.string()` 就是自由输入。所以 `type`（dialogue/music）和
+  `language` 都用 `z.enum` —— 后者白名单是 `FORGE_LANGUAGES`（`state.ts`，en/zh/ja），
+  与前端 `ClipUploadForm` 的 select、`CreateForgeJobDto` 的 `@IsIn` 同源，避免手填出
+  只有到 ASR 阶段才暴露的语言代码。
 - state 仍用 `Annotation`，不要换成裸 zod object：`getChannelsForSchema` 只认
   `schemaMetaRegistry` 里的 default，zod 的 `.default()` 不会变成通道默认值，
   未赋值字段会变 `undefined`（`state.round + 1` → NaN）。

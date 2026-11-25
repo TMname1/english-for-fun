@@ -1,6 +1,6 @@
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { extname, resolve } from "node:path";
 
 import type {
   ClipRange,
@@ -13,6 +13,7 @@ import type {
   StructureProgress,
   Transcript,
 } from "./types";
+import { MEDIA_EXT, MEDIA_EXT_LABELS, mediaKindOf } from "../../common/media-ext";
 import { alignStatements, formatAlignmentSummary } from "./align";
 import { transcodeToWav, transcribeWithRaw } from "./asr";
 import { mergeClipTranscripts, normalizeClips, offsetTranscript, tagClipBoundaries } from "./clips";
@@ -44,7 +45,44 @@ export interface FromTranscriptOptions {
   onStage?: (stage: ForgeStage) => void;
 }
 
-const VIDEO_EXT = /\.(mp4|m4v|mkv|webm|mov|avi)$/i;
+/** 媒体白名单与类型判定统一走 common/media-ext（与上传入口同一份，避免第三份清单漂移） */
+
+/**
+ * 校验媒体路径：存在、是文件、非空、扩展名在白名单内。
+ *
+ * 目的不是拦合法输入，而是把「ffmpeg 报 Invalid data found」这种要到几十秒后才出现、
+ * 且看不出该改什么的错误，提前变成一句能直接照做的提示 —— 最常见的误传是把 .md/.txt/
+ * 提示词文件当成媒体路径填进 `params.mediaPath`。
+ */
+export function assertMediaFile(mediaPath: string): void {
+  const label = `[forge] ${mediaPath}`;
+
+  if (!existsSync(mediaPath)) {
+    throw new Error(
+      `${label}\n  └ 文件不存在。请检查 params.mediaPath 是否为绝对路径（Windows 反斜杠要转义或改用正斜杠）`,
+    );
+  }
+
+  const stat = statSync(mediaPath);
+  if (stat.isDirectory()) {
+    throw new Error(`${label}\n  └ 这是一个目录，不是媒体文件。请指到目录里的具体文件`);
+  }
+  if (stat.size === 0) {
+    throw new Error(
+      `${label}\n  └ 文件是空的（0 字节），无法转写。可能是下载/导出未完成或占位文件`,
+    );
+  }
+
+  const ext = extname(mediaPath).toLowerCase();
+  if (!MEDIA_EXT.has(ext)) {
+    const detected = ext ? `扩展名 ${ext}` : "没有扩展名";
+    throw new Error(
+      `${label}\n` +
+        `  ├ 不是音视频文件（${detected}），ffmpeg 无法解析\n` +
+        `  └ 支持的类型：${MEDIA_EXT_LABELS}`,
+    );
+  }
+}
 
 export const paths = {
   meta: (outDir: string) => resolve(outDir, "meta.json"),
@@ -79,10 +117,8 @@ export async function prepareRun(
   opts: MakeOptions,
 ): Promise<{ outDir: string; meta: ForgeMeta; clips?: ClipRange[] }> {
   const mediaPath = resolve(opts.mediaPath);
-  if (!existsSync(mediaPath)) {
-    throw new Error(`[forge] 媒体文件不存在: ${mediaPath}`);
-  }
-  const isVideo = VIDEO_EXT.test(mediaPath);
+  assertMediaFile(mediaPath);
+  const isVideo = mediaKindOf(mediaPath) === "video";
 
   const runId = createRunId();
   // 用 `||` 而不是 `??`：state/dev 入口传空串时要回落到默认目录，否则 resolve("") 会写到 cwd

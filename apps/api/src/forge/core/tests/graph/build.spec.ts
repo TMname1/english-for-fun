@@ -47,7 +47,7 @@ const initialState = {
     mediaPath: "/tmp/demo.mp4",
     title: "测试课程",
     type: "dialogue" as const,
-    language: "en",
+    language: "en" as const,
   },
 };
 

@@ -27,7 +27,7 @@
  *   FORGE_TITLE       课程包标题（transcribe 阶段必填）
  *   FORGE_TYPE        dialogue | music（transcribe 阶段必填）
  *   FORGE_DESC        描述（可选）
- *   FORGE_LANGUAGE    ASR 语言提示（可选，默认 en）
+ *   FORGE_LANGUAGE    ASR 语言提示：en | zh | ja（可选，默认 en；非法值直接报错）
  *   FORGE_OUT_DIR     产物目录绝对路径（必填，由调用方分配，避免与 CLI 模式 runId 冲突）
  *   FORGE_CLIPS       选中时间区间 JSON（可选，[{start,end}]，秒）；缺省转写整段
  */
@@ -35,10 +35,12 @@
 import { basename } from "node:path";
 
 import type { ForgeStage } from "./forge";
+import type { ForgeLanguage } from "./graph/state";
 import type { ClipRange } from "./types";
 import { config } from "./config";
 import { forgeStructureInteractive, forgeStructureResolve, forgeTranscribe } from "./forge";
 import { runForgeGraph } from "./graph/run";
+import { isForgeLanguage } from "./graph/state";
 import { flushTracing } from "./tracing";
 
 // 【已停用 · 转录校对】以下导入仅供 structure（人工编辑续跑）分支使用，该分支现已注释保留。
@@ -97,7 +99,7 @@ type PhaseInput =
       /** 课程包标题（FORGE_TITLE，必填） */
       title: string;
       description?: string;
-      language: string;
+      language: ForgeLanguage;
       clips?: ClipRange[];
     }
   | {
@@ -106,7 +108,7 @@ type PhaseInput =
       /** 续跑阶段不写 meta.json，type 仅作占位 */
       type: "dialogue" | "music";
       description?: string;
-      language: string;
+      language: ForgeLanguage;
     };
 
 /** 从环境变量汇总一次运行的入参（legacy 与 graph 两套编排共用） */
@@ -116,7 +118,12 @@ function readPhaseInput(): PhaseInput {
     phaseRaw === "structure" || phaseRaw === "structure-resolve" ? phaseRaw : "transcribe";
   const outDir = requireEnv("FORGE_OUT_DIR");
   const description = process.env.FORGE_DESC?.trim() || undefined;
-  const language = process.env.FORGE_LANGUAGE?.trim() || "en";
+  // 与 FORGE_TYPE 同样的做法：越早报错越好，别让拼错的语言代码跑到 ASR 才暴露
+  const languageRaw = process.env.FORGE_LANGUAGE?.trim() || "en";
+  if (!isForgeLanguage(languageRaw)) {
+    throw new Error(`FORGE_LANGUAGE 必须是 en / zh / ja 之一，收到 ${languageRaw}`);
+  }
+  const language: ForgeLanguage = languageRaw;
 
   if (phase === "transcribe") {
     // 只有 transcribe 阶段需要 type（写进 meta.json）

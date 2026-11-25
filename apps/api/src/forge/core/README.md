@@ -224,6 +224,13 @@ pnpm forge -- --audio song.mp3 --title "某首歌" --type music
 - **同步返回**：不带 `X-DashScope-SSE` 头，等待完整结果一次返回；`output.sentence` 为单个句子对象，含整段 `text` 与全部词（`words`）。整段文本随后交给预处理步骤拆句。
 - **时长上限**：flash 同步版建议单段 ≤5 分钟，超过会直接报错；长内容请用前端切片，流水线按 clip 分段转写再合并。
 - **语言**：请求带 `language_hints`（en/zh/ja…），缺省自动识别。
+- **LangChain 封装**：转写在 `core/asr-model.ts` 里封成自定义 `BaseChatModel`（`DashScopeAsrChatModel`），
+  与 LLM 调用同属一套 Runnable 生态。`transcribeWithRaw` 只负责转码、时长校验、装配消息，请求本身走 `model.invoke()`；
+  ASR 因此自动继承 callback（图内由图根经 AsyncLocalStorage 下发，legacy 由 `tracing.ts` 的
+  `legacyModelCallbacks()` 兜底），Langfuse 里和 LLM 一样是一条独立观测（名 `asr`，model = `qwen-audio-3.1-asr-flash`）。
+  音频只放构造参数、**不进 `messages`**：消息会被 callback 层序列化进 trace，5 分钟 wav 的 base64 约 13MB，会撑挂上报。
+  因此 trace 里这条观测的 **input 是可读摘要**（文件/格式/采样率/时长/体积/语言提示），结构化字段走 `metadata.asr`，
+  **output 是完整转写文本**；词级时间戳体积大且以 json 为准，留在 `transcript.raw.json`，不进 trace。
 
 ## 7. 句子预处理（ASR 之后、结构化之前）
 
@@ -299,6 +306,8 @@ START → prepare → transcribe → structureBatch ──(无失败)───�
 - **LLM 传输层**：`core/llm-client.ts` 用 `@langchain/openai` 的 ChatOpenAI，但保留三级降级
   （json_schema → json_object → 纯文本）、流式请求、失败分类与「一句一调用 + 并发上限」的调用形状；
   降级成功后按模型缓存档位（进程内），后续句子直达。
+- **ASR 传输层**：`core/asr-model.ts` 的自定义 `DashScopeAsrChatModel` 把百炼原生 ASR 接口接进同一个
+  生态（详见 §6）。两条链路共用 `tracing.ts` 的 `legacyModelCallbacks()`——「图内不挂、图外兜底」只有这一处实现。
 
 回滚：`FORGE_ORCHESTRATOR=legacy`（运行时环境变量，无需重新构建）。
 
@@ -343,22 +352,25 @@ pnpm dev:langsmith          # 根目录；等价于在 apps/api 里跑 langgraph
 
 ## 9. 故障排查
 
-| 现象                             | 原因 / 处理                                                                                                                                                                                                                                                                     |
-| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `[asr] 未配置 FORGE_ASR_API_KEY` | 在 `apps/api/.env` 填百炼 DashScope Key（`sk-` 开头）                                                                                                                                                                                                                           |
-| `[asr] 转写请求失败（HTTP …）`   | Key 失效 / 欠费 / 网络不通 / 模型名不对。核对 `FORGE_ASR_API_KEY`、`FORGE_ASR_MODEL`、`FORGE_ASR_BASE_URL`                                                                                                                                                                      |
-| `[asr] …超过单段上限 300s`       | flash 同步版建议 ≤5 分钟。用前端切片把选区缩短，或分段转写（流水线按 clip 合并）                                                                                                                                                                                                |
-| `[asr] 转写结果为空`             | 音频里没语音，或音乐伴奏太密（见下「音乐」）                                                                                                                                                                                                                                    |
-| `[preprocess] …最终失败`         | 预处理 LLM 拆句输出重试后仍不合格（词序号分组不合法/结构错误）。换更强的 `FORGE_PREPROCESS_MODEL`，或检查该段转写是否异常                                                                                                                                                       |
-| `[llm] 词编号不合法`             | 结构化模型给的 `indexes` 跳号/越界/缺整句行，或出现单词成行的碎片（每行至少 2 个词）。文案会指出第几行、期望编号；不自动重试，GUI 里可选「重试该句」或「删除该句」（输出里混着单词行的句子已由后端自动删掉单词行，仍不合规才出现），也可换更强模型（小模型易出现从 1 开始编号） |
-| `[forge] 对齐成功率低于 85%`     | 正常路径应为 0 失败（编号直取）。若出现失败，多半是 `transcript.json` 在进度快照之后被人工改过，span 与词表错位后自动退回猜测式匹配。对照 `alignment.json` 检查                                                                                                                 |
-| `[llm] 无法连接 …`               | ollama 没起 / 没 `pull` 该模型 / 云端 key 或 base 不对。检查 `FORGE_LLM_*` 与 `ollama list`                                                                                                                                                                                     |
-| `[llm] 输出结构校验失败`         | 模型没按要求输出 JSON schema。换更强的模型，代码已内置 `json_schema→json_object→纯文本` 逐级降级                                                                                                                                                                                |
-| `[import] 无法连接 API`          | 后端没起。`pnpm dev:serve` 后重试，或核对 `FORGE_API_URL`                                                                                                                                                                                                                       |
-| `[import] 视频不是 mp4`          | 部分浏览器（Safari）不能播放 mkv/webm。用 ffmpeg 转成 H.264+AAC mp4 后重跑导入                                                                                                                                                                                                  |
-| 页面全播 TTS、没有原声           | 检查：① course.json 的 statement 是否有 `startTime`/`endTime`；② 视频输入时 `meta.json` 是否有 `videoPath`；③ 导入是否成功（日志有「视频已复制」）                                                                                                                              |
-| 歌曲识别差                       | ASR 对带伴奏音频有限。优先喂**人声干声**                                                                                                                                                                                                                                        |
-| 重复导入会不会产生重复课程包？   | 会。`forge:import` 每次都是**新建**一个课程包（`POST /course-pack`），不覆盖旧的；测试满意后如需清理，在客户端/API 删除旧包                                                                                                                                                     |
+| 现象                                    | 原因 / 处理                                                                                                                                                                                                                                                                     |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `[forge] …不是音视频文件（扩展名 .md）` | `params.mediaPath` 指到了文档/提示词等非媒体文件。改成 mp4/mov/mkv/webm/avi 或 mp3/m4a/wav/aac（白名单与上传入口共用 `common/media-ext`）                                                                                                                                       |
+| `[forge] …文件不存在`                   | 多半是 Windows 路径里的反斜杠没转义：JSON 里 `\t`/`\n` 会被吃掉。改用正斜杠（`D:/media/a.mp4`）或写成 `\\`                                                                                                                                                                      |
+| `[asr] 无法从这个文件提取音频`          | 扩展名对但内容不对：文件损坏 / 文本改名成 `.mp4` / 容器内没有音轨。用 `ffprobe 文件` 确认后再转码                                                                                                                                                                               |
+| `[asr] 未配置 FORGE_ASR_API_KEY`        | 在 `apps/api/.env` 填百炼 DashScope Key（`sk-` 开头）                                                                                                                                                                                                                           |
+| `[asr] 转写请求失败（HTTP …）`          | Key 失效 / 欠费 / 网络不通 / 模型名不对。核对 `FORGE_ASR_API_KEY`、`FORGE_ASR_MODEL`、`FORGE_ASR_BASE_URL`                                                                                                                                                                      |
+| `[asr] …超过单段上限 300s`              | flash 同步版建议 ≤5 分钟。用前端切片把选区缩短，或分段转写（流水线按 clip 合并）                                                                                                                                                                                                |
+| `[asr] 转写结果为空`                    | 音频里没语音，或音乐伴奏太密（见下「音乐」）                                                                                                                                                                                                                                    |
+| `[preprocess] …最终失败`                | 预处理 LLM 拆句输出重试后仍不合格（词序号分组不合法/结构错误）。换更强的 `FORGE_PREPROCESS_MODEL`，或检查该段转写是否异常                                                                                                                                                       |
+| `[llm] 词编号不合法`                    | 结构化模型给的 `indexes` 跳号/越界/缺整句行，或出现单词成行的碎片（每行至少 2 个词）。文案会指出第几行、期望编号；不自动重试，GUI 里可选「重试该句」或「删除该句」（输出里混着单词行的句子已由后端自动删掉单词行，仍不合规才出现），也可换更强模型（小模型易出现从 1 开始编号） |
+| `[forge] 对齐成功率低于 85%`            | 正常路径应为 0 失败（编号直取）。若出现失败，多半是 `transcript.json` 在进度快照之后被人工改过，span 与词表错位后自动退回猜测式匹配。对照 `alignment.json` 检查                                                                                                                 |
+| `[llm] 无法连接 …`                      | ollama 没起 / 没 `pull` 该模型 / 云端 key 或 base 不对。检查 `FORGE_LLM_*` 与 `ollama list`                                                                                                                                                                                     |
+| `[llm] 输出结构校验失败`                | 模型没按要求输出 JSON schema。换更强的模型，代码已内置 `json_schema→json_object→纯文本` 逐级降级                                                                                                                                                                                |
+| `[import] 无法连接 API`                 | 后端没起。`pnpm dev:serve` 后重试，或核对 `FORGE_API_URL`                                                                                                                                                                                                                       |
+| `[import] 视频不是 mp4`                 | 部分浏览器（Safari）不能播放 mkv/webm。用 ffmpeg 转成 H.264+AAC mp4 后重跑导入                                                                                                                                                                                                  |
+| 页面全播 TTS、没有原声                  | 检查：① course.json 的 statement 是否有 `startTime`/`endTime`；② 视频输入时 `meta.json` 是否有 `videoPath`；③ 导入是否成功（日志有「视频已复制」）                                                                                                                              |
+| 歌曲识别差                              | ASR 对带伴奏音频有限。优先喂**人声干声**                                                                                                                                                                                                                                        |
+| 重复导入会不会产生重复课程包？          | 会。`forge:import` 每次都是**新建**一个课程包（`POST /course-pack`），不覆盖旧的；测试满意后如需清理，在客户端/API 删除旧包                                                                                                                                                     |
 
 ## 10. 客户端播放行为（导入后会怎样）
 
