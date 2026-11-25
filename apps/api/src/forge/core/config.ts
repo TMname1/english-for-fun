@@ -70,8 +70,31 @@ export const config = {
   asrModel: env("FORGE_ASR_MODEL", "qwen-audio-3.1-asr-flash"),
   /** 百炼 DashScope API Key（sk- 开头）；与 LLM 解耦，单独配置 */
   asrApiKey: env("FORGE_ASR_API_KEY", ""),
-  /** 单次转写请求超时（毫秒）；同步等待完整结果，长音频耗时较长，默认 3 分钟 */
-  asrTimeoutMs: envInt("FORGE_ASR_TIMEOUT_MS", 3 * 60 * 1000),
+  /** 单次转写请求超时（毫秒）；同步等待完整结果。默认 5 分钟：转写子图按 ≤180s 切块，3 分钟超时对高峰期偏紧 */
+  asrTimeoutMs: envInt("FORGE_ASR_TIMEOUT_MS", 5 * 60 * 1000),
+
+  /**
+   * 音频打标（captioner）：异步任务接口，用于拿句级时间戳给切块提供边界。
+   * 端点与 ASR 同源（百炼 workspace 域名），但模型/Key 可独立配置。
+   */
+  captionerBaseUrl: env("FORGE_CAPTIONER_BASE_URL", ""),
+  captionerModel: env("FORGE_CAPTIONER_MODEL", "qwen-audio-3.1-captioner"),
+  /** 留空时回退 FORGE_ASR_API_KEY（同一 workspace 的 Key 通常是同一把） */
+  captionerApiKey: env("FORGE_CAPTIONER_API_KEY", ""),
+  /** 单次 HTTP 请求超时（getPolicy / 提交 / 查询 / 下载），毫秒 */
+  captionerTimeoutMs: envInt("FORGE_CAPTIONER_TIMEOUT_MS", 60 * 1000),
+  captionerPollIntervalMs: envInt("FORGE_CAPTIONER_POLL_INTERVAL_MS", 3000),
+  /** 轮询总超时；必须小于 service 的 job 超时（30 分钟），默认 10 分钟 */
+  captionerPollTimeoutMs: envInt("FORGE_CAPTIONER_POLL_TIMEOUT_MS", 10 * 60 * 1000),
+
+  /** 转写子图的块上限（秒）：asr-flash 同步接口上限 300s，留出 padding 余量 */
+  asrChunkSeconds: envInt("FORGE_ASR_CHUNK_SECONDS", 180),
+  /** 块音频前后各留的 padding（毫秒）：避免把词头词尾切掉 */
+  asrChunkPadMs: envInt("FORGE_ASR_CHUNK_PAD_MS", 200),
+  /** 块级 ASR 并发上限：DashScope 同步 ASR 对并发敏感，保守取 3 */
+  asrConcurrency: envInt("FORGE_ASR_CONCURRENCY", 3),
+  /** 1 = 成功后也保留 .work（块音频/逐块结果），用于排查切块与时间对齐问题 */
+  keepWork: env("FORGE_KEEP_WORK", "0") === "1",
 
   /** LLM（OpenAI 兼容 chat completions；默认本地 ollama） */
   llmBaseUrl: env("FORGE_LLM_BASE_URL", "http://localhost:11434/v1"),

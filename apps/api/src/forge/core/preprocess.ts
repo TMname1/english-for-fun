@@ -10,9 +10,10 @@ import { getManagedPrompt, withPrompt } from "./prompt-store";
 
 /**
  * 预处理：ASR 同步返回整段 text + 碎片词表（一个词可能被拦腰拆成 "Genu"+"inely"、
- * "I"+"'"+"ve"）。LLM 按语义理解把词序号划分成完整句子（不局限于标点），
+ * "I"+"'"+"ve"）。LLM 按语义理解把词序号划分成完整句子（不局限于标点），并顺手给出
+ * 每句的完整中文——这一步手上有整段英文全文，比结构阶段只看词表译得准。
  * 代码按分组确定性地合并碎片词、从原始 ASR 词取时间戳——时间戳零幻觉。
- * 输出契约与下游一致：一个 segment 即一个完整句，text = words.join(" ")。
+ * 输出契约与下游一致：一个 segment 即一个完整句，text = words.join(" ")，chinese 为句级译文。
  */
 
 export const preprocessJsonSchema = {
@@ -22,22 +23,64 @@ export const preprocessJsonSchema = {
   properties: {
     sentences: {
       type: "array",
-      items: { type: "array", items: { type: "integer" } },
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["words", "chinese"],
+        properties: {
+          words: { type: "array", items: { type: "integer" } },
+          chinese: { type: "string" },
+        },
+      },
     },
   },
 } as const;
 
+/** 一句：词编号分组 + 该句中文（句级中文只有拆句阶段能拿到英文全文，故在此产出） */
+export interface PreprocessSentence {
+  words: number[];
+  chinese?: string;
+}
+
+/**
+ * zod 侧容错：兼容旧的 `number[][]` 输出（改了提示词但 Langfuse 还没更新、或 json_schema
+ * 降级档时可能出现）。缺 chinese 不算失败——下游会回退成「结构阶段自己翻译」。
+ */
+const preprocessItemSchema = z.union([
+  z.array(z.number().int().nonnegative()).min(1),
+  z.object({
+    words: z.array(z.number().int().nonnegative()).min(1),
+    chinese: z.string().optional(),
+  }),
+]);
+
 const preprocessSchema = z.object({
-  sentences: z.array(z.array(z.number().int().nonnegative()).min(1)).min(1),
+  sentences: z.array(preprocessItemSchema).min(1),
 });
+
+/** 把两种输出形状统一成 { words, chinese? }；chinese 去空白，空串视为缺失 */
+export function normalizePreprocessSentences(
+  items: Array<number[] | { words?: number[]; chinese?: string }>,
+): PreprocessSentence[] {
+  return items.map((item) => {
+    if (Array.isArray(item)) {
+      return { words: item };
+    }
+    // strictNullChecks=false 下 zod 会把 required 字段推断成可选，这里兜一层；
+    // 真缺 words 时交给 validatePartition 报「只覆盖了 0/N 个词」
+    const words = item.words ?? [];
+    const chinese = item.chinese?.trim();
+    return chinese ? { words, chinese } : { words };
+  });
+}
 
 /**
  * 预处理系统提示词（**本地兜底**）：正常运行时从 Langfuse Prompt Management 拉取，
  * 未配置 key / 拉取失败 / LANGFUSE_PROMPTS=0 时用这份；名字见 PREPROCESS_PROMPT_NAME。
  */
-export const PREPROCESS_SYSTEM_PROMPT = `你在为「蚯蚓学英语」预处理英文语音转写结果：把一段连续转写划分成一个个完整句子。
+export const PREPROCESS_SYSTEM_PROMPT = `你在为「蚯蚓学英语」预处理英文语音转写结果：把一段连续转写划分成一个个完整句子，并给出每句的中文翻译。
 
-输入是整段文本和按顺序编号的词表（i 为词编号，word 为词文本，start/end 为秒级时间戳，可参考停顿）。
+输入是整段文本和按顺序编号的词表（i 为词编号，word 为词文本）。
 注意：转写可能把一个词拦腰拆成相邻的多个碎片（如 "Genu"+"inely"、"I"+"'"+"ve"），它们属于同一个词，必须划在同一句，不得拆开。
 
 划分原则——尽量保留长难句，句子尽量越长越好：
@@ -46,16 +89,23 @@ export const PREPROCESS_SYSTEM_PROMPT = `你在为「蚯蚓学英语」预处理
 3. 以下情况都不算句子边界，不要因此切分：逗号/分号处的停顿、and/but/or/so 等并列连接、which/who/that 等引导的定语从句、because/although/if/when/while 等引导的状语从句、同位语、插入语、列举。
 4. 不要为了"长"把两个不相干的句子合并：语义独立就切开，仍属于同一句的意思就保留在一起。
 
+翻译要求（每句都要给）：
+1. 中文要通顺自然、意思准确，读起来像正常的中文，不要逐词硬译。
+2. 翻译的是这句 words 按顺序拼起来的完整意思：从句、非谓语、修饰成分都不能漏，也不要带上其他句子的内容。
+3. 人名、地名、作品名等专有名词保留原文，不音译、不改写。
+4. 只给中文，不要加引号、不要给英文原文、不要写解释。
+
 铁律：
 1. 每句应是一个意思完整的句子，按你对语义的理解划分，不局限于标点。
-2. 输出每句包含的词编号：各句编号升序排列，合起来恰好不重不漏地覆盖全部编号（0 到 N-1），句内编号也必须升序连续。
+2. 输出每句包含的词编号 words：各句编号升序排列，合起来恰好不重不漏地覆盖全部编号（0 到 N-1），句内编号也必须升序连续。
 3. 不得增删改任何词，不得调整词序。
+4. chinese 必须非空，且只对应这一句的 words。
 
 示例 1——词表编号 0..5 对应 "I like the food. It is good."（两个独立句，切开）：
-输出：{"sentences":[[0,1,2,3],[4,5]]}
+输出：{"sentences":[{"words":[0,1,2,3],"chinese":"我喜欢这个食物。"},{"words":[4,5],"chinese":"它很好。"}]}
 
 示例 2——词表编号 0..12 对应 "The book that she recommended, which I found in the library, was difficult."（一个长难句，定语从句和逗号都不切）
-输出：{"sentences":[[0,1,2,3,4,5,6,7,8,9,10,11,12]]}`;
+输出：{"sentences":[{"words":[0,1,2,3,4,5,6,7,8,9,10,11,12],"chinese":"她推荐的那本我在图书馆找到的书，很难懂。"}]}`;
 
 /** 拆句提示词在 Langfuse 中的名字（可用 FORGE_PROMPT_PREPROCESS_NAME 覆盖） */
 export const PREPROCESS_PROMPT_NAME = config.preprocessPromptName;
@@ -71,18 +121,18 @@ export function buildPreprocessMessages(
   note?: string,
   systemPrompt: string = PREPROCESS_SYSTEM_PROMPT,
 ): Array<{ role: "system" | "user"; content: string }> {
+  // 时间戳故意不发：模型只回词编号，句子 start/end 由 mergeWordGroup 从 ASR 原词回填，
+  // 少发 start/end 每个词省一半以上 prompt token（重试那次同样省）。
   const list = words.map((w, i) => ({
     i,
     word: w.word.word,
-    start: w.word.start,
-    end: w.word.end,
   }));
   return [
     { role: "system", content: systemPrompt },
     {
       role: "user",
       content:
-        `请把下面的转写按语义划分成完整句子（尽量保留长难句，只在真正的独立句处切开），输出每句包含的词编号。\n` +
+        `请把下面的转写按语义划分成完整句子（尽量保留长难句，只在真正的独立句处切开），输出每句包含的词编号 words 和该句完整中文 chinese。\n` +
         `整段文本：${text}\n词表（共 ${words.length} 个编号 0..${words.length - 1}）：\n${JSON.stringify(list)}` +
         (note ? `\n\n${note}` : ""),
     },
@@ -131,14 +181,21 @@ export function mergeWordGroup(words: AsrWordInfo[], indexes: number[]): Transcr
   return merged;
 }
 
-function segmentFromWords(words: TranscriptWord[], id: number): TranscriptSegment {
-  return {
+function segmentFromWords(
+  words: TranscriptWord[],
+  id: number,
+  chinese?: string,
+): TranscriptSegment {
+  const segment: TranscriptSegment = {
     id,
     start: words[0].start,
     end: words[words.length - 1].end,
     text: words.map((w) => w.word).join(" "),
     words,
   };
+  // 只在真有翻译时写入，避免老数据/降级场景落一个 undefined 键
+  if (chinese) segment.chinese = chinese;
+  return segment;
 }
 
 /** 单个 ASR 段：LLM 拆句 + 校验 + 合并，失败重试一次后仍不合格则抛错 */
@@ -151,7 +208,7 @@ async function splitSegment(parts: AsrSegmentParts, label: string): Promise<Tran
     try {
       const note =
         attempt > 1
-          ? `上一次输出不合格：${(lastError as Error).message}。请重新输出：各句词编号合起来恰好不重不漏覆盖 0..${parts.words.length - 1}，升序连续。`
+          ? `上一次输出不合格：${(lastError as Error).message}。请重新输出：各句词编号合起来恰好不重不漏覆盖 0..${parts.words.length - 1}，升序连续；每句的 chinese 必须非空。`
           : undefined;
       const raw = await withPrompt(prompt, () =>
         callLlmJson(
@@ -169,12 +226,21 @@ async function splitSegment(parts: AsrSegmentParts, label: string): Promise<Tran
             .join("; ")}`,
         );
       }
-      const invalid = validatePartition(parsed.data.sentences, parts.words.length);
+      const sentences = normalizePreprocessSentences(parsed.data.sentences);
+      const invalid = validatePartition(
+        sentences.map((s) => s.words),
+        parts.words.length,
+      );
       if (invalid) {
         throw new Error(`词序号分组不合法：${invalid}`);
       }
-      return parsed.data.sentences.map((group) =>
-        segmentFromWords(mergeWordGroup(parts.words, group), 0),
+      if (sentences.every((s) => !s.chinese)) {
+        console.warn(
+          `[preprocess] ${label}：模型没返回句级中文（确认 Langfuse 提示词已换成含 chinese 的新版），结构阶段将回退为模型自己翻译`,
+        );
+      }
+      return sentences.map((s) =>
+        segmentFromWords(mergeWordGroup(parts.words, s.words), 0, s.chinese),
       );
     } catch (error) {
       lastError = error;

@@ -28,7 +28,6 @@ export interface ReviewResumePayload {
 export function createNodes(artifacts: ForgeArtifactSource) {
   return {
     prepare: (state: ForgeStateType): Promise<ForgeStateUpdate> => artifacts.prepare(state),
-    transcribe: (state: ForgeStateType): Promise<ForgeStateUpdate> => artifacts.transcribe(state),
     structureBatch: (state: ForgeStateType): Promise<ForgeStateUpdate> =>
       artifacts.structureBatch(state),
     retryBatch: (state: ForgeStateType): Promise<ForgeStateUpdate> => artifacts.retryBatch(state),
