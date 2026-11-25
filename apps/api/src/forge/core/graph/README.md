@@ -6,23 +6,25 @@ artifacts，不碰磁盘和模型），也可以在不改拓扑的情况下替�
 
 与 legacy（`../forge.ts` + `pipeline-runner.ts`）的关系：
 
-- 由 `FORGE_ORCHESTRATOR=graph` 开启，缺省仍是 legacy；
-- 两条路径**共用同一批原语**（`prepareRun` / `transcribeRun` / `loadStructureInput` /
-  `finalizeCourse` / `mergeResolveChains`），落盘产物必须逐字段一致；
+- 由 `FORGE_ORCHESTRATOR=graph|legacy` 切换，缺省 `graph`；
+- 两条路径**共用同一批原语**（`prepareRun` / `loadStructureInput` / `finalizeCourse` /
+  `mergeResolveChains`），落盘产物必须逐字段一致；**唯独 `transcribe` 不同**——graph 走子图
+  （captioner 句级 → 切块 → asr-flash 词级，支持长音频），legacy 仍是 `transcribeRun` 整段转写
+  （单段 ≤5 分钟）。产物结构保持一致，下游无需感知；
 - `needs_fix` 在图里 = `interrupt`，checkpoint 不可用时会返回 `unavailable` 让调用方降级 legacy。
 
 ---
 
 ## 2. 每个节点的作用
 
-| 节点             | 谁实现                     | 干什么                                                                                                                                      | 读/写的产物                                                                    |
-| ---------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| `prepare`        | `artifacts.prepare`        | 校验 `mediaPath` / `title`；写 `meta.json`；用 `normalizeClips` 规整切片区间并把结果回写 state（`transcribe` 依赖它）                       | 写 `meta.json`                                                                 |
-| `transcribe`     | `artifacts.transcribe`     | 转码 → ASR → 预处理（断句、词级时间戳）；过程中发 `transcoding` / `transcribing` 阶段事件                                                   | 写 `transcript.json`、`transcript.raw.json`、`clips.json`                      |
-| `structureBatch` | `artifacts.structureBatch` | 读取 transcript，**一句一次 LLM 调用**并发生成组装链（`generateDraftCollected`），汇总成功链与失败句；有失败就先落盘进度快照                | 读 `transcript.json`；写 `structure.progress.json`（仅失败时）                 |
-| `reviewGate`     | `nodes.reviewGate`         | **纯节点**：只 `readProgress` 读失败清单，然后 `interrupt(payload)` 挂起等人；resume 后校验决策（`validateResolveDecisions`）并 `round + 1` | 只读 `structure.progress.json`                                                 |
-| `retryBatch`     | `artifacts.retryBatch`     | 按决策分流：`retry` 句重跑 LLM，`delete` 句丢弃，和已成功句合并（`mergeResolveChains`）；仍有失败则再落盘进度                               | 读 `transcript.json` + `structure.progress.json`；写 `structure.progress.json` |
-| `finalize`       | `artifacts.finalize`       | 时间戳对齐 + 合成最终课程包（`finalizeCourse`），发 `aligning` → `done`                                                                     | 读 `meta.json` / `transcript.json`；写 `course.json` / `alignment.json`        |
+| 节点             | 谁实现                                            | 干什么                                                                                                                                      | 读/写的产物                                                                                  |
+| ---------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `prepare`        | `artifacts.prepare`                               | 校验 `mediaPath` / `title`；写 `meta.json`；用 `normalizeClips` 规整切片区间并把结果回写 state（`transcribe` 依赖它）                       | 写 `meta.json`                                                                               |
+| `transcribe`     | 编译子图（`transcribe-build.ts`，直接 `addNode`） | **captioner 句级 → 按句切块（≤180s）→ asr-flash 词级**，再走预处理（断句）；过程中发 `transcoding` / `transcribing` 阶段事件                | 写 `caption.json`、`chunk-plan.json`、`transcript.json`、`transcript.raw.json`、`clips.json` |
+| `structureBatch` | `artifacts.structureBatch`                        | 读取 transcript，**一句一次 LLM 调用**并发生成组装链（`generateDraftCollected`），汇总成功链与失败句；有失败就先落盘进度快照                | 读 `transcript.json`；写 `structure.progress.json`（仅失败时）                               |
+| `reviewGate`     | `nodes.reviewGate`                                | **纯节点**：只 `readProgress` 读失败清单，然后 `interrupt(payload)` 挂起等人；resume 后校验决策（`validateResolveDecisions`）并 `round + 1` | 只读 `structure.progress.json`                                                               |
+| `retryBatch`     | `artifacts.retryBatch`                            | 按决策分流：`retry` 句重跑 LLM，`delete` 句丢弃，和已成功句合并（`mergeResolveChains`）；仍有失败则再落盘进度                               | 读 `transcript.json` + `structure.progress.json`；写 `structure.progress.json`               |
+| `finalize`       | `artifacts.finalize`                              | 时间戳对齐 + 合成最终课程包（`finalizeCourse`），发 `aligning` → `done`                                                                     | 读 `meta.json` / `transcript.json`；写 `course.json` / `alignment.json`                      |
 
 要点：
 
@@ -33,6 +35,45 @@ artifacts，不碰磁盘和模型），也可以在不改拓扑的情况下替�
   `indexes` 白名单（只重跑指定句）。
 - `prepare` 只在前半段（fresh 跑）出现；resolve 阶段由 checkpoint 还原 state，直接从
   `reviewGate` 继续，不会重跑前三个节点。
+
+### transcribe 子图
+
+`transcribe` 不是单节点，而是一个真子图（独立 state，见 `transcribe-state.ts`）：
+
+```
+START → asrSentence → processingAudio → asrWord → END
+```
+
+| 节点              | 干什么                                                                                                                    | 产物                                                   |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| `asrSentence`     | 每个 unit（clip 或整段）转码 wav → 上传百炼临时 OSS → `qwen-audio-3.1-captioner` 异步任务 → 句级时间戳                    | `.work/units/*.wav`、`caption.json`                    |
+| `processingAudio` | 相邻语音段累积成 ≤180s 的块（边界落在句子边界），加 200ms padding 后 ffmpeg 切块                                          | `.work/chunks/*.wav`、`chunk-plan.json`                |
+| `asrWord`         | 并发（默认 3）调 `qwen-audio-3.1-asr-flash` 拿词级时间戳 → 按词中点归属去重 → 跨块碎片修复 → buildTranscript + preprocess | `transcript.json`、`transcript.raw.json`、`clips.json` |
+
+要点：
+
+- **子图 state 与父图不同构**：`buildForgeGraph()` 在构图期把子图 `compile()` 好，直接
+  `.addNode("transcribe", compiled)` 挂上去 —— LangGraph 认 `isPregelLike` 后按真子图执行，
+  Studio / LangSmith 画布上会展开成 `transcribe:asrSentence` / `:processingAudio` / `:asrWord`
+  三个嵌套节点。父子图按 **channel 名**对齐：子图只读到 `outDir` / `params`（父图多出的
+  title/type/description 原样带过去、回写时也原样带回），子图的计数 channel 回写时被父图白名单过滤。
+  **不要**给 `addNode` 传 `{ input: TranscriptState }`：那会把 `params` 裁成 `TranscriptParams`，
+  回写时丢掉 title/type/description。
+- **子图 checkpoint 写嵌套 ns**：子图在 `checkpoint_ns = transcribe:<taskId>` 下写 checkpoint，
+  与父图（ns 为空串）共用同一个 `graph.checkpoint.json` —— `FileCheckpointSaver` 的每条记录都带
+  `ns` 字段、读写与 `prune` 都按 `(threadId, ns)` 过滤，所以单文件不变、`ARTIFACT_FILES` 白名单不变、
+  `canResume` 看父 ns 也不会被干扰。回归测试见 `tests/graph/file-checkpointer.spec.ts` 的
+  「挂编译子图时子图 checkpoint 写进嵌套 ns」。子图编译时**不传 checkpointer**，运行期从
+  config 的 `CONFIG_KEY_CHECKPOINTER` 借父图那个 saver。
+- **时间只加两次**：caption 时间 + `unit.baseMs`（clip.start 或 0）；词时间 + `chunk.audio.start`。
+  新链路**不用** `offsetTranscript`，避免重复叠加导致整体偏移一个 clip.start。
+- **归属窗口 `keep`**：相邻块靠 core 去重（词中点规则），但首块向左、末块向右扩展到 padding 边缘，
+  否则 captioner 段起点比真实语音晚一点时会丢掉开头词（实测丢过 "One more"）。
+- **captioner 的句级边界在 `transcripts[].text`（JSON 字符串）的 `speech_segments[]`**，不是
+  `sentences[]`（实测只有一条覆盖全文件）。解析与容错见 `captioner.ts`。
+- 失败策略是**任何失败整体报错**：captioner/上传/任一块 ASR 失败、解析为空、全部块都空，都直接抛出。
+- 相关配置：`FORGE_CAPTIONER_*`、`FORGE_ASR_CHUNK_SECONDS`（180）、`FORGE_ASR_CHUNK_PAD_MS`（200）、
+  `FORGE_ASR_CONCURRENCY`（3）、`FORGE_KEEP_WORK`（保留 `.work` 排查对齐问题）。
 
 ### interrupt / resume 载荷
 
@@ -113,8 +154,7 @@ if (state.round >= MAX_REVIEW_ROUNDS) throw new Error("[forge] 已连续 N 轮�
 | `jobId`                           | 与 `thread_id` 相同，仅日志/交叉校验                                                | 入口                                         |
 | `outDir`                          | 产物绝对路径，所有磁盘 IO 的根                                                      | `prepare`                                    |
 | `params`                          | `mediaPath`（必填）/ `title`（必填）/ `description` / `type` / `language` / `clips` | 入口 + `prepare` 回写 clips                  |
-| `stage`                           | 当前阶段（`transcoding` … `done`）                                                  | 各节点                                       |
-| `transcriptStat`                  | 转写摘要（段数 / 是否词级 / 切片数）                                                | `transcribe`                                 |
+| `stage`                           | 当前阶段（`transcoding` … `done`）                                                  | `prepare` / `structureBatch` 系 / `finalize` |
 | `chains`                          | 结构化产物 `DraftChain[]`                                                           | `structureBatch` / `retryBatch` / `finalize` |
 | `failureCount` / `failureIndexes` | 失败句数与下标（边判定用）                                                          | `structureBatch` / `retryBatch`              |
 | `round`                           | 已进入 `reviewGate` 的轮次                                                          | `reviewGate`                                 |
@@ -161,17 +201,20 @@ if (state.round >= MAX_REVIEW_ROUNDS) throw new Error("[forge] 已连续 N 轮�
 
 ## 5. 文件分工
 
-| 文件                   | 职责                                                                                                 |
-| ---------------------- | ---------------------------------------------------------------------------------------------------- |
-| `build.ts`             | 拓扑：`addNode` / `addEdge` / `addConditionalEdges`，导出 `GRAPH_VERSION` 与可移植的类型别名         |
-| `nodes.ts`             | 节点薄封装：只负责「调 artifacts + 决定返回哪个 state 更新」；`reviewGate` 是纯节点                  |
-| `artifacts.ts`         | 节点的磁盘/LLM 实现面（`ForgeArtifactSource` 接口 + `ForgeArtifacts` 实现 + `MAX_REVIEW_ROUNDS`）    |
-| `state.ts`             | `ForgeState` channel 定义、`ForgeParams` / `ForgeInputSchema`（zod，供 Studio / invoke 校验）        |
-| `events.ts`            | 阶段事件发射器：单调序号过滤，映射成 stdout `{event:"stage"}` JSON Lines                             |
-| `run.ts`               | 阶段入口（`transcribe` / `structure` / `structure-resolve`）：组 config/Command、判终态、`canResume` |
-| `file-checkpointer.ts` | 单文件 checkpointer（`outDir/graph.checkpoint.json`），带 `threadId` / `graphVersion` 校验           |
-| `dev-entry.ts`         | LangGraph Studio 调试入口（`MemorySaver`，不参与生产）                                               |
-| `studio-trace.ts`      | Studio 的追踪根：透明代理编译后的图，把 `runName` + 根 handler 注入 invoke config（见 §7.1）         |
+| 文件                      | 职责                                                                                                   |
+| ------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `build.ts`                | 拓扑：`addNode` / `addEdge` / `addConditionalEdges`，编译并挂载 transcribe 子图，导出 `GRAPH_VERSION`  |
+| `nodes.ts`                | 节点薄封装：只负责「调 artifacts + 决定返回哪个 state 更新」；`reviewGate` 是纯节点                    |
+| `artifacts.ts`            | 节点的磁盘/LLM 实现面（`ForgeArtifactSource` 接口 + `ForgeArtifacts` 实现 + `MAX_REVIEW_ROUNDS`）      |
+| `state.ts`                | `ForgeState` channel 定义、`ForgeParams` / `ForgeInputSchema`（zod，供 Studio / invoke 校验）          |
+| `events.ts`               | 阶段事件发射器：单调序号过滤，映射成 stdout `{event:"stage"}` JSON Lines                               |
+| `run.ts`                  | 阶段入口（`transcribe` / `structure` / `structure-resolve`）：组 config/Command、判终态、`canResume`   |
+| `file-checkpointer.ts`    | 单文件 checkpointer（`outDir/graph.checkpoint.json`），带 `threadId` / `graphVersion` 校验             |
+| `transcribe-build.ts`     | transcribe 子图拓扑（`START → asrSentence → processingAudio → asrWord → END`）+ `buildTranscribeGraph` |
+| `transcribe-state.ts`     | 子图 state（`outDir` / `params` + 几个计数），与父图不同构                                             |
+| `transcribe-artifacts.ts` | 子图三个节点的磁盘/网络实现（ffmpeg / captioner / asr-flash / 切块 / 预处理）                          |
+| `dev-entry.ts`            | LangGraph Studio 调试入口（`MemorySaver`，不参与生产；画布会展开 transcribe 三个子节点）               |
+| `studio-trace.ts`         | Studio 的追踪根：透明代理编译后的图，把 `runName` + 根 handler 注入 invoke config（见 §7.1）           |
 
 ---
 
@@ -184,7 +227,9 @@ if (state.round >= MAX_REVIEW_ROUNDS) throw new Error("[forge] 已连续 N 轮�
   `graphVersion` 一致 + `state.next` 包含 `reviewGate`。任一不满足返回 `unavailable`，
   由 `pipeline-runner` 降级 legacy（旧任务本来就没 checkpoint 文件，天然走这条路）。
 - 阶段事件用闭包注入的 `StageEmitter`，而不是靠 `graph.stream({streamMode:"updates"})` 反推：
-  `transcribe` 一个节点内要先后发 `transcoding` → `transcribing`，节点级更新表达不了。
+  `transcribe` 子图的 `asrSentence` 内要先后发 `transcoding` → `transcribing`，节点级更新表达不了。
+- 子图 checkpoint 写在 `checkpoint_ns = transcribe:<taskId>` 下（同一个单文件里），
+  `canResume` 的 `getState` 不带 ns，只看父图，不会被嵌套命名空间干扰。
 
 ---
 
@@ -193,6 +238,19 @@ if (state.round >= MAX_REVIEW_ROUNDS) throw new Error("[forge] 已连续 N 轮�
 ```bash
 # 完整跑（真实 ffmpeg / ASR / LLM，会读 apps/api/.env）
 pnpm dev:langsmith
+```
+
+`dev:langsmith` 是 `langgraphjs dev --no-reload`：**改完拓扑/节点必须重启 dev server**，
+再刷新 Studio 页面，否则画布和 schema 都是旧的。
+
+画布应看到 `prepare → transcribe:asrSentence → transcribe:processingAudio → transcribe:asrWord
+→ structureBatch → …`（transcribe 是嵌套子图，xray 展开后有 `transcribe:` 前缀）。命令行核对：
+
+```bash
+# transcribe 未展开时是一个编译图节点（data.id 末位是 CompiledStateGraph）
+curl -s "http://localhost:2024/assistants/forge/graph" | jq '.nodes[] | select(.id=="transcribe")'
+# xray 展开后：三个子节点带 transcribe: 前缀，且没有裸的 transcribe
+curl -s "http://localhost:2024/assistants/forge/graph?xray=1" | jq '[.nodes[].id]'
 ```
 
 ### 7.1 Studio 的 trace：一次跑一条 root
@@ -240,6 +298,8 @@ Studio 的 Input 给一条最小 state：
 { "decisions": [{ "index": 0, "action": "delete" }] }
 ```
 
-单测见 `../tests/graph/build.spec.ts`（注入假 artifacts，覆盖正常流、中断/恢复、多轮上限、
-决策校验）与 `../tests/graph/studio-trace.spec.ts`（覆盖 Proxy 注入 runName/handler、phase 判定、
+单测见 `../tests/graph/build.spec.ts`（注入假 artifacts + `transcribeArtifacts`，覆盖正常流、
+中断/恢复、多轮上限、决策校验，以及 xray 画布展开的断言）、
+`../tests/graph/file-checkpointer.spec.ts`（含嵌套 `checkpoint_ns` 的回归）与
+`../tests/graph/studio-trace.spec.ts`（覆盖 Proxy 注入 runName/handler、phase 判定、
 私有方法 bind、属性写回真实例）。
