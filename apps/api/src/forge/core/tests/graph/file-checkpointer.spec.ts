@@ -224,4 +224,56 @@ describe("FileCheckpointSaver", () => {
     expect(resumed.verdict).toBe("ok");
     expect(resumed.count).toBe(3);
   });
+
+  it("挂编译子图时子图 checkpoint 写进嵌套 ns：仍是单文件，父子互不串读", async () => {
+    const { Annotation, END, START, StateGraph } = await import("@langchain/langgraph");
+
+    const ChildState = Annotation.Root({
+      count: Annotation<number>({ reducer: (_p, n) => n, default: () => 0 }),
+    });
+    const child = new StateGraph(ChildState)
+      .addNode("work", async () => ({ count: 2 }))
+      .addEdge(START, "work")
+      .addEdge("work", END)
+      // 不传 checkpointer：运行期由父图经 CONFIG_KEY_CHECKPOINTER 借出同一个 saver
+      .compile();
+
+    const ParentState = Annotation.Root({
+      tag: Annotation<string>({ reducer: (_p, n) => n, default: () => "" }),
+    });
+    const parent = new StateGraph(ParentState)
+      .addNode("child", child)
+      .addEdge(START, "child")
+      .addEdge("child", END)
+      .compile({ checkpointer: new FileCheckpointSaver(file) });
+
+    await parent.invoke({ tag: "p" }, config());
+
+    // 单文件里应该同时出现父 ns（空串）与子图 ns（child:<taskId>）
+    const raw = JSON.parse(await readFile(file, "utf-8")) as {
+      checkpoints: Array<{ ns: string; id: string }>;
+    };
+    const namespaces = [...new Set(raw.checkpoints.map((c) => c.ns))];
+    expect(namespaces).toContain("");
+    const childNs = namespaces.find((ns) => ns.startsWith("child"));
+    expect(childNs).toBeDefined();
+
+    // 新实例强制从磁盘读：两个 ns 各自能取回，且互不串值
+    const reopened = new FileCheckpointSaver(file);
+    const parentTuple = await reopened.getTuple(config());
+    const childTuple = await reopened.getTuple(config({ checkpoint_ns: childNs }));
+    expect(parentTuple?.checkpoint.id).not.toBe(childTuple?.checkpoint.id);
+    expect((childTuple?.checkpoint.channel_values as { count?: number }).count).toBe(2);
+    const parentValues = parentTuple?.checkpoint.channel_values as {
+      tag?: string;
+      count?: number;
+    };
+    expect(parentValues.tag).toBe("p");
+    expect(parentValues.count).toBeUndefined();
+
+    // deleteThread 一次清掉两个 ns 的行（跨 ns 语义）
+    await reopened.deleteThread(THREAD);
+    const after = JSON.parse(await readFile(file, "utf-8")) as { checkpoints: unknown[] };
+    expect(after.checkpoints).toHaveLength(0);
+  });
 });

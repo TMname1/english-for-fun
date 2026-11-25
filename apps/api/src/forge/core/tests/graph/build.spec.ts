@@ -2,8 +2,25 @@ import { Command, isInterrupted, MemorySaver } from "@langchain/langgraph";
 
 import type { ForgeArtifactSource } from "../../graph/artifacts";
 import type { ForgeStateUpdate } from "../../graph/state";
+import type { TranscribeArtifactSource } from "../../graph/transcribe-artifacts";
 import type { StructureProgress } from "../../types";
-import { buildForgeGraph } from "../../graph/build";
+import { buildForgeGraph, GRAPH_VERSION } from "../../graph/build";
+
+/**
+ * 假转写子图实现：transcribe 现在是**编译后子图节点**，它的 IO 由 `transcribeArtifacts` 注入，
+ * 不注入就会真跑 ffmpeg / captioner / asr-flash。传 `calls` 时把 "transcribe" 记进调用序列，
+ * 保持与改造前「transcribe 是一个节点」的断言形状一致。
+ */
+function fakeTranscribe(calls?: string[]): TranscribeArtifactSource {
+  return {
+    asrSentence: async () => {
+      calls?.push("transcribe");
+      return { unitCount: 1 };
+    },
+    processingAudio: async () => ({ chunkCount: 1 }),
+    asrWord: async () => ({ chunkDone: 1, segmentCount: 3, wordLevel: true, droppedWords: 0 }),
+  };
+}
 
 /** 记录调用顺序的假产物层：完全不碰磁盘与 LLM */
 function fakeArtifacts(overrides: Partial<ForgeArtifactSource> = {}) {
@@ -14,10 +31,6 @@ function fakeArtifacts(overrides: Partial<ForgeArtifactSource> = {}) {
     prepare: async () => {
       calls.push("prepare");
       return { stage: "transcoding" };
-    },
-    transcribe: async () => {
-      calls.push("transcribe");
-      return { transcriptStat: { segments: 3, wordLevel: true, clipCount: 0 } };
     },
     structureBatch: async () => {
       calls.push("structureBatch");
@@ -52,9 +65,38 @@ const initialState = {
 };
 
 describe("Forge 图拓扑（fresh 路径）", () => {
+  it("GRAPH_VERSION 已 bump 到 3（transcribe 改挂编译子图 + 删 transcriptStat 后旧 checkpoint 必须失效）", () => {
+    expect(GRAPH_VERSION).toBe(3);
+  });
+
+  it("transcribe 是编译子图节点：xray 画布展开成 asrSentence/processingAudio/asrWord", async () => {
+    const { artifacts } = fakeArtifacts();
+    const graph = buildForgeGraph({
+      emitStage: () => {},
+      artifacts,
+      transcribeArtifacts: fakeTranscribe(),
+    }).compile();
+
+    const drawable = await graph.getGraphAsync({ xray: 1 });
+    const ids = Object.keys(drawable.nodes);
+    expect(ids).toEqual(
+      expect.arrayContaining([
+        "transcribe:asrSentence",
+        "transcribe:processingAudio",
+        "transcribe:asrWord",
+      ]),
+    );
+    // 子图被展开后不该再留一个裸的 transcribe 方块
+    expect(ids).not.toContain("transcribe");
+  });
+
   it("无失败句时 prepare → transcribe → structureBatch → finalize，且不进入 reviewGate", async () => {
     const { artifacts, calls } = fakeArtifacts();
-    const graph = buildForgeGraph({ emitStage: () => {}, artifacts }).compile();
+    const graph = buildForgeGraph({
+      emitStage: () => {},
+      artifacts,
+      transcribeArtifacts: fakeTranscribe(calls),
+    }).compile();
 
     const result = await graph.invoke(initialState);
     expect(calls).toEqual(["prepare", "transcribe", "structureBatch", "finalize"]);
@@ -79,7 +121,11 @@ describe("Forge 图拓扑（fresh 路径）", () => {
         } as StructureProgress;
       },
     });
-    const graph = buildForgeGraph({ emitStage: () => {}, artifacts }).compile({
+    const graph = buildForgeGraph({
+      emitStage: () => {},
+      artifacts,
+      transcribeArtifacts: fakeTranscribe(calls),
+    }).compile({
       checkpointer: new MemorySaver(),
     });
 
@@ -102,7 +148,6 @@ describe("Forge 图 interrupt / resume", () => {
 
     const artifacts: ForgeArtifactSource = {
       prepare: async () => ({ stage: "transcoding" }),
-      transcribe: async () => ({}),
       structureBatch: async () => {
         calls.push("structureBatch");
         return { chains: progress.success.map((c) => ({ ...c, statements: [] })), failureCount: 1 };
@@ -119,7 +164,11 @@ describe("Forge 图 interrupt / resume", () => {
       readProgress: async () => progress,
     };
 
-    const graph = buildForgeGraph({ emitStage: () => {}, artifacts }).compile({
+    const graph = buildForgeGraph({
+      emitStage: () => {},
+      artifacts,
+      transcribeArtifacts: fakeTranscribe(),
+    }).compile({
       checkpointer: new MemorySaver(),
     });
     return { graph, calls, decisionsSeen, progress };
@@ -153,7 +202,6 @@ describe("Forge 图 interrupt / resume", () => {
     const calls: string[] = [];
     const artifacts: ForgeArtifactSource = {
       prepare: async () => ({}),
-      transcribe: async () => ({}),
       structureBatch: async () => {
         calls.push("structureBatch");
         return { chains: [], failureCount: 1 };
@@ -169,7 +217,11 @@ describe("Forge 图 interrupt / resume", () => {
       },
       readProgress: async () => progress,
     };
-    const graph = buildForgeGraph({ emitStage: () => {}, artifacts }).compile({
+    const graph = buildForgeGraph({
+      emitStage: () => {},
+      artifacts,
+      transcribeArtifacts: fakeTranscribe(),
+    }).compile({
       checkpointer: new MemorySaver(),
     });
     const config = { configurable: { thread_id: "job-loop" } };
@@ -195,13 +247,16 @@ describe("Forge 图 interrupt / resume", () => {
     };
     const artifacts: ForgeArtifactSource = {
       prepare: async () => ({}),
-      transcribe: async () => ({}),
       structureBatch: async () => ({ failureCount: 1 }),
       retryBatch: async () => ({ failureCount: 1, failureIndexes: [2] }),
       finalize: async () => ({ stage: "done" }),
       readProgress: async () => progress,
     };
-    const graph = buildForgeGraph({ emitStage: () => {}, artifacts }).compile({
+    const graph = buildForgeGraph({
+      emitStage: () => {},
+      artifacts,
+      transcribeArtifacts: fakeTranscribe(),
+    }).compile({
       checkpointer: new MemorySaver(),
     });
     const config = { configurable: { thread_id: "job-rounds" } };
