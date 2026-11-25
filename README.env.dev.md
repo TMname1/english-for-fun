@@ -37,6 +37,10 @@ docker compose 会启动：
 MinIO 账号可用根目录 `.env` 的 `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` 覆盖（改了的话，
 下面 `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` 也要同步改）。
 
+`docker compose up -d` **不会**启动 Langfuse（它在 `langfuse` profile 里，见 §3.5）。
+显式起它时会额外占用：`3002`（UI）+ `127.0.0.1` 上的 `3030`（worker）/ `8124`（ClickHouse HTTP）/
+`9095`、`9096`（对象存储与控制台）/ `6380`（Redis）/ `5454`（Postgres）——都避开上面 dev 已用的端口。
+
 首次启动后跑 `pnpm db:init` 建表。
 
 ## 一、后端 API（`apps/api/.env`）
@@ -155,18 +159,37 @@ API_BASE="http://localhost:3001"
 
 后端通过 `runner-client` 以子进程方式跑 `pipeline-runner`，会传入：`FORGE_PHASE`（`transcribe`\|`structure`\|`structure-resolve`）、`FORGE_OUT_DIR`、`FORGE_MEDIA_PATH`、`FORGE_TITLE`、`FORGE_TYPE`（`dialogue`\|`music`）、`FORGE_CLIPS`（`[{start,end}]` JSON）、`FORGE_LANGUAGE`、`FORGE_DESC`。仅在手动跑 CLI/子进程时才需要了解。
 
-### 3.5 编排层开关与 LangSmith 调试（可选）
+### 3.5 编排层开关与追踪调试（可选）
 
-| 变量                          | 必填 | 默认值                            | 用途                                                                                                                    |
-| ----------------------------- | ---- | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `FORGE_ORCHESTRATOR`          | 否   | `graph`                           | 编排层实现：`graph`（LangGraph `StateGraph`）/ `legacy`（重构前的命令式阶段函数）。改回 `legacy` 即回滚，无需重新构建。 |
-| `FORGE_GRAPH_CHECKPOINT_KEEP` | 否   | `8`                               | 每个任务保留的 checkpoint 份数（含最近的中断态，须 ≥2）；调小可减小 `graph.checkpoint.json`。                           |
-| `LANGSMITH_TRACING`           | 否   | `false`                           | 设为 `true` 才把图的节点/LLM 调用上报到 LangSmith（需要 `LANGSMITH_API_KEY`）；只在本机调图时不用开。                   |
-| `LANGSMITH_ENDPOINT`          | 否   | `https://api.smith.langchain.com` | LangSmith 域名；EU 区改成 `https://eu.api.smith.langchain.com`。                                                        |
-| `LANGSMITH_API_KEY`           | 否   | 空                                | 上报 tracing / 用 Studio 时填。                                                                                         |
+| 变量                           | 必填 | 默认值                            | 用途                                                                                                                    |
+| ------------------------------ | ---- | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `FORGE_ORCHESTRATOR`           | 否   | `graph`                           | 编排层实现：`graph`（LangGraph `StateGraph`）/ `legacy`（重构前的命令式阶段函数）。改回 `legacy` 即回滚，无需重新构建。 |
+| `FORGE_GRAPH_CHECKPOINT_KEEP`  | 否   | `8`                               | 每个任务保留的 checkpoint 份数（含最近的中断态，须 ≥2）；调小可减小 `graph.checkpoint.json`。                           |
+| `LANGSMITH_TRACING`            | 否   | `false`                           | 设为 `true` 才把图的节点/LLM 调用上报到 LangSmith（需要 `LANGSMITH_API_KEY`）；只在本机调图时不用开。                   |
+| `LANGSMITH_ENDPOINT`           | 否   | `https://api.smith.langchain.com` | LangSmith 域名；EU 区改成 `https://eu.api.smith.langchain.com`。                                                        |
+| `LANGSMITH_API_KEY`            | 否   | 空                                | 上报 tracing / 用 Studio 时填。                                                                                         |
+| `LANGFUSE_BASE_URL`            | 否   | `https://cloud.langfuse.com`      | 本地自托管填 `http://localhost:3002`（见下）。                                                                          |
+| `LANGFUSE_PUBLIC_KEY`          | 否   | 空                                | 与 `LANGFUSE_SECRET_KEY` **同时**有值才启用；任一为空则整条追踪自动关闭（fail-open）。                                  |
+| `LANGFUSE_SECRET_KEY`          | 否   | 空                                | 同上。本地自托管栈起好后用 `LANGFUSE_INIT_PROJECT_*` 的默认值。                                                         |
+| `LANGFUSE_TRACING`             | 否   | `1`                               | 设 `0` 强制关闭（排障时排除追踪干扰）。                                                                                 |
+| `LANGFUSE_TRACING_ENVIRONMENT` | 否   | `development`                     | Langfuse 里的 environment 标签，用来区分本地/线上。                                                                     |
+
+**Langfuse（追踪 LangGraph 图、节点与每次 LLM 调用）**：本地自托管栈已并入根 `docker-compose.yml`，
+和 db/minio 一起由 `pnpm docker:start` 拉起，不单独挂 profile：
+
+```bash
+pnpm docker:start   # 起 db/minio + langfuse-web/worker/clickhouse/redis/postgres/minio
+pnpm docker:stop    # 停
+pnpm docker:down    # 删容器（数据卷保留）
+```
+
+界面 `http://localhost:3002`（默认 `dev@local.test` / `langfuse1234`）。端口是特意错开的：3000 留给
+Nuxt dev，8124/9095/9096/6380/5454 避开 dev 的 minio 与 db。首次启动 ClickHouse 要 1-2 分钟。
+`apps/api/.env.example` 里的 `LANGFUSE_PUBLIC_KEY` / `SECRET_KEY` 就是 compose 预置的那对，直接可用。
 
 本地只想调 forge 的图（不需要 DB、OSS 和整个 Nest）：根目录 `pnpm dev:langsmith` 起 LangGraph Studio
 （图 API `:2024`，Studio 链接见启动横幅），入口与 Input 示例见 `apps/api/src/forge/core/README.md` §8.2。
+注意 Studio 那条链路不接 Langfuse（它自己调 invoke，塞不进 callbacks），看 trace 请跑真实流水线。
 
 ### 最小可用配置（在 `apps/api/.env` 的 FORGE\_\* 段填 Key，参考 `.env.example`）
 
