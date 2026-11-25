@@ -108,18 +108,18 @@ if (state.round >= MAX_REVIEW_ROUNDS) throw new Error("[forge] 已连续 N 轮�
 
 `state.ts` 里 `ForgeState` 的 channel 全部是**覆盖式** reducer（`(_prev, next) => next`）：
 
-| 字段                              | 含义                                                                  | 谁写                                         |
-| --------------------------------- | --------------------------------------------------------------------- | -------------------------------------------- |
-| `jobId`                           | 与 `thread_id` 相同，仅日志/交叉校验                                  | 入口                                         |
-| `outDir`                          | 产物绝对路径，所有磁盘 IO 的根                                        | `prepare`                                    |
-| `params`                          | `mediaPath` / `title` / `description` / `type` / `language` / `clips` | 入口 + `prepare` 回写 clips                  |
-| `stage`                           | 当前阶段（`transcoding` … `done`）                                    | 各节点                                       |
-| `transcriptStat`                  | 转写摘要（段数 / 是否词级 / 切片数）                                  | `transcribe`                                 |
-| `chains`                          | 结构化产物 `DraftChain[]`                                             | `structureBatch` / `retryBatch` / `finalize` |
-| `failureCount` / `failureIndexes` | 失败句数与下标（边判定用）                                            | `structureBatch` / `retryBatch`              |
-| `round`                           | 已进入 `reviewGate` 的轮次                                            | `reviewGate`                                 |
-| `decisions`                       | 前端决策，来自 `Command({resume})`                                    | `reviewGate`                                 |
-| `statementCount` / `alignRate`    | 收尾统计                                                              | `structureBatch` / `finalize`                |
+| 字段                              | 含义                                                                                | 谁写                                         |
+| --------------------------------- | ----------------------------------------------------------------------------------- | -------------------------------------------- |
+| `jobId`                           | 与 `thread_id` 相同，仅日志/交叉校验                                                | 入口                                         |
+| `outDir`                          | 产物绝对路径，所有磁盘 IO 的根                                                      | `prepare`                                    |
+| `params`                          | `mediaPath`（必填）/ `title`（必填）/ `description` / `type` / `language` / `clips` | 入口 + `prepare` 回写 clips                  |
+| `stage`                           | 当前阶段（`transcoding` … `done`）                                                  | 各节点                                       |
+| `transcriptStat`                  | 转写摘要（段数 / 是否词级 / 切片数）                                                | `transcribe`                                 |
+| `chains`                          | 结构化产物 `DraftChain[]`                                                           | `structureBatch` / `retryBatch` / `finalize` |
+| `failureCount` / `failureIndexes` | 失败句数与下标（边判定用）                                                          | `structureBatch` / `retryBatch`              |
+| `round`                           | 已进入 `reviewGate` 的轮次                                                          | `reviewGate`                                 |
+| `decisions`                       | 前端决策，来自 `Command({resume})`                                                  | `reviewGate`                                 |
+| `statementCount` / `alignRate`    | 收尾统计                                                                            | `structureBatch` / `finalize`                |
 
 两条约定：
 
@@ -127,6 +127,30 @@ if (state.round >= MAX_REVIEW_ROUNDS) throw new Error("[forge] 已连续 N 轮�
    否则 checkpoint 会被复制多份、随产物上传而膨胀。
 2. **`chains` 用覆盖而不是按 index 合并**：resolve 轮次要能「删掉」某些句，合并式 reducer
    无法表达删除（被删的 index 会从上一版里留下来）。
+
+### 必填从哪来：`ForgeParams`（入口）+ `ForgeInputSchema`（Studio / invoke）
+
+- `ForgeParams`（TS interface，入口用）：`mediaPath` / `title` 是 **required string**。缺了 `prepare`
+  必然写不出 `meta.json`，所以类型上就不给 optional —— 调用方漏字段直接编译不过。
+- `ForgeInputSchema`（zod，`state.ts`）：图的 **input schema**，在 `build.ts` 里以
+  `new StateGraph({ state: ForgeState, input: ForgeInputSchema })` 挂上。它同时是
+  `graph.invoke` 的入参校验（少传 `params` 直接报 Required）和 Studio Input 面板的必填来源。
+- **为什么非要多这一份 zod**：Studio 的 schema 先取运行时 schema，取不到才静态解析 TS 类型；
+  而静态解析里 ts-json-schema-generator 的 `required` 被写死成 `false`
+  （`buildGenerator(program)` 走默认参数），所以**用 `Annotation.Root` 定义 state 时，
+  Studio 里所有字段永远显示 optional**，改 TS 的 `?` 没用。挂 zod `input` 后走运行时
+  `toJsonSchema`，`params.required = ["mediaPath","title","type","language"]` 才生效。
+- state 仍用 `Annotation`，不要换成裸 zod object：`getChannelsForSchema` 只认
+  `schemaMetaRegistry` 里的 default，zod 的 `.default()` 不会变成通道默认值，
+  未赋值字段会变 `undefined`（`state.round + 1` → NaN）。
+- **`jobId` / `outDir` 在 `ForgeInputSchema` 里是 `.optional()`**（Studio 上不标必填）：
+  `jobId` 只用于日志与 checkpoint 归属校验，图内节点不读它，省略后留在空串默认值；
+  `outDir` 省略/为空时由 `prepareRun` 回落 `config.defaultOutRoot/<runId>`。只有
+  `params` 是必填对象 —— 它内部的 `mediaPath` / `title` 才是真正「缺了就启动失败」的字段。
+- 配套的入口联合类型：`GraphRunInput`（`run.ts`）、`ForgeRunnerParams`（`runner-client.ts`）、
+  `PhaseInput`（`pipeline-runner.ts`）都按阶段区分 —— **只有 `transcribe` 要求媒体与标题**，
+  `structure-resolve` 只给 `jobId` / `outDir`。图本身不读环境变量，直接 `graph.invoke`
+  就得自己把 `params.mediaPath` 传全。
 
 ---
 
@@ -137,11 +161,12 @@ if (state.round >= MAX_REVIEW_ROUNDS) throw new Error("[forge] 已连续 N 轮�
 | `build.ts`             | 拓扑：`addNode` / `addEdge` / `addConditionalEdges`，导出 `GRAPH_VERSION` 与可移植的类型别名         |
 | `nodes.ts`             | 节点薄封装：只负责「调 artifacts + 决定返回哪个 state 更新」；`reviewGate` 是纯节点                  |
 | `artifacts.ts`         | 节点的磁盘/LLM 实现面（`ForgeArtifactSource` 接口 + `ForgeArtifacts` 实现 + `MAX_REVIEW_ROUNDS`）    |
-| `state.ts`             | `ForgeState` channel 定义与 `ForgeParams` / `TranscriptStat` 类型                                    |
+| `state.ts`             | `ForgeState` channel 定义、`ForgeParams` / `ForgeInputSchema`（zod，供 Studio / invoke 校验）        |
 | `events.ts`            | 阶段事件发射器：单调序号过滤，映射成 stdout `{event:"stage"}` JSON Lines                             |
 | `run.ts`               | 阶段入口（`transcribe` / `structure` / `structure-resolve`）：组 config/Command、判终态、`canResume` |
 | `file-checkpointer.ts` | 单文件 checkpointer（`outDir/graph.checkpoint.json`），带 `threadId` / `graphVersion` 校验           |
 | `dev-entry.ts`         | LangGraph Studio 调试入口（`MemorySaver`，不参与生产）                                               |
+| `studio-trace.ts`      | Studio 的追踪根：透明代理编译后的图，把 `runName` + 根 handler 注入 invoke config（见 §7.1）         |
 
 ---
 
@@ -164,6 +189,29 @@ if (state.round >= MAX_REVIEW_ROUNDS) throw new Error("[forge] 已连续 N 轮�
 # 完整跑（真实 ffmpeg / ASR / LLM，会读 apps/api/.env）
 pnpm dev:langsmith
 ```
+
+### 7.1 Studio 的 trace：一次跑一条 root
+
+生产链路由 `run.ts` 的 `buildRunConfig` 把根 handler 挂在 `graph.invoke(config.callbacks)` 上，
+LangChain 再经 AsyncLocalStorage 继承给节点与每次 `ChatOpenAI` —— 一次跑 = 一条 trace，
+名字 `forge-<phase>`。
+
+Studio 没有这个位置：`langgraphjs dev` 的 API server 自己拼 config 调
+`graph.streamEvents(...)`，里面没有 `callbacks`。如果不管，`llm-client` 的兜底逻辑会给
+**每次 `ChatOpenAI` 各挂一份 handler**，一次流水线在 Langfuse 里就散成几十条 root
+observation（`dev-entry.ts` 因此调了 `disableFallbackTracing()` 把兜底关掉）。
+
+`studio-trace.ts` 的 `withRunRoot()` 用 Proxy 补上这个缺口：
+
+- 只拦 6 个执行入口（`invoke` / `ainvoke` / `stream` / `astream` / `streamEvents` / `astreamEvents`），
+  把 `runName: forge-<phase>` 与一个根 handler 合并进 config；
+- 其余属性（`getState` / `updateState` / `getGraph` …）原样转发并 bind 回真实例 —— Pregel 有
+  `#streamEventsV3` 这类私有方法，`this` 是 Proxy 就会抛 TypeError；
+- 不用 `graph.withConfig()`：那会把图包成 `RunnableBinding`，Studio 的 thread / interrupt 语义全丢。
+
+phase 判定：普通 input → `forge-transcribe`；`Command({resume})` → `forge-structure-resolve`
+（用 `isCommand()` 的 `lg_name` 判定，跨 `@langchain/langgraph` 副本时 `instanceof` 恒为 false）。
+Langfuse 的 sessionId 取 `configurable.thread_id`，同一个 thread 的多轮 resume 会串成一条会话。
 
 Studio 的 Input 给一条最小 state：
 
@@ -188,4 +236,5 @@ Studio 的 Input 给一条最小 state：
 ```
 
 单测见 `../tests/graph/build.spec.ts`（注入假 artifacts，覆盖正常流、中断/恢复、多轮上限、
-决策校验）。
+决策校验）与 `../tests/graph/studio-trace.spec.ts`（覆盖 Proxy 注入 runName/handler、phase 判定、
+私有方法 bind、属性写回真实例）。
