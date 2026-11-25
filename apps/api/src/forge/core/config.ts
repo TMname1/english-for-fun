@@ -122,6 +122,21 @@ export const config = {
   langfuseBaseUrl: env("LANGFUSE_BASE_URL", "https://cloud.langfuse.com"),
   /** 环境标识（Langfuse 里按 environment 过滤） */
   langfuseEnvironment: env("LANGFUSE_TRACING_ENVIRONMENT", "development"),
+
+  /**
+   * Langfuse Prompt Management：提示词托管在 Langfuse，运行时按 label 拉取。
+   * 复用上面的 PUBLIC/SECRET/BASE_URL；LANGFUSE_PROMPTS=0 可单独关掉提示词托管
+   * （只关拉取，不影响追踪）。拉取失败一律回退到代码里的本地常量（fail-open）。
+   */
+  langfusePromptsEnabled: env("LANGFUSE_PROMPTS", "1") !== "0",
+  /** 拉哪个 label（Langfuse 概念：production / latest / 自定义） */
+  langfusePromptLabel: env("LANGFUSE_PROMPT_LABEL", "production"),
+  /** 进程内提示词缓存时长（毫秒）：一次任务只拉一次，改完提示词也无需重启即可生效 */
+  langfusePromptCacheTtlMs: envInt("LANGFUSE_PROMPT_CACHE_TTL_MS", 60_000),
+  /** 句子分析（组装链）提示词在 Langfuse 中的名字 */
+  sentencePromptName: env("FORGE_PROMPT_SENTENCE_NAME", "forge-sentence-chain"),
+  /** 预处理（拆句）提示词在 Langfuse 中的名字 */
+  preprocessPromptName: env("FORGE_PROMPT_PREPROCESS_NAME", "forge-preprocess-split"),
 } as const;
 
 export function createRunId(date = new Date()): string {

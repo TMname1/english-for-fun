@@ -11,7 +11,8 @@ import type {
 } from "./types";
 import { config } from "./config";
 import { callLlmJson } from "./llm-client";
-import { buildMessages } from "./prompt";
+import { buildMessages, loadSentencePrompt } from "./prompt";
+import { withPrompt } from "./prompt-store";
 import { buildTokenUniverse, sentenceWordView } from "./words";
 
 // 传输层（ChatOpenAI + 三级降级 + 失败分类）已迁到 llm-client；这里再导出，
@@ -356,7 +357,11 @@ async function generateChainForSentence(
   wordStart: number,
   label: string,
 ): Promise<{ statements: DraftStatement[]; spans: StatementSpan[] }> {
-  const raw = await callLlmJson(buildMessages(words) as ChatMessage[]);
+  // 提示词从 Langfuse Prompt Management 取（带缓存 + 本地兜底），并把版本关联到本次 trace
+  const prompt = await loadSentencePrompt();
+  const raw = await withPrompt(prompt, () =>
+    callLlmJson(buildMessages(words, prompt.text) as ChatMessage[]),
+  );
   const parsed = draftRowsSchema.safeParse(coerceCourseOutput(raw));
   if (!parsed.success) {
     throw new SentenceContentError(
