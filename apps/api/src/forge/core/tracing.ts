@@ -18,6 +18,8 @@
  *   3. **fail-open**：没配 key、SDK 起不来、初始化抛错，一律降级为「不追踪」，
  *      绝不因为可观测性把流水线搞挂。
  */
+import { basename } from "node:path";
+
 import { CallbackHandler } from "@langfuse/langchain";
 import { LangfuseSpanProcessor } from "@langfuse/otel";
 import { NodeSDK } from "@opentelemetry/sdk-node";
@@ -122,6 +124,38 @@ function ensureStarted(): boolean {
 }
 
 /**
+ * legacy（命令式）编排的兜底 handler：挂在**模型构造器**上（ChatOpenAI / ASR ChatModel 共用）。
+ *
+ * legacy 路径没有 `graph.invoke` 这个根，callbacks 无从经 AsyncLocalStorage 继承，
+ * 只能在模型构造器上挂。**图内必须返回空数组** —— 否则同一次调用会被 run.ts
+ * 的图根 handler 与这里的 handler 各报一次（CallbackManager.addHandler 不去重）。
+ *
+ * 判断用 `insideGraphInvoke()` 而不是 `config.orchestrator`：图因 checkpoint 不可用而
+ * 降级 legacy 时，orchestrator 仍是 graph，但实际跑的是 legacy，那种情况必须挂。
+ * Studio 入口同理（根 handler 挂在 invoke config 上，见 studio-trace.ts），
+ * 由 `isFallbackTracingDisabled()` 一次性关掉。
+ *
+ * 进程内只造一个实例：LLM 与 ASR 共用同一 sessionId/tags，legacy 下每条模型调用
+ * 各成一条 trace（历史行为，未变）。
+ */
+let legacyHandlerReady = false;
+let legacyHandler: CallbackHandler | null = null;
+
+export function legacyModelCallbacks(): CallbackHandler[] {
+  if (insideGraphInvoke() || isFallbackTracingDisabled()) return [];
+  if (!legacyHandlerReady) {
+    legacyHandlerReady = true;
+    const outDir = process.env.FORGE_OUT_DIR;
+    legacyHandler = newHandler({
+      // pipeline-runner 会把产物目录放进 FORGE_OUT_DIR，用它当会话 id 把一轮任务串起来
+      sessionId: outDir ? basename(outDir) : undefined,
+      tags: ["forge:legacy"],
+    });
+  }
+  return legacyHandler ? [legacyHandler] : [];
+}
+
+/**
  * 造一个挂在 LangChain config.callbacks 上的 handler。
  * 未启用追踪时返回 null，调用方用 `handler ? {callbacks:[handler]} : {}` 展开即可。
  */
@@ -164,4 +198,6 @@ export function resetTracingForTest(): void {
   initAttempted = false;
   graphInvokeDepth = 0;
   fallbackTracingDisabled = false;
+  legacyHandlerReady = false;
+  legacyHandler = null;
 }

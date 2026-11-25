@@ -4,7 +4,15 @@
  * 结构约束（json_schema + zod + validateRowIndexes）由代码承担，
  * 这里保留教学法（六步拆句：谓语 → 主干 → 从句 → 非谓语 → 修饰/插入 → 翻译整句）、
  * 一条正例和一条反例，尽量精简——一次课程会发起与句子数等量的模型调用。
+ *
+ * 这份文本是 **本地兜底**：正常运行时提示词从 Langfuse Prompt Management 拉取
+ * （见 prompt-store.ts），只有未配置 key、拉取失败或 LANGFUSE_PROMPTS=0 时才用它。
+ * 所以在 Langfuse 里改完提示词后，记得把同样的内容同步回这里，保持兜底一致。
  */
+import type { ManagedPrompt } from "./prompt-store";
+import { config } from "./config";
+import { getManagedPrompt } from "./prompt-store";
+
 export const SYSTEM_PROMPT = `你在为「蚯蚓学英语」把【一句英文】做成组装链：先把这句拆成短语碎片，再沿「短语 → 整句」一步步拼回这句完整的话，让用户学会拼出它。
 
 输入是一份【编号词表】：每行「编号 词」，编号从 0 开始，把词按编号顺序拼起来就是这句原句。
@@ -57,13 +65,22 @@ export function formatNumberedWords(words: string[]): string {
   return words.map((w, i) => `${i} ${w}`).join("\n");
 }
 
+/** 句子分析提示词在 Langfuse 中的名字（可用 FORGE_PROMPT_SENTENCE_NAME 覆盖） */
+export const SENTENCE_PROMPT_NAME = config.sentencePromptName;
+
+/** 取句子分析提示词：Langfuse 优先，失败回退 SYSTEM_PROMPT */
+export function loadSentencePrompt(): Promise<ManagedPrompt> {
+  return getManagedPrompt(SENTENCE_PROMPT_NAME, SYSTEM_PROMPT);
+}
+
 /** 一句一次调用：不再附带「上一次不合格」的纠错说明（校验失败不再自动重试） */
 export function buildMessages(
   words: string[],
+  systemPrompt: string = SYSTEM_PROMPT,
 ): Array<{ role: "system" | "user"; content: string }> {
   const last = words.length - 1;
   return [
-    { role: "system", content: SYSTEM_PROMPT },
+    { role: "system", content: systemPrompt },
     {
       role: "user",
       content:
