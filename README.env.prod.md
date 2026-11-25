@@ -110,14 +110,22 @@ S3_PRESIGN_EXPIRES_SECONDS="21600"
 后端发起的流水线子进程自动继承 API 进程的环境变量，**无需单独配置**。
 在生产服务器上手动跑 CLI（如 `forge:import`）时读的也是同一文件：
 
-| 变量                          | 生产取值                                | 说明                                                                                               |
-| ----------------------------- | --------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `FORGE_API_URL`               | 生产 API 地址                           | 课程导入目标。                                                                                     |
-| `AUTH_*`                      | 与生产 API 一致                         | 导入前自动登录用。                                                                                 |
-| `S3_*`                        | 与上文 OSS 配置一致                     | 视频与 JSON 产物上传目标。                                                                         |
-| `FORGE_ASR_*` / `FORGE_LLM_*` | 同 dev（见 `README.env.dev.md` 第三节） | ASR / LLM 的 Key 与模型配置。                                                                      |
-| `FORGE_ORCHESTRATOR`          | 不填（默认 `graph`）                    | 编排层实现；线上排障时可临时设 `legacy` 回滚到命令式实现，改完重启进程即生效，无需重新构建镜像。   |
-| `LANGSMITH_*`                 | 不填                                    | 仅当需要把线上跑图/LLM 调用上报 LangSmith 时填（`LANGSMITH_TRACING=true` + `LANGSMITH_API_KEY`）。 |
+| 变量                           | 生产取值                                | 说明                                                                                               |
+| ------------------------------ | --------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `FORGE_API_URL`                | 生产 API 地址                           | 课程导入目标。                                                                                     |
+| `AUTH_*`                       | 与生产 API 一致                         | 导入前自动登录用。                                                                                 |
+| `S3_*`                         | 与上文 OSS 配置一致                     | 视频与 JSON 产物上传目标。                                                                         |
+| `FORGE_ASR_*` / `FORGE_LLM_*`  | 同 dev（见 `README.env.dev.md` 第三节） | ASR / LLM 的 Key 与模型配置。                                                                      |
+| `FORGE_ORCHESTRATOR`           | 不填（默认 `graph`）                    | 编排层实现；线上排障时可临时设 `legacy` 回滚到命令式实现，改完重启进程即生效，无需重新构建镜像。   |
+| `LANGSMITH_*`                  | 不填                                    | 仅当需要把线上跑图/LLM 调用上报 LangSmith 时填（`LANGSMITH_TRACING=true` + `LANGSMITH_API_KEY`）。 |
+| `LANGFUSE_PUBLIC_KEY`          | Langfuse Cloud 项目的 pk                | 追踪 LangGraph 图/节点/每次 LLM 调用。与 `LANGFUSE_SECRET_KEY` 同时有值才启用。                    |
+| `LANGFUSE_SECRET_KEY`          | 对应的 sk                               | 任一为空 = 关闭追踪（fail-open，不影响流水线）。                                                   |
+| `LANGFUSE_BASE_URL`            | `https://cloud.langfuse.com`            | 线上**不自托管**，直连 Langfuse Cloud。                                                            |
+| `LANGFUSE_TRACING_ENVIRONMENT` | `production`                            | 用来在 Langfuse 里把线上与本地 trace 分开。                                                        |
+
+> **为什么线上不自托管 Langfuse**：完整栈（web/worker/ClickHouse/Postgres/Redis/MinIO）官方单机建议
+> 4 核 16G，精简后仍需额外 ~1.9G 常驻内存，当前 2 核 2G 的 ECS 放不下。走 Cloud 只需容器能**出站**
+> 访问 `443`，安全组入方向保持只开 22 不变，`apps/api/deploy/docker-compose.yml` 无需任何改动。
 
 ## 四、不需要部署 / 配置的项
 
