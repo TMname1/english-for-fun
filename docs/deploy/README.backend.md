@@ -21,6 +21,8 @@
 - **不能只上传 dist**：NestJS 是 tsc 编译，dist 非自包含，必须连同 Linux 版 node_modules 一起打包，这正是 Dockerfile 做的事。
 - **Tunnel 只要求出站，不要求入站**：cloudflared 主动连 Cloudflare 边缘，安全组入方向一个业务端口都不用开。但服务器**必须有公网出口**（EIP 或 NAT 网关）——无出口时 cloudflared 连不上 Cloudflare，隧道无法建立。
 - **未备案域名必须走 Tunnel**：大陆服务器对未备案域名的 80/443 入站会被阿里云阻断（.cc 等域名无法备案），直连方案不可行。
+- **素材上传必须是浏览器直传 OSS**：Cloudflare 对回源有 **100s 硬超时**（所有套餐一致，不可调），而本项目的 Tunnel 回源有效上行实测只有 ~47KB/s（cloudflared 落到了洛杉矶边缘 + 丢包）。走 API 中转时 8MB 素材都传不完，必然 524。现在前端先 `POST /forge/uploads/presign`（课程包配套视频走 `POST /course-pack/video/presign`）拿预签名 PUT，浏览器直接写 OSS，再用 `.../from-upload` 只带 `videoKey` 完成建任务/入库。**代价是 OSS 桶必须配 CORS**（见 [README.env.prod.md](../env/README.env.prod.md)）。
+- **旧 multipart 入口（`POST /forge/jobs`）只做兼容**：给缓存了旧前端产物的页面兜底；它会重新把素材经 Tunnel 拉到服务器，大文件必然 524，不要再用。
 - 内存预算：api ≤1G（含 forge/ffmpeg 子进程）、pg ≤512M、cloudflared ~30M，其余留给系统；可选 2G swap 兜底（见文末）。
 
 ## 前置条件
@@ -203,17 +205,19 @@ docker compose pull api && docker compose up -d api   # 迁移随启动自动跑
 
 ## 常见问题速查
 
-| 现象                                    | 处理                                                                                                                                    |
-| --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| api 反复重启                            | `docker compose logs api`：迁移失败查 `DATABASE_URL`/pg 是否 healthy；缺 env 查 `.env.prod`                                             |
-| 日志刷 `ECONNREFUSED 127.0.0.1:5432`    | `DATABASE_URL` 主机填成了 `localhost`，应改成服务名 `pg`；改后 `docker compose up -d --force-recreate api`（`restart` 不重读 env_file） |
-| 接着报 `password authentication failed` | 主机名已对但账号/密码不对：用户须是 `earthworm`、密码须与 `.env` 的 `POSTGRES_PASSWORD` 一致；含特殊字符要百分号转义                    |
-| CF 502 / Error 1033                     | `systemctl status cloudflared` 与 `journalctl -u cloudflared`：token 是否有效、面板 Service URL 是否 `localhost:3001`                   |
-| 浏览器登录不上但 curl 正常              | 必须走 https 域名（Secure Cookie）；前端域名需在 CORS 白名单                                                                            |
-| pull 超时                               | daemon.json 加速是否生效；ACR 是否 login；同地域试 VPC 端点                                                                             |
-| forge 失败                              | 查百炼 Key；`docker compose exec api node -e "console.log(require('ffmpeg-static'))"` 确认二进制存在                                    |
-| 容器被 OOMKill                          | `docker stats`；api 限额 1G、`--max-old-space-size=768` 已给子进程留量；必要时加 swap                                                   |
-| 服务器完全无出站                        | 查 EIP 是否绑定/欠费释放、VPC 是否有 NAT 网关 + SNAT；`curl -sI https://mirrors.aliyun.com` 验证                                        |
+| 现象                                    | 处理                                                                                                                                                                                              |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| api 反复重启                            | `docker compose logs api`：迁移失败查 `DATABASE_URL`/pg 是否 healthy；缺 env 查 `.env.prod`                                                                                                       |
+| 日志刷 `ECONNREFUSED 127.0.0.1:5432`    | `DATABASE_URL` 主机填成了 `localhost`，应改成服务名 `pg`；改后 `docker compose up -d --force-recreate api`（`restart` 不重读 env_file）                                                           |
+| 接着报 `password authentication failed` | 主机名已对但账号/密码不对：用户须是 `earthworm`、密码须与 `.env` 的 `POSTGRES_PASSWORD` 一致；含特殊字符要百分号转义                                                                              |
+| CF 502 / Error 1033                     | `systemctl status cloudflared` 与 `journalctl -u cloudflared`：token 是否有效、面板 Service URL 是否 `localhost:3001`                                                                             |
+| 浏览器登录不上但 curl 正常              | 必须走 https 域名（Secure Cookie）；前端域名需在 CORS 白名单                                                                                                                                      |
+| pull 超时                               | daemon.json 加速是否生效；ACR 是否 login；同地域试 VPC 端点                                                                                                                                       |
+| forge 失败                              | 查百炼 Key；`docker compose exec api node -e "console.log(require('ffmpeg-static'))"` 确认二进制存在                                                                                              |
+| 上传素材 524 / 按钮一直转圈             | 旧路径会把文件经 Tunnel 拉到服务器，100s 必超时。确认 Network 里有 `/forge/uploads/presign` 或 `/course-pack/video/presign`（直传）；再查 OSS 桶 CORS（控制台报 `blocked by CORS policy` 就是它） |
+| 直传后 403 SignatureDoesNotMatch        | 预签名过期（默认 10 分钟）或浏览器改写了签名头；刷新重试；检查服务器时间是否偏差过大（NTP）                                                                                                       |
+| 容器被 OOMKill                          | `docker stats`；api 限额 1G、`--max-old-space-size=768` 已给子进程留量；必要时加 swap                                                                                                             |
+| 服务器完全无出站                        | 查 EIP 是否绑定/欠费释放、VPC 是否有 NAT 网关 + SNAT；`curl -sI https://mirrors.aliyun.com` 验证                                                                                                  |
 
 ## 可选：2G swap（小内存保险丝）
 
