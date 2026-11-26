@@ -3,6 +3,7 @@
  *
  * 流程（每个 unit = 一个 clip 或整段）：
  *   1. `asrSentence`    转码 unit wav → 上传临时 OSS → captioner 异步任务 → 句级时间戳 → caption.json
+ *                       （这段模型调用封在 `captioner-model.ts`，Langfuse 里是一条 `caption` generation）
  *   2. `processingAudio` 句级时间戳装块（≤180s）→ ffmpeg 切块 → chunk-plan.json
  *   3. `asrWord`         逐块 asr-flash（并发）→ 中点去重 + 跨块碎片修复 → 每块一条 ASR 句子
  *                       → buildTranscriptFromSentences + preprocessTranscript → transcript.json

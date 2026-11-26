@@ -195,27 +195,32 @@ pnpm forge -- --audio song.mp3 --title "某首歌" --type music
 全部有合理默认，通常不用设；也可集中写进 `apps/api/.env`（参考 `.env.example`，
 已存在的进程环境变量优先于该文件；`.env` 已进包内 `.gitignore` 防泄漏 key）：
 
-| 变量                          | 默认                              | 说明                                                                                                                                                                                                                                  |
-| ----------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `FORGE_ASR_BASE_URL`          | 百炼 `multimodal-generation` 端点 | DashScope Qwen-Audio-ASR 原生接口地址（非 OpenAI 兼容）                                                                                                                                                                               |
-| `FORGE_ASR_MODEL`             | `qwen-audio-3.1-asr-flash`        | 非实时 ASR 模型；同步返回整段 text + 句/词级毫秒时间戳（流水线换算为秒）                                                                                                                                                              |
-| `FORGE_ASR_API_KEY`           | 空（**必填**）                    | 百炼 DashScope API Key（`sk-` 开头）                                                                                                                                                                                                  |
-| `FORGE_ASR_TIMEOUT_MS`        | 180000（3 分）                    | 单次转写请求超时；同步等待完整结果，长音频可调大。flash 同步版建议单段 ≤5 分钟，超长请用切片分段                                                                                                                                      |
-| `FORGE_LLM_BASE_URL`          | `http://localhost:11434/v1`       | OpenAI 兼容 chat 端点（ollama / DeepSeek / OpenAI…）                                                                                                                                                                                  |
-| `FORGE_LLM_MODEL`             | `tongyi-xiaomi-analysis-flash`    | 句子分析（结构化组装链）模型；与预处理模型分开配置，共用 base URL / API Key（见 `.env.example`）                                                                                                                                      |
-| `FORGE_PREPROCESS_MODEL`      | `qwen3.8-flash`                   | 预处理（拆句）模型；本地 ollama 时两个变量可设同一模型                                                                                                                                                                                |
-| `FORGE_LLM_API_KEY`           | `ollama`                          | 云端服务填真实 key                                                                                                                                                                                                                    |
-| `FORGE_LLM_MAX_TOKENS`        | 16000                             | 单次 LLM 输出上限（qwen-plus 支持 32768；本地开思考模式时可调大）                                                                                                                                                                     |
-| `FORGE_LLM_CONCURRENCY`       | 10                                | 一句一调用的并发上限：同时发起多少个句子的模型调用（不是把多少句丢给一次调用）                                                                                                                                                        |
-| `FORGE_LLM_REASONING_EFFORT`  | `none`                            | ollama 专用参数；非 ollama（如 DashScope）**必须置空**，留空串即不发送该字段                                                                                                                                                          |
-| `FORGE_LLM_ENABLE_THINKING`   | 空（不发送）                      | 思考开关（`enable_thinking`）；qwen3.8-flash 等默认开思考的云端模型设 `false`，否则思考吃光 max_tokens、生成看似卡死                                                                                                                  |
-| `FORGE_LLM_PREFLIGHT`         | `1`                               | LLM 调用前是否预检（服务连通/模型存在/显存余量）；设为 `0` 跳过                                                                                                                                                                       |
-| `FORGE_LLM_VRAM_STRICT`       | `1`                               | 显存估算不足时是否直接拦停；设为 `0` 仅警告（接受 CPU 卸载慢跑）                                                                                                                                                                      |
-| `FORGE_LLM_VRAM_MARGIN_MB`    | 512                               | 显存估算余量（KV cache + CUDA 上下文开销，MB）                                                                                                                                                                                        |
-| `FORGE_ORCHESTRATOR`          | `graph`                           | 编排层实现：`graph`（LangGraph StateGraph）/ `legacy`（重构前的命令式阶段函数）。出问题时改回 `legacy` 即可回滚，无需重新构建；旧任务无 checkpoint 时自动降级 legacy                                                                  |
-| `FORGE_GRAPH_CHECKPOINT_KEEP` | 8                                 | 文件 checkpointer 每个任务保留的 checkpoint 份数（含最近的中断态，须 ≥2）；调小可减小 `graph.checkpoint.json`                                                                                                                         |
-| `FORGE_API_URL`               | `http://localhost:3001`           | 导入目标 API                                                                                                                                                                                                                          |
-| `S3_*`                        | dev MinIO 默认值                  | 对象存储配置（`S3_ENDPOINT`/`S3_REGION`/`S3_ACCESS_KEY_ID`/`S3_SECRET_ACCESS_KEY`/`S3_BUCKET`/`S3_FORCE_PATH_STYLE`）；导入时视频与 JSON 产物上传到这里，与 `apps/api/.env` 保持一致，prod 换阿里云 OSS 见根目录 `README.env.prod.md` |
+| 变量                           | 默认                              | 说明                                                                                                                                                                                                                                  |
+| ------------------------------ | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `FORGE_ASR_BASE_URL`           | 百炼 `multimodal-generation` 端点 | DashScope Qwen-Audio-ASR 原生接口地址（非 OpenAI 兼容）                                                                                                                                                                               |
+| `FORGE_ASR_MODEL`              | `qwen-audio-3.1-asr-flash`        | 非实时 ASR 模型；同步返回整段 text + 句/词级毫秒时间戳（流水线换算为秒）                                                                                                                                                              |
+| `FORGE_ASR_API_KEY`            | 空（**必填**）                    | 百炼 DashScope API Key（`sk-` 开头）                                                                                                                                                                                                  |
+| `FORGE_ASR_TIMEOUT_MS`         | 180000（3 分）                    | 单次转写请求超时；同步等待完整结果，长音频可调大。flash 同步版建议单段 ≤5 分钟，超长请用切片分段                                                                                                                                      |
+| `FORGE_LLM_BASE_URL`           | `http://localhost:11434/v1`       | OpenAI 兼容 chat 端点（ollama / DeepSeek / OpenAI…）                                                                                                                                                                                  |
+| `FORGE_LLM_MODEL`              | `tongyi-xiaomi-analysis-flash`    | 句子分析（结构化组装链）模型；与预处理模型分开配置，共用 base URL / API Key（见 `.env.example`）                                                                                                                                      |
+| `FORGE_PREPROCESS_MODEL`       | `qwen3.8-flash`                   | 预处理（拆句）模型；本地 ollama 时两个变量可设同一模型                                                                                                                                                                                |
+| `FORGE_LLM_API_KEY`            | `ollama`                          | 云端服务填真实 key                                                                                                                                                                                                                    |
+| `FORGE_LLM_MAX_TOKENS`         | 16000                             | 单次 LLM 输出上限（qwen-plus 支持 32768；本地开思考模式时可调大）                                                                                                                                                                     |
+| `FORGE_LLM_CONCURRENCY`        | 10                                | 一句一调用的并发上限：同时发起多少个句子的模型调用（不是把多少句丢给一次调用）                                                                                                                                                        |
+| `FORGE_LLM_REASONING_EFFORT`   | `none`                            | ollama 专用参数；非 ollama（如 DashScope）**必须置空**，留空串即不发送该字段                                                                                                                                                          |
+| `FORGE_LLM_ENABLE_THINKING`    | 空（不发送）                      | 思考开关（`enable_thinking`）；qwen3.8-flash 等默认开思考的云端模型设 `false`，否则思考吃光 max_tokens、生成看似卡死                                                                                                                  |
+| `FORGE_LLM_PREFLIGHT`          | `1`                               | LLM 调用前是否预检（服务连通/模型存在/显存余量）；设为 `0` 跳过                                                                                                                                                                       |
+| `FORGE_LLM_VRAM_STRICT`        | `1`                               | 显存估算不足时是否直接拦停；设为 `0` 仅警告（接受 CPU 卸载慢跑）                                                                                                                                                                      |
+| `FORGE_LLM_VRAM_MARGIN_MB`     | 512                               | 显存估算余量（KV cache + CUDA 上下文开销，MB）                                                                                                                                                                                        |
+| `FORGE_ORCHESTRATOR`           | `graph`                           | 编排层实现：`graph`（LangGraph StateGraph）/ `legacy`（重构前的命令式阶段函数）。出问题时改回 `legacy` 即可回滚，无需重新构建；旧任务无 checkpoint 时自动降级 legacy                                                                  |
+| `FORGE_GRAPH_CHECKPOINT_KEEP`  | 8                                 | 文件 checkpointer 每个任务保留的 checkpoint 份数（含最近的中断态，须 ≥2）；调小可减小 `graph.checkpoint.json`                                                                                                                         |
+| `FORGE_API_URL`                | `http://localhost:3001`           | 导入目标 API                                                                                                                                                                                                                          |
+| `LANGFUSE_PROMPTS`             | `1`                               | 是否从 Langfuse 拉取提示词；`0` 只关提示词托管，不影响追踪（见 §8.3）                                                                                                                                                                 |
+| `LANGFUSE_PROMPT_LABEL`        | `production`                      | 拉哪个 label；改完提示词要把该 label 移到新版本，否则一直用旧版本                                                                                                                                                                     |
+| `LANGFUSE_PROMPT_CACHE_TTL_MS` | `60000`                           | `@langfuse/client` 的提示词缓存时长（毫秒，内部换算为秒）；过期后先返回旧值并后台刷新；调试可设 `0` 关闭缓存（每句都会拉）                                                                                                            |
+| `FORGE_PROMPT_SENTENCE_NAME`   | `forge-sentence-chain`            | 句子链提示词在 Langfuse 中的 name，必须与界面里创建的完全一致                                                                                                                                                                         |
+| `FORGE_PROMPT_PREPROCESS_NAME` | `forge-preprocess-split`          | 拆句提示词在 Langfuse 中的 name                                                                                                                                                                                                       |
+| `S3_*`                         | dev MinIO 默认值                  | 对象存储配置（`S3_ENDPOINT`/`S3_REGION`/`S3_ACCESS_KEY_ID`/`S3_SECRET_ACCESS_KEY`/`S3_BUCKET`/`S3_FORCE_PATH_STYLE`）；导入时视频与 JSON 产物上传到这里，与 `apps/api/.env` 保持一致，prod 换阿里云 OSS 见根目录 `README.env.prod.md` |
 
 ## 6. ASR 转写配置（阿里云百炼 Qwen-Audio-ASR）
 
@@ -235,12 +240,19 @@ pnpm forge -- --audio song.mp3 --title "某首歌" --type music
   音频只放构造参数、**不进 `messages`**：消息会被 callback 层序列化进 trace，5 分钟 wav 的 base64 约 13MB，会撑挂上报。
   因此 trace 里这条观测的 **input 是可读摘要**（文件/格式/采样率/时长/体积/语言提示），结构化字段走 `metadata.asr`，
   **output 是完整转写文本**；词级时间戳体积大且以 json 为准，留在 `transcript.raw.json`，不进 trace。
+- **captioner 同构**：句级打标也封成自定义 `BaseChatModel`（`core/captioner-model.ts` 的
+  `DashScopeCaptionerChatModel`），所以 `asrSentence` 节点在 Langfuse 里同样有一条 generation（见 §6.1）。
 
 ### 6.1 graph 编排的转写子图（captioner 句级 → 切块 → asr-flash 词级）
 
 `FORGE_ORCHESTRATOR=graph`（缺省）时，`transcribe` 是一个子图，三个节点串行：
 
 1. `asrSentence`：unit（clip 或整段）转码 16k wav → 上传**百炼临时 OSS**（`getPolicy` 表单上传，`oss://` + `X-DashScope-OssResourceResolve`）→ 提交 `qwen-audio-3.1-captioner` 异步任务 → 轮询 → 下载结果 → 取句级时间戳。
+   转码留在模型 span 之外（ffmpeg 不是模型调用）；上传之后的四步都在 `DashScopeCaptionerChatModel._generate` 里，
+   因此 Langfuse 中 `asrSentence` 节点下是一条名为 **`caption`** 的 generation（model = `qwen-audio-3.1-captioner`），
+   input 是可读摘要（文件名/时长/体积/unit/声道，无本地绝对路径），output 是「任务号 + 段数 + 轮询耗时 + source」摘要，
+   结构化字段走 `metadata.caption`；`spans` 只放 `additional_kwargs`（毫秒区间），不进上报。
+   每个 unit 一条，多个 clip 时按 unit 串行；轮询最长 `FORGE_CAPTIONER_POLL_TIMEOUT_MS`，失败会在该 generation 上标 ERROR。
 2. `processingAudio`：把相邻语音段累积成 ≤180s 的块（边界落在段边界，超长段等分），前后各加 200ms padding，ffmpeg 切块。
 3. `asrWord`：并发调 `qwen-audio-3.1-asr-flash` 拿词级时间戳 → 按「词中点落在归属窗口」去重 → 修复被块边界拆开的碎片词 → 每块一条 ASR 句子 → 复用 `buildTranscriptFromSentences` + `preprocessTranscript`。
 
@@ -276,7 +288,8 @@ ASR 返回的是整段文本 + 碎片词表：一个词可能被拦腰拆成多�
   （这一步手上有整段英文全文，比结构阶段只看词表译得准，故句级译文在此产出）。
   `transcript.json` 存预处理后的结果（GUI 人工校对看到的即完整句），`transcript.raw.json` 保留原始 ASR 结果供回溯。
 - 下游结构化与对齐不再做代码拼句：直接以 segment 为句子单位。
-- 结构阶段把 `segment.chinese` 作为**整句权威译文**发给模型（`prompt.ts` 的【本句权威中文】），
+- 结构阶段把 `segment.chinese` 作为**整句权威译文**注入 system 提示词的 `{{sentence_chinese}}` 变量
+  （缺省为「（无）」，提示词正文据此决定照抄还是自行翻译），
   碎片行中文只能从它切分/派生，整句行的 `chinese` 还会被 `overrideFullRowChinese` 强制覆盖一次；
   缺失时（旧 transcript / 段级降级 / 单词段）回退为模型自己翻译，行为与以前一致。
 - 输出契约改动对旧形状容错：模型若仍回 `{"sentences":[[0,1],[2,3]]}`，只当作没有句级中文，不会让预处理器失败。
@@ -386,6 +399,50 @@ pnpm dev:langsmith          # 根目录；等价于在 apps/api 里跑 langgraph
 
 - `--no-reload` 是为了绕开当前环境里 `tsx watch` + `--import preload` 启动即卡死（无任何输出）的问题；
   若后续 CLI/tsx 升级修好，把该参数去掉即可恢复改代码自动重启。
+
+## 8.3 提示词托管：一条 system + Langfuse 变量
+
+两句提示词都托管在 Langfuse Prompt Management，代码里的常量只是**本地兜底**：
+
+| Langfuse name（可改 env） | 本地兜底                                      | 必须包含的变量                                                       |
+| ------------------------- | --------------------------------------------- | -------------------------------------------------------------------- |
+| `forge-sentence-chain`    | `prompt.ts` 的 `SYSTEM_PROMPT`                | `{{words}}` `{{word_count}}` `{{last_index}}` `{{sentence_chinese}}` |
+| `forge-preprocess-split`  | `preprocess.ts` 的 `PREPROCESS_SYSTEM_PROMPT` | `{{transcript}}` `{{words}}` `{{note}}`                              |
+
+**形态**：一次调用只发**一条 system 消息**。静态指令全在 Langfuse 文本里，动态值（编号词表、整段转写、
+句级中文、重试诊断）用变量注入；代码里不再拼 user 消息（`json_object` 降级档需要 "json" 关键词时，
+也是追加到 system，而不是自造一条 user）。变量统一放在提示词末尾的 `## 本次输入`，静态前缀逐字一致
+才能命中 provider 的前缀缓存。
+
+**空值**用哨兵「（无）」而不是空串：Text 提示词没有条件语法，正文写成「不为（无）就照抄 / 为（无）就自行翻译」。
+句级中文缺失时 `{{sentence_chinese}}` 取「（无）」，整句行仍由 `overrideFullRowChinese` 用真实译文覆盖。
+
+**取模板与渲染**都交给官方 `@langfuse/client`（`prompt-store.ts` 只是薄适配器）：
+`client.prompt.get(name, { type: "text", label, cacheTtlSeconds, fetchTimeoutMs: 3000, maxRetries: 0 })`
+→ `TextPromptClient.compile(vars)`，即 **Mustache** 渲染（SDK 已把 `mustache.escape` 置为恒等函数，
+`& < > "` 不会被 HTML 转义、变量值也不会被二次渲染）。因此**未提供的变量会渲染成空串**（旧实现保留 `{{x}}`）；
+`{{#section}}`、`{{>partial}}`、`{{=…=}}`、`{{{x}}}` 等控制语法会被适配器拒绝并回退 —— 提示词里只允许 `{{变量}}`。
+
+**必须满足的硬条件**（不满足会回退本地兜底，日志会点名原因）：
+
+1. 类型必须是 **Text**。SDK 的 `type` 参数运行时不校验（远端是 chat 时会返回消息数组），
+   适配器用 `typeof prompt === "string"` 拦截，命中即回退；
+2. **version 必须是正整数**，且 `LANGFUSE_PROMPT_LABEL` 指向该版本 —— 缺失版本以前会被兜成 `0`，
+   SDK 校验能过但后端关联不到，表现就是 prompt 详情页的 **Number of Observations 恒为 0**；
+3. 模板必须包含上表全部变量 —— 否则视为不可用（避免把「没有输入」的提示词发给模型），
+   这也是「Langfuse 里还是旧版无变量提示词」时唯一的防线；
+4. 正文不得含 Mustache 控制语法，且不能有未闭合的 `{{`（会抛 `Unclosed tag`）。
+
+**观测计数原理**：`withPrompt` → `propagateAttributes({prompt:{name,version}})`，由
+`LangfuseSpanProcessor.onStart` 从父上下文把 `langfuse.observation.prompt.name/version` 写到 generation 上，
+Langfuse 后端按 `(name, version)` 统计 observations。本地兜底不写这两个属性（不伪装版本），
+但会在 trace metadata 里留 `prompt_source=fallback`，便于区分「模型正常但没关联提示词」。
+`tests/prompt-link.spec.ts` 用内存 exporter 直接断言这两个属性，防止再出现「静默 0 观测」。
+
+**改提示词的顺序**：先在 Langfuse 新建版本（含上表变量）→ 把 `production` label 移过去 →
+代码里的兜底常量同步成同一份文本（否则兜底与线上行为不一致）。缓存由 SDK 管理（默认 60s）；
+过期后先返回旧值并在后台刷新，刷新失败只打一条 SDK 英文 warn，`prompt_source` 仍显示 `remote`（**没有 stale 标记**）。
+Langfuse 不可达时，适配器的「单飞 + 30s 负缓存」保证每个 name 在窗口内最多 1 次失败请求、1 条中文 error。
 
 ## 9. 故障排查
 

@@ -1,12 +1,12 @@
 import { z } from "zod";
 
 import type { AsrSegmentParts, AsrWordInfo, QwenAsrSentence } from "./asr";
-import type { ManagedPrompt } from "./prompt-store";
+import type { ManagedPrompt, PromptVars } from "./prompt-store";
 import type { Transcript, TranscriptSegment, TranscriptWord } from "./types";
 import { asrSegmentParts } from "./asr";
 import { config } from "./config";
 import { callLlmJson, mapWithConcurrency } from "./llm";
-import { getManagedPrompt, withPrompt } from "./prompt-store";
+import { compilePrompt, getManagedPrompt, PROMPT_EMPTY, withPrompt } from "./prompt-store";
 
 /**
  * 预处理：ASR 同步返回整段 text + 碎片词表（一个词可能被拦腰拆成 "Genu"+"inely"、
@@ -76,11 +76,13 @@ export function normalizePreprocessSentences(
 
 /**
  * 预处理系统提示词（**本地兜底**）：正常运行时从 Langfuse Prompt Management 拉取，
- * 未配置 key / 拉取失败 / LANGFUSE_PROMPTS=0 时用这份；名字见 PREPROCESS_PROMPT_NAME。
+ * 未配置 key / 拉取失败 / 变量不匹配 / LANGFUSE_PROMPTS=0 时用这份；名字见 PREPROCESS_PROMPT_NAME。
+ *
+ * 形态：一条 system 消息，静态指令 + 末尾「## 本次输入」变量区
+ * （`{{transcript}}` / `{{words}}` / `{{note}}`），代码不再拼 user 消息。
  */
 export const PREPROCESS_SYSTEM_PROMPT = `你在为「蚯蚓学英语」预处理英文语音转写结果：把一段连续转写划分成一个个完整句子，并给出每句的中文翻译。
 
-输入是整段文本和按顺序编号的词表（i 为词编号，word 为词文本）。
 注意：转写可能把一个词拦腰拆成相邻的多个碎片（如 "Genu"+"inely"、"I"+"'"+"ve"），它们属于同一个词，必须划在同一句，不得拆开。
 
 划分原则——尽量保留长难句，句子尽量越长越好：
@@ -105,38 +107,57 @@ export const PREPROCESS_SYSTEM_PROMPT = `你在为「蚯蚓学英语」预处理
 输出：{"sentences":[{"words":[0,1,2,3],"chinese":"我喜欢这个食物。"},{"words":[4,5],"chinese":"它很好。"}]}
 
 示例 2——词表编号 0..12 对应 "The book that she recommended, which I found in the library, was difficult."（一个长难句，定语从句和逗号都不切）
-输出：{"sentences":[{"words":[0,1,2,3,4,5,6,7,8,9,10,11,12],"chinese":"她推荐的那本我在图书馆找到的书，很难懂。"}]}`;
+输出：{"sentences":[{"words":[0,1,2,3,4,5,6,7,8,9,10,11,12],"chinese":"她推荐的那本我在图书馆找到的书，很难懂。"}]}
+
+## 本次输入
+整段文本：{{transcript}}
+词表（按 i 升序；每项 {"i":编号,"word":词文本}）：
+{{words}}
+
+【重试诊断】{{note}}
+若【重试诊断】为「（无）」，忽略本节；否则按诊断修正上一次输出。`;
 
 /** 拆句提示词在 Langfuse 中的名字（可用 FORGE_PROMPT_PREPROCESS_NAME 覆盖） */
 export const PREPROCESS_PROMPT_NAME = config.preprocessPromptName;
 
-/** 取拆句提示词：Langfuse 优先，失败回退 PREPROCESS_SYSTEM_PROMPT */
-export function loadPreprocessPrompt(): Promise<ManagedPrompt> {
-  return getManagedPrompt(PREPROCESS_PROMPT_NAME, PREPROCESS_SYSTEM_PROMPT);
+/** 拆句提示词必须包含的变量：远端模板缺任何一个都回退本地兜底（避免模型拿不到输入） */
+export const PREPROCESS_PROMPT_VARS = ["transcript", "words", "note"];
+
+/**
+ * 本轮调用的变量值。`note` 缺省用哨兵「（无）」（首次尝试没有诊断可给）；
+ * 词表 JSON 故意不含 start/end：句子时间戳由 mergeWordGroup 从 ASR 原词回填，
+ * 每词省一半以上 prompt token。
+ */
+export function buildPreprocessVars(text: string, words: AsrWordInfo[], note?: string): PromptVars {
+  return {
+    transcript: text,
+    words: JSON.stringify(
+      words.map((w, i) => ({
+        i,
+        word: w.word.word,
+      })),
+    ),
+    note: note?.trim() || PROMPT_EMPTY,
+  };
 }
 
+/** 取拆句提示词：Langfuse 优先，失败回退 PREPROCESS_SYSTEM_PROMPT */
+export function loadPreprocessPrompt(vars?: PromptVars): Promise<ManagedPrompt> {
+  return getManagedPrompt(PREPROCESS_PROMPT_NAME, PREPROCESS_SYSTEM_PROMPT, {
+    vars,
+    requiredVars: PREPROCESS_PROMPT_VARS,
+  });
+}
+
+/**
+ * 只发一条 system 消息：指令与变量都在提示词里。
+ * 变量用 `compilePrompt(prompt.template, buildPreprocessVars(...))` 在调用点编译
+ * （重试时 note 不同，但必须复用同一版本提示词）。
+ */
 export function buildPreprocessMessages(
-  text: string,
-  words: AsrWordInfo[],
-  note?: string,
-  systemPrompt: string = PREPROCESS_SYSTEM_PROMPT,
-): Array<{ role: "system" | "user"; content: string }> {
-  // 时间戳故意不发：模型只回词编号，句子 start/end 由 mergeWordGroup 从 ASR 原词回填，
-  // 少发 start/end 每个词省一半以上 prompt token（重试那次同样省）。
-  const list = words.map((w, i) => ({
-    i,
-    word: w.word.word,
-  }));
-  return [
-    { role: "system", content: systemPrompt },
-    {
-      role: "user",
-      content:
-        `请把下面的转写按语义划分成完整句子（尽量保留长难句，只在真正的独立句处切开），输出每句包含的词编号 words 和该句完整中文 chinese。\n` +
-        `整段文本：${text}\n词表（共 ${words.length} 个编号 0..${words.length - 1}）：\n${JSON.stringify(list)}` +
-        (note ? `\n\n${note}` : ""),
-    },
-  ];
+  systemPrompt: string,
+): Array<{ role: "system"; content: string }> {
+  return [{ role: "system", content: systemPrompt }];
 }
 
 /**
@@ -203,6 +224,11 @@ async function splitSegment(parts: AsrSegmentParts, label: string): Promise<Tran
   const attempts = 2;
   // 提示词只取一次（进程内有缓存），失败重试复用同一版本，避免两次尝试用了不同版本的提示词
   const prompt = await loadPreprocessPrompt();
+  // 显式 link 是双保险：propagateAttributes 是主路径，见 prompt-store.ts 的 withPrompt
+  const link =
+    !prompt.isFallback && prompt.version
+      ? { name: prompt.name, version: prompt.version }
+      : undefined;
   let lastError: unknown;
   for (let attempt = 1; attempt <= attempts; attempt++) {
     try {
@@ -210,11 +236,17 @@ async function splitSegment(parts: AsrSegmentParts, label: string): Promise<Tran
         attempt > 1
           ? `上一次输出不合格：${(lastError as Error).message}。请重新输出：各句词编号合起来恰好不重不漏覆盖 0..${parts.words.length - 1}，升序连续；每句的 chinese 必须非空。`
           : undefined;
+      // note 每次尝试不同，所以按模板重新编译；提示词版本（prompt）保持不变
+      const system = compilePrompt(
+        prompt.template,
+        buildPreprocessVars(parts.text, parts.words, note),
+      );
       const raw = await withPrompt(prompt, () =>
         callLlmJson(
-          buildPreprocessMessages(parts.text, parts.words, note, prompt.text),
+          buildPreprocessMessages(system),
           preprocessJsonSchema,
           config.preprocessModel,
+          link,
         ),
       );
       const parsed = preprocessSchema.safeParse(raw);
