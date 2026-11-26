@@ -4,9 +4,13 @@
 
 ########## builder：在 Linux 环境安装依赖并编译 ##########
 FROM node:22-bookworm-slim AS builder
+# ffmpeg-static 的 postinstall 默认去 github.com release 下载 ~40MB 二进制，
+# 国内经常长时间无响应（表现为构建"卡住"）。FFMPEG_BINARIES_URL 改走 npmmirror 镜像；
+# 回退：删掉该变量即恢复 github 直连。
 ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
     CYPRESS_INSTALL_BINARY=0 \
-    SKIP_INSTALL_SIMPLE_GIT_HOOKS=1
+    SKIP_INSTALL_SIMPLE_GIT_HOOKS=1 \
+    FFMPEG_BINARIES_URL=https://registry.npmmirror.com/-/binary/ffmpeg-static
 RUN corepack enable
 WORKDIR /repo
 
@@ -21,11 +25,15 @@ COPY packages/game-data-sdk/package.json packages/game-data-sdk/
 COPY packages/xingrong-courses/package.json packages/xingrong-courses/
 
 # pnpm 9 的 deploy 命令要求 inject-workspace-packages=true（仓库本身无 .npmrc，仅构建期临时写入）
-RUN printf 'inject-workspace-packages=true\n' > .npmrc
+# registry 指向 npmmirror：容器内没有宿主机的 npm 源配置，默认走 registry.npmjs.org 在国内很慢。
+# 回退：删掉 registry 那行即恢复官方源（若某个很新的包在镜像上尚未同步，需要回退）。
+RUN printf 'inject-workspace-packages=true\nregistry=https://registry.npmmirror.com\n' > .npmrc
 
 # 过滤安装 api 及其 workspace 依赖，避开 client 的 nuxt/cypress；
-# 不能加 --ignore-scripts：ffmpeg-static 需要 postinstall 下载 linux-x64 二进制
-RUN pnpm install --frozen-lockfile --filter api...
+# 不能加 --ignore-scripts：ffmpeg-static 需要 postinstall 下载 linux-x64 二进制。
+# store 用 BuildKit cache 挂载，跨构建复用下载产物，避免每次 lock 变动都全量重下。
+RUN --mount=type=cache,target=/root/.local/share/pnpm \
+    pnpm install --frozen-lockfile --filter api...
 
 COPY apps/api/ apps/api/
 COPY packages/schema/ packages/schema/
