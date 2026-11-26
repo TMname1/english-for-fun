@@ -1,10 +1,12 @@
 import { existsSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { extname, join } from "node:path";
+import { basename, extname, join } from "node:path";
 
 import { BadRequestException, Injectable, Logger, NotFoundException } from "@nestjs/common";
 
+import type { MediaUploadTicket } from "../common/media-upload";
 import type { StructureProgress } from "./core/types";
+import type { CreateForgeJobFromUploadDto } from "./dto/create-forge-job-from-upload.dto";
 import type { CreateForgeJobDto } from "./dto/create-forge-job.dto";
 import type { ResolveForgeFailuresDto } from "./dto/resolve-forge-failures.dto";
 // 【已停用 · 转录校对】仅 resumeJob 使用，该方法已注释保留（见下方 resumeJob 说明）。
@@ -13,6 +15,8 @@ import type { StartForgeJobDto } from "./dto/start-forge-job.dto";
 import type { ForgeJobRecord, ForgeJobStage } from "./job-store";
 import type { ForgeRunnerHandle } from "./runner-client";
 import { mediaKindOf } from "../common/media-ext";
+import { presignMediaUpload, verifyUploadedMedia } from "../common/media-upload";
+import { startUploadTmpSweeper } from "../common/upload-tmp";
 import { StorageService } from "../storage/storage.service";
 import { JobStore } from "./job-store";
 import { FORGE_OUTPUT_ROOT, spawnForgeRunner } from "./runner-client";
@@ -80,20 +84,70 @@ export class ForgeService {
   private readonly logger = new Logger(ForgeService.name);
   private readonly handles = new Map<string, ForgeRunnerHandle>();
   private readonly timeouts = new Map<string, NodeJS.Timeout>();
+  private stopUploadSweeper?: () => void;
 
   constructor(
     private readonly store: JobStore,
     private readonly storage: StorageService,
   ) {}
 
+  /** 中断上传会留下半截文件（multer 不清理），起一个低频清扫兜底 */
+  onModuleInit(): void {
+    this.stopUploadSweeper = startUploadTmpSweeper(this.logger);
+  }
+
+  onModuleDestroy(): void {
+    this.stopUploadSweeper?.();
+  }
+
+  /**
+   * 浏览器直传第一步：下发预签名 PUT（实现见 common/media-upload.ts）。
+   *
+   * 直传是为了绕开 Cloudflare 的 100s 回源超时——线上实测经 Tunnel 的有效上行只有 ~47KB/s，
+   * 8MB 素材根本传不完，必然 524。改为浏览器直接写 OSS 后，这条链路完全不参与大文件传输。
+   */
+  async presignUpload(fileName: string): Promise<MediaUploadTicket> {
+    const ticket = await presignMediaUpload(this.storage, fileName);
+    this.logger.log(`[forge:upload] 签发直传 URL key=${ticket.key}`);
+    return ticket;
+  }
+
+  /** 浏览器直传第二步：校验对象确实落地后建任务（不再接收 multipart 请求体） */
+  async createJobFromUploadedKey(dto: CreateForgeJobFromUploadDto): Promise<{ jobId: string }> {
+    const startedAt = Date.now();
+    const { key, size } = await verifyUploadedMedia(this.storage, dto.videoKey);
+
+    const defer = dto.defer === true || String(dto.defer) === "true";
+    const record = this.buildRecord({
+      fileName: basename(key),
+      title: dto.title,
+      type: dto.type,
+      language: dto.language,
+      desc: dto.desc,
+      defer,
+    });
+    this.logger.log(
+      `[forge:job] 创建 ${record.id}（直传）key=${key} size=${(size / 1024 / 1024).toFixed(2)}MB 校验 ${Date.now() - startedAt}ms defer=${defer}`,
+    );
+
+    if (!defer) {
+      void this.launchTranscribe(record);
+    }
+    return { jobId: record.id };
+  }
+
   async createJob(file: Express.Multer.File, dto: CreateForgeJobDto): Promise<{ jobId: string }> {
     const videoKey = `course-video/${file.filename}`;
+    const startedAt = Date.now();
     try {
       // 透传 Content-Type：对象存储按它回给浏览器，音频/视频元素才能正确解码播放
       await this.storage.uploadFile(videoKey, file.path, file.mimetype);
     } finally {
       await rm(file.path, { force: true }).catch(() => {});
     }
+    this.logger.log(
+      `[forge:job] 上传 OSS 完成 key=${videoKey} 耗时 ${Date.now() - startedAt}ms（旧 multipart 入口）`,
+    );
 
     // 全局 ValidationPipe 未开 transform，multipart 布尔字段到达时仍是字符串
     const defer = String(dto.defer) === "true";
