@@ -113,6 +113,9 @@ importers:
       '@langchain/openai':
         specifier: 1.5.1
         version: 1.5.1(@aws-sdk/credential-provider-node@3.972.97)(@langchain/core@1.5.1(@opentelemetry/api@1.9.0)(@opentelemetry/exporter-trace-otlp-proto@0.223.2(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-base@2.12.1(@opentelemetry/api@1.9.0))(openai@6.49.0(@aws-sdk/credential-provider-node@3.972.97)(@smithy/signature-v4@5.7.5)(ws@8.22.2)(zod@3.25.76))(ws@8.22.2))(@smithy/signature-v4@5.7.5)(ws@8.22.2)
+      '@langfuse/client':
+        specifier: 6.1.1
+        version: 6.1.1(@opentelemetry/api@1.9.0)
       '@langfuse/core':
         specifier: ^6.1.1
         version: 6.1.1(@opentelemetry/api@1.9.0)
@@ -207,6 +210,9 @@ importers:
       '@nestjs/testing':
         specifier: ^10.0.0
         version: 10.3.9(@nestjs/common@10.3.9(class-transformer@0.5.1)(class-validator@0.14.1)(reflect-metadata@0.1.14)(rxjs@7.8.1))(@nestjs/core@10.3.9(@nestjs/common@10.3.9(class-transformer@0.5.1)(class-validator@0.14.1)(reflect-metadata@0.1.14)(rxjs@7.8.1))(@nestjs/platform-express@10.3.9)(encoding@0.1.13)(reflect-metadata@0.1.14)(rxjs@7.8.1))(@nestjs/platform-express@10.3.9(@nestjs/common@10.3.9(class-transformer@0.5.1)(class-validator@0.14.1)(reflect-metadata@0.1.14)(rxjs@7.8.1))(@nestjs/core@10.3.9))
+      '@opentelemetry/sdk-trace-base':
+        specifier: 2.12.1
+        version: 2.12.1(@opentelemetry/api@1.9.0)
       '@paralleldrive/cuid2':
         specifier: 2.2.2
         version: 2.2.2
@@ -2088,6 +2094,12 @@ packages:
 
   '@langchain/protocol@0.0.21':
     resolution: {integrity: sha512-HJS8Cd5GJ437MIrCnbrPHx0FJcluyOk5HdZzD081ap4SBzfWpAj/6AtI7fqpNSMo6VZEoEdaN9fIts8R0XR1AQ==}
+
+  '@langfuse/client@6.1.1':
+    resolution: {integrity: sha512-n48SdQRaOvYbs+Fq4T0M+9gfv3Fz4HtfT5LpIkyITbNoy7jRsE4PppT+Sv3FB4iz01KijBIEQJr+sh+bFztaKw==}
+    engines: {node: '>=22'}
+    peerDependencies:
+      '@opentelemetry/api': ^1.9.0
 
   '@langfuse/core@6.1.1':
     resolution: {integrity: sha512-vIZBxzbN06P865d8CQHkVOGaFASwoNjX/pQndAQxnX1uUrxGSw1b0oqYlRlirzWzCXhKqBLYjwd68iIv3pfGeg==}
@@ -11452,6 +11464,13 @@ snapshots:
 
   '@langchain/protocol@0.0.21': {}
 
+  '@langfuse/client@6.1.1(@opentelemetry/api@1.9.0)':
+    dependencies:
+      '@langfuse/core': 6.1.1(@opentelemetry/api@1.9.0)
+      '@langfuse/tracing': 6.1.1(@opentelemetry/api@1.9.0)
+      '@opentelemetry/api': 1.9.0
+      mustache: 4.2.0
+
   '@langfuse/core@6.1.1(@opentelemetry/api@1.9.0)':
     dependencies:
       '@opentelemetry/api': 1.9.0
@@ -11645,7 +11664,7 @@ snapshots:
       '@opentelemetry/otlp-transformer': 0.50.0(@opentelemetry/api@1.9.0)
       '@opentelemetry/resources': 1.25.0(@opentelemetry/api@1.9.0)
       '@opentelemetry/sdk-trace-base': 1.25.0(@opentelemetry/api@1.9.0)
-      '@opentelemetry/semantic-conventions': 1.25.0
+      '@opentelemetry/semantic-conventions': 1.45.0
       urlpattern-polyfill: 8.0.2
     transitivePeerDependencies:
       - '@opentelemetry/api'
