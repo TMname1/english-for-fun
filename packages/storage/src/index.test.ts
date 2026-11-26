@@ -17,6 +17,7 @@ describe("storageConfigFromEnv", () => {
       bucket: "earthworm",
       forcePathStyle: true,
       presignExpiresSeconds: 21600,
+      presignPutExpiresSeconds: 600,
     });
   });
 
@@ -29,6 +30,7 @@ describe("storageConfigFromEnv", () => {
       S3_BUCKET: "my-bucket",
       S3_FORCE_PATH_STYLE: "false",
       S3_PRESIGN_EXPIRES_SECONDS: "3600",
+      S3_PRESIGN_PUT_EXPIRES_SECONDS: "900",
     });
     expect(config).toEqual({
       endpoint: "https://oss-cn-hangzhou.aliyuncs.com",
@@ -38,6 +40,7 @@ describe("storageConfigFromEnv", () => {
       bucket: "my-bucket",
       forcePathStyle: false,
       presignExpiresSeconds: 3600,
+      presignPutExpiresSeconds: 900,
     });
   });
 
@@ -50,6 +53,14 @@ describe("storageConfigFromEnv", () => {
     expect(storageConfigFromEnv({ S3_PRESIGN_EXPIRES_SECONDS: "90.9" }).presignExpiresSeconds).toBe(
       90,
     );
+  });
+
+  it("falls back to 10min for invalid upload expiry values", () => {
+    for (const value of ["abc", "0", "-5", ""]) {
+      expect(
+        storageConfigFromEnv({ S3_PRESIGN_PUT_EXPIRES_SECONDS: value }).presignPutExpiresSeconds,
+      ).toBe(600);
+    }
   });
 });
 
@@ -119,6 +130,45 @@ describe("ObjectStorage not-found handling", () => {
 
     send.mockResolvedValueOnce({} as never);
     await expect(storage.objectExists("course-video/yes.mp4")).resolves.toBe(true);
+  });
+});
+
+describe("ObjectStorage.presignPut / headObject", () => {
+  const storage = new ObjectStorage(storageConfigFromEnv({}));
+
+  it("presigns a PUT url with the short upload expiry", async () => {
+    const url = await storage.presignPut("course-video/a.mp4");
+
+    expect(url.startsWith("http://localhost:9000/earthworm/course-video/a.mp4?")).toBe(true);
+    expect(url).toContain("X-Amz-Signature=");
+    expect(url).toContain("X-Amz-Expires=600");
+  });
+
+  it("does not sign Content-Type, so the browser may send any type", async () => {
+    const url = await storage.presignPut("course-video/a.mp4");
+    expect(decodeURIComponent(url)).not.toContain("content-type");
+  });
+
+  it("headObject returns size/contentType, and null for 404", async () => {
+    const send = vi.spyOn(S3Client.prototype, "send");
+
+    send.mockResolvedValueOnce({
+      ContentLength: 8388608,
+      ContentType: "audio/mpeg",
+    } as never);
+    await expect(storage.headObject("course-video/a.mp3")).resolves.toEqual({
+      size: 8388608,
+      contentType: "audio/mpeg",
+    });
+
+    send.mockRejectedValueOnce(
+      new S3ServiceException({
+        name: "NotFound",
+        message: "missing",
+        $metadata: { httpStatusCode: 404 },
+      }),
+    );
+    await expect(storage.headObject("course-video/none.mp3")).resolves.toBeNull();
   });
 });
 
