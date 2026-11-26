@@ -212,8 +212,9 @@ export function classifyLlmFailure(error: unknown): { kind: LlmFailureKind; deta
 
 /**
  * DashScope 等 OpenAI 兼容服务在 response_format 为 json_object 时校验 messages 必须含
- * "json" 一词。提示词已精简（结构约束由代码承担），因此 json_object 降级分支补一条含关键词的
- * user 消息；json_schema 与纯文本分支不动 messages。
+ * "json" 一词。提示词已精简（结构约束由代码承担），因此 json_object 降级分支补一句含关键词的
+ * 话——**追加到 system，而不是新增 user 消息**：提示词形态是「一条 system + Langfuse 变量」，
+ * 代码里不再出现自造的 user 内容。json_schema 与纯文本分支不动 messages。
  */
 export function messagesWithJsonKeyword(
   messages: ChatMessage[],
@@ -222,7 +223,23 @@ export function messagesWithJsonKeyword(
   if (format?.type !== "json_object") {
     return messages;
   }
-  return [...messages, { role: "user" as const, content: "Reply with a single JSON object." }];
+  const keyword = "Reply with a single JSON object.";
+  if (messages.some((m) => /\bjson\b/i.test(m.content))) {
+    return messages;
+  }
+  const index = messages.findIndex((m) => m.role === "system");
+  if (index < 0) {
+    return [...messages, { role: "system" as const, content: keyword }];
+  }
+  const next = [...messages];
+  next[index] = { ...next[index], content: `${next[index].content}\n\n${keyword}` };
+  return next;
+}
+
+/** 要关联到本次 generation 的 Langfuse 提示词版本（由 prompt-store 提供） */
+export interface PromptLink {
+  name: string;
+  version: number;
 }
 
 /** 降级档位：json_schema（strict）→ json_object → 纯文本 */
@@ -240,6 +257,7 @@ export async function callLlmJson(
   messages: ChatMessage[],
   schema: Record<string, unknown> = courseJsonSchema,
   model: string = config.llmModel,
+  promptLink?: PromptLink,
 ): Promise<unknown> {
   const cached = okRungByModel.get(model);
   const startIndex = cached ? RUNGS.indexOf(cached) : 0;
@@ -248,7 +266,7 @@ export async function callLlmJson(
   let lastError: unknown;
   for (const rung of candidates) {
     try {
-      const content = await complete(messages, schema, model, rung);
+      const content = await complete(messages, schema, model, rung, promptLink);
       okRungByModel.set(model, rung);
       return extractJsonObject(content);
     } catch (error) {
@@ -290,6 +308,7 @@ async function complete(
   schema: Record<string, unknown>,
   model: string,
   rung: Rung,
+  promptLink?: PromptLink,
 ): Promise<string> {
   if (rung === "jsonSchema") {
     const chat = buildModel(model);
@@ -298,7 +317,14 @@ async function complete(
       strict: true,
       method: "jsonSchema",
     });
-    const output = await structured.invoke(messages as never);
+    // 双保险：@langfuse/langchain 只在 handleChainStart 里注册 metadata.langfusePrompt，
+    // generation 再从父 run 读它；所以必须挂在 withStructuredOutput 返回的 Runnable 上
+    // （挂在 ChatOpenAI 上无效——它只产生 generation，不产生 chain run）。
+    // 主路径仍是 prompt-store 的 withPrompt → propagateAttributes。
+    const target = promptLink
+      ? structured.withConfig({ metadata: { langfusePrompt: promptLink } })
+      : structured;
+    const output = await target.invoke(messages as never);
     return typeof output === "string" ? output : JSON.stringify(output);
   }
 

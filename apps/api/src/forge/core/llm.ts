@@ -11,7 +11,7 @@ import type {
 } from "./types";
 import { config } from "./config";
 import { callLlmJson } from "./llm-client";
-import { buildMessages, loadSentencePrompt } from "./prompt";
+import { buildMessages, buildSentenceVars, loadSentencePrompt } from "./prompt";
 import { withPrompt } from "./prompt-store";
 import { buildTokenUniverse, sentenceWordView } from "./words";
 
@@ -386,10 +386,16 @@ async function generateChainForSentence(
   label: string,
   sentenceChinese?: string,
 ): Promise<{ statements: DraftStatement[]; spans: StatementSpan[] }> {
-  // 提示词从 Langfuse Prompt Management 取（带缓存 + 本地兜底），并把版本关联到本次 trace
-  const prompt = await loadSentencePrompt();
+  // 提示词从 Langfuse Prompt Management 取（带缓存 + 本地兜底），变量在取的时候编译进 system：
+  // 句级中文走 {{sentence_chinese}}（缺省「（无）」），代码不再拼 user 消息。
+  const prompt = await loadSentencePrompt(buildSentenceVars(words, sentenceChinese));
+  // 显式 link 是双保险（json_schema 档会挂到 structured 上）；主路径是 withPrompt 的传播
+  const link =
+    !prompt.isFallback && prompt.version
+      ? { name: prompt.name, version: prompt.version }
+      : undefined;
   const raw = await withPrompt(prompt, () =>
-    callLlmJson(buildMessages(words, prompt.text, sentenceChinese) as ChatMessage[]),
+    callLlmJson(buildMessages(prompt.text) as ChatMessage[], undefined, undefined, link),
   );
   const parsed = draftRowsSchema.safeParse(coerceCourseOutput(raw));
   if (!parsed.success) {

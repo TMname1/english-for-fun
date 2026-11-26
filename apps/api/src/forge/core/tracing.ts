@@ -124,6 +124,18 @@ function ensureStarted(): boolean {
 }
 
 /**
+ * 确保追踪已就绪（幂等，可安全重复调用）。
+ *
+ * 给 prompt-store 的 `withPrompt` 用：legacy 路径上 SDK 是惰性启动的，首次调用可能
+ * 早于 `sdk.start()`；那时 `context.with()` 走 NoopContextManager，prompt 传播属性会
+ * 静默丢失（Langfuse 里表现为该 prompt 的观测计数不增长）。启动追踪本身是 fail-open 的，
+ * 未配 key 时返回 false，调用方无需关心。
+ */
+export function ensureTracingStarted(): boolean {
+  return ensureStarted();
+}
+
+/**
  * legacy（命令式）编排的兜底 handler：挂在**模型构造器**上（ChatOpenAI / ASR ChatModel 共用）。
  *
  * legacy 路径没有 `graph.invoke` 这个根，callbacks 无从经 AsyncLocalStorage 继承，
