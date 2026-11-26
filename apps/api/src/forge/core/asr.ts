@@ -184,17 +184,16 @@ export function asrInputSummary(input: {
 }
 
 /**
- * 调百炼 Qwen-Audio-ASR 转写 wav：经 `asr-model.ts` 的 ChatModel（LangChain Runnable）
- * 完成「base64 data URI 上传 + 同步等待完整结果」。因此这一步与 LLM 调用同属一个生态：
- * 图内自动继承根 callbacks，legacy 由模型构造器兜底挂 handler，Langfuse 里是一条独立的
- * LLM 观测（观测名 = `asr`，model = qwen-audio-3.1-asr-flash）。
+ * 调百炼 Qwen-Audio-ASR 转写 wav，返回**原始句子**（毫秒时间戳，未经换算）。
  *
- * 返回原始句子（毫秒时间戳，未经换算）供预处理合并碎片词；超 5 分钟直接报错（flash 同步版建议上限）。
+ * 与 `transcribeWithRaw` 的区别：这里允许「空结果」（返回空数组），因为转写子图按
+ * 块调用，单块静音是正常情况，是否算失败由上层（全部块都为空）决定。
+ * 超 5 分钟直接报错（flash 同步版建议上限）。
  */
-export async function transcribeWithRaw(
+export async function transcribeSentences(
   wavPath: string,
   language = "en",
-): Promise<{ transcript: Transcript; sentences: QwenAsrSentence[] }> {
+): Promise<{ sentences: QwenAsrSentence[]; durationSec: number; audioBytes: number }> {
   if (!config.asrApiKey) {
     throw new Error("[asr] 未配置 FORGE_ASR_API_KEY（百炼 DashScope API Key，sk- 开头）");
   }
@@ -248,7 +247,23 @@ export async function transcribeWithRaw(
       ),
     ]);
 
-  const sentences = asrSentencesOf(message);
+  return { sentences: asrSentencesOf(message), durationSec, audioBytes: buf.length };
+}
+
+/**
+ * 调百炼 Qwen-Audio-ASR 转写 wav：经 `asr-model.ts` 的 ChatModel（LangChain Runnable）
+ * 完成「base64 data URI 上传 + 同步等待完整结果」。因此这一步与 LLM 调用同属一个生态：
+ * 图内自动继承根 callbacks，legacy 由模型构造器兜底挂 handler，Langfuse 里是一条独立的
+ * LLM 观测（观测名 = `asr`，model = qwen-audio-3.1-asr-flash）。
+ *
+ * 返回原始句子（毫秒时间戳，未经换算）供预处理合并碎片词；空结果抛错（legacy 语义：
+ * 整段都没有语音属于失败）。转写子图按块调用时用 `transcribeSentences`，允许空块。
+ */
+export async function transcribeWithRaw(
+  wavPath: string,
+  language = "en",
+): Promise<{ transcript: Transcript; sentences: QwenAsrSentence[] }> {
+  const { sentences } = await transcribeSentences(wavPath, language);
   const transcript = buildTranscriptFromSentences(sentences, language);
   if (!transcript.wordLevel) {
     console.warn(`[asr] 警告: 未返回词级时间戳，transcript.json 仅含段级文本与起止时间`);

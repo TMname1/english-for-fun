@@ -128,7 +128,24 @@ API_BASE="http://localhost:3001"
 | `FORGE_ASR_API_KEY`    | ✅ 是 | 空                                                                                     | 百炼 DashScope API Key（`sk-` 开头）。未配置会直接报 `[asr] 未配置 FORGE_ASR_API_KEY`。 |
 | `FORGE_ASR_BASE_URL`   | 否    | `https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation` | ASR 端点（DashScope 原生 multimodal-generation，非 OpenAI 兼容）。                      |
 | `FORGE_ASR_MODEL`      | 否    | `qwen-audio-3.1-asr-flash`                                                             | ASR 模型；同步返回整段 text + 句/词级毫秒时间戳。                                       |
-| `FORGE_ASR_TIMEOUT_MS` | 否    | `180000`（3 分钟）                                                                     | 单次转写请求超时。长音频可调大；flash 同步版单段建议 ≤5 分钟，超长用切片分段。          |
+| `FORGE_ASR_TIMEOUT_MS` | 否    | `300000`（5 分钟）                                                                     | 单次转写请求超时。转写子图按 ≤180s 切块，低于 `240000` 在高峰期容易误判超时。           |
+
+### 3.1.1 转写子图（captioner 句级 → 切块 → asr-flash 词级）
+
+`transcribe` 现在是独立子图：`asrSentence`（句级边界）→ `processingAudio`（按句边界切块）→ `asrWord`（逐块词级）。下面这些不填也能跑（都有默认值），生产环境建议至少确认 `FORGE_CAPTIONER_BASE_URL`。
+
+| 变量                               | 必填 | 默认值                         | 用途                                                                                                                                                |
+| ---------------------------------- | ---- | ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `FORGE_CAPTIONER_BASE_URL`         | 建议 | 空（回退 ASR 的 origin）       | captioner 异步端点。留空时用 `FORGE_ASR_BASE_URL` 的 origin 并打一次警告；公网 `dashscope.aliyuncs.com` 未开通该模型时，必须显式填 workspace 域名。 |
+| `FORGE_CAPTIONER_MODEL`            | 否   | `qwen-audio-3.1-captioner`     | 音频打标模型，只取句级时间戳（文本由 `asrWord` 给）。                                                                                               |
+| `FORGE_CAPTIONER_API_KEY`          | 否   | 空（回退 `FORGE_ASR_API_KEY`） | 同一 workspace 通常共用一把 Key。                                                                                                                   |
+| `FORGE_CAPTIONER_TIMEOUT_MS`       | 否   | `60000`                        | 单次 HTTP 超时（getPolicy / 提交 / 查询 / 下载各自）。                                                                                              |
+| `FORGE_CAPTIONER_POLL_INTERVAL_MS` | 否   | `3000`                         | 异步任务轮询间隔。                                                                                                                                  |
+| `FORGE_CAPTIONER_POLL_TIMEOUT_MS`  | 否   | `600000`（10 分钟）            | 轮询总超时，**必须小于 job 超时（30 分钟）**。                                                                                                      |
+| `FORGE_ASR_CHUNK_SECONDS`          | 否   | `180`                          | 块上限（秒），必须 <300（flash 同步接口上限）；相邻语音段按顺序累积到不超过此值。                                                                   |
+| `FORGE_ASR_CHUNK_PAD_MS`           | 否   | `200`                          | 块音频前后 padding（毫秒），防止切掉词头词尾；块间靠「词中点归属」去重，不会重复。                                                                  |
+| `FORGE_ASR_CONCURRENCY`            | 否   | `3`                            | 块级 ASR 并发。DashScope 同步 ASR 对并发敏感，别调太高。                                                                                            |
+| `FORGE_KEEP_WORK`                  | 否   | `0`                            | `1` = 成功后也保留 `.work`（块音频 + 逐块原始结果 + captioner 原始响应），排查时间对齐问题时用。                                                    |
 
 ### 3.2 LLM（预处理拆句与课程结构化）
 

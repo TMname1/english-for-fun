@@ -3,8 +3,8 @@
  * 不感知 LangGraph。这样节点函数（nodes.ts）保持纯编排、artifacts 可单独测。
  *
  * 与 legacy（forge.ts 的命令式阶段函数）共用同一批原语：
- * prepareRun / transcribeRun / loadStructureInput / finalizeCourse / mergeResolveChains，
- * 两条路径的落盘结果必须逐字段一致。
+ * prepareRun / loadStructureInput / finalizeCourse / mergeResolveChains，
+ * 两条路径的落盘结果必须逐字段一致（转写由 transcribe 子图负责，见 transcribe-artifacts.ts）。
  */
 import { resolve } from "node:path";
 
@@ -20,7 +20,6 @@ import {
   paths,
   prepareRun,
   readJson,
-  transcribeRun,
   writeJson,
 } from "../forge";
 import { generateDraftCollected } from "../llm";
@@ -32,7 +31,6 @@ export const MAX_REVIEW_ROUNDS = 3;
 /** 节点依赖的产物操作面：便于单测注入假实现（不碰磁盘/LLM） */
 export interface ForgeArtifactSource {
   prepare(state: ForgeStateType): Promise<ForgeStateUpdate>;
-  transcribe(state: ForgeStateType): Promise<ForgeStateUpdate>;
   structureBatch(state: ForgeStateType): Promise<ForgeStateUpdate>;
   retryBatch(state: ForgeStateType): Promise<ForgeStateUpdate>;
   finalize(state: ForgeStateType): Promise<ForgeStateUpdate>;
@@ -70,34 +68,6 @@ export class ForgeArtifacts implements ForgeArtifactSource {
       outDir,
       stage: "transcoding",
       params: { ...state.params, mediaPath: resolve(mediaPath), clips: clips ?? undefined },
-    };
-  }
-
-  /** 转码 → ASR → 预处理 → 写 transcript.json / transcript.raw.json / clips.json */
-  async transcribe(state: ForgeStateType): Promise<ForgeStateUpdate> {
-    // 入口处已由 ForgeParams 强制必填；这里兜底「state 是从 checkpoint 还原来的残缺值」
-    const mediaPath = state.params.mediaPath;
-    if (!mediaPath) {
-      throw new Error(
-        "[forge] state 里缺少 mediaPath，transcribe 无法开始（prepare 未执行或入口未传参）",
-      );
-    }
-
-    const { transcript } = await transcribeRun({
-      outDir: state.outDir,
-      mediaPath,
-      clips: state.params.clips,
-      language: state.params.language,
-      onStage: this.emitStage,
-    });
-
-    return {
-      stage: "transcribing",
-      transcriptStat: {
-        segments: transcript.segments.length,
-        wordLevel: transcript.wordLevel,
-        clipCount: state.params.clips?.length ?? 0,
-      },
     };
   }
 

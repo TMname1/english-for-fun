@@ -28,6 +28,9 @@ const ARTIFACT_FILES = [
   "transcript.raw.json",
   "transcript.edited.json",
   "clips.json",
+  // transcribe 子图的中间产物：captioner 句级时间戳 + 切块计划（人工核对时间戳时很有用）
+  "caption.json",
+  "chunk-plan.json",
   "alignment.json",
   "course.json",
   "structure.progress.json",

@@ -112,12 +112,6 @@ export const ForgeInputSchema = z.object({
   params: ForgeParamsSchema,
 });
 
-export interface TranscriptStat {
-  segments: number;
-  wordLevel: boolean;
-  clipCount: number;
-}
-
 // `Annotation<T>({ reducer })` 实际返回的 channel 形态。
 //
 // 显式写出 channel 表而不是依赖 `Annotation.Root` 的推断：推断类型会指向
@@ -131,7 +125,6 @@ type ForgeChannels = {
   outDir: ValueChannel<string>;
   params: ValueChannel<ForgeParams>;
   stage: ValueChannel<ForgeStage>;
-  transcriptStat: ValueChannel<TranscriptStat | null>;
   chains: ValueChannel<DraftChain[]>;
   failureCount: ValueChannel<number>;
   failureIndexes: ValueChannel<number[]>;
@@ -156,11 +149,6 @@ export const ForgeState: AnnotationRoot<ForgeChannels> = Annotation.Root({
     default: () => ({ mediaPath: "", title: "", type: "dialogue", language: "en" }),
   }),
   stage: Annotation<ForgeStage>({ reducer: (_prev, next) => next, default: () => "transcoding" }),
-  /** 转写摘要；正文在 transcript.json */
-  transcriptStat: Annotation<TranscriptStat | null>({
-    reducer: (_prev, next) => next,
-    default: () => null,
-  }),
   /**
    * 结构化产物。**用覆盖而不是按 index 合并**：resolve 轮次需要能「删掉」某些句，
    * 合并式 reducer 无法表达删除（被删的 index 会从上一版里留下来）。

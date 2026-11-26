@@ -39,6 +39,7 @@ export const SYSTEM_PROMPT = `你在为「蚯蚓学英语」把【一句英文�
 5. phonetic 按该行对应的词逐个给 IPA，用空格分隔（如 /aɪ/ /laɪk/）；不确定就填空字符串 ""。
 6. chinese 给该行英文片段的简洁自然中文翻译，不要加引号。
 7. 只输出 JSON，不要输出任何解释文字。
+8. 若输入给了【本句权威中文】，它就是这句的权威译文：整句行的 chinese 原样照抄这段文字；碎片行的 chinese 只能从它切分或派生，用词与它保持一致，不得另起一套译法。没给时才按第 6 步自己翻译整句。
 
 示例——词表：
 0 I
@@ -73,12 +74,23 @@ export function loadSentencePrompt(): Promise<ManagedPrompt> {
   return getManagedPrompt(SENTENCE_PROMPT_NAME, SYSTEM_PROMPT);
 }
 
-/** 一句一次调用：不再附带「上一次不合格」的纠错说明（校验失败不再自动重试） */
+/**
+ * 一句一次调用：不再附带「上一次不合格」的纠错说明（校验失败不再自动重试）。
+ * sentenceChinese 来自拆句阶段的句级译文（手上有英文全文，比这里只看到词表更准），
+ * 作为「权威中文」写进 user 消息，模型据此切分碎片行；整句行还会被代码强制覆盖一次。
+ */
 export function buildMessages(
   words: string[],
   systemPrompt: string = SYSTEM_PROMPT,
+  sentenceChinese?: string,
 ): Array<{ role: "system" | "user"; content: string }> {
   const last = words.length - 1;
+  const given = sentenceChinese?.trim();
+  const authority = given
+    ? `【本句权威中文】${given}\n` +
+      `这句中文是整句的权威译文：整句行（indexes 恰为 0..${last}）的 chinese 必须原样使用这段文字，不要改写；` +
+      `碎片行的 chinese 只能从这段中文里切分或派生，用词与它保持一致，不得另起一套译法。\n`
+    : "";
   return [
     { role: "system", content: systemPrompt },
     {
@@ -87,6 +99,7 @@ export function buildMessages(
         `请把下面这句英文拆成碎片并逐级拼回完整原句，输出组装链。\n` +
         `本句词表（共 ${words.length} 个词，编号 0..${last}，格式「编号 词」，词表按顺序拼起来就是这句原句）：\n` +
         `${formatNumberedWords(words)}\n` +
+        authority +
         `要求：只能用这些编号引用词，不要输出英文单词文本；最后一行 indexes 必须恰为 0,1,…,${last}。`,
     },
   ];

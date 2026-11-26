@@ -93,6 +93,9 @@ export const paths = {
   course: (outDir: string) => resolve(outDir, "course.json"),
   alignment: (outDir: string) => resolve(outDir, "alignment.json"),
   work: (outDir: string) => resolve(outDir, ".work"),
+  // 转写子图产物：captioner 的句级时间戳 + 切块计划（时间均为绝对秒，便于人工核对）
+  caption: (outDir: string) => resolve(outDir, "caption.json"),
+  chunkPlan: (outDir: string) => resolve(outDir, "chunk-plan.json"),
   // 结构化进度快照（成功链 + 失败清单），needs_fix 后 resolve 续跑用
   progress: (outDir: string) => resolve(outDir, "structure.progress.json"),
   // resolve 阶段的人工决策输入（delete/retry），由 service 写入 scratch

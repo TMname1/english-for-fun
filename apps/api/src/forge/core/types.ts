@@ -27,6 +27,11 @@ export interface TranscriptSegment {
   end: number;
   text: string;
   words?: TranscriptWord[];
+  /**
+   * 这句的完整中文（拆句阶段顺手产出：模型手上有整段英文全文，比结构阶段只看到词表更准）。
+   * 结构阶段以它为整句权威译文；缺失时（旧 transcript / 段级降级 / 单词段）回退为模型自己翻译。
+   */
+  chinese?: string;
   /** 所属 clip 序号；仅切片转写流程存在，用于禁止跨 clip 拼句 */
   clipIndex?: number;
 }

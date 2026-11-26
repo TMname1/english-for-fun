@@ -7,7 +7,8 @@
 
 ```
 视频 / 音频文件
-  │  Step 1    转写        ffmpeg -vn 提取音轨 → 百炼 Qwen-Audio-ASR（同步）→ 整段 text + 词级时间戳
+  │  Step 1    转写        graph 编排：captioner 句级时间戳 → 按句切块(≤180s) → asr-flash 词级
+  │                        legacy 编排：整段 Qwen-Audio-ASR（同步，≤5 分钟）
   ▼
   │  Step 1.5  预处理      LLM 按语义拆成完整句（输出词序号分组）→ 代码合并碎片词 → transcript.json
   ▼
@@ -123,6 +124,8 @@ pnpm forge -- --audio song.mp3 --title "某首歌" --type music
 | `transcript.json`       | Step 1.5 | **预处理后**的转写：一个 segment 即一个完整句，碎片词已合并（词级时间戳 / 段级降级）       | GUI 流程可人工校对         |
 | `transcript.raw.json`   | Step 1   | 原始 ASR 转写（整段 text + 未合并的碎片词），供回溯对照                                    | 不建议改                   |
 | `clips.json`            | Step 1   | 仅切片流程：选中的时间区间，structure 阶段据此重打 clipIndex                               | 不建议改                   |
+| `caption.json`          | Step 1   | 仅 graph 编排：captioner 给出的语音段（绝对毫秒）+ 任务 ID，切块的时间来源                 | 只读参考                   |
+| `chunk-plan.json`       | Step 1   | 仅 graph 编排：切块计划（core/keep/audio/local 四个窗口），排查时间偏移时看它              | 只读参考                   |
 | `alignment.json`        | Step 2.5 | 时间戳对齐报告（每条 statement 的匹配方式与命中时间，可用于人工校对）                      | 只读参考                   |
 | `course.json`           | Step 3   | **最终课程包**（含 `startTime`/`endTime`/`words` 时间戳），这是你要校对和导入的文件        | ✅ 主要校对对象            |
 | `graph.checkpoint.json` | 编排层   | 仅 Web GUI（graph 编排）：LangGraph 的控制流状态（阶段、成功链、暂停点），resolve 续跑靠它 | 不要手改                   |
@@ -223,6 +226,7 @@ pnpm forge -- --audio song.mp3 --title "某首歌" --type music
 - **时间戳**：模型固定返回句级与词级时间戳（单位**毫秒**，流水线内换算为秒，写进 `transcript.json` 的 `segments[].{start,end}` 与 `words[].{start,end}`），供逐词高亮与视频 seek 同步。词文字会并入其后标点（与下游对齐口径一致）。
 - **同步返回**：不带 `X-DashScope-SSE` 头，等待完整结果一次返回；`output.sentence` 为单个句子对象，含整段 `text` 与全部词（`words`）。整段文本随后交给预处理步骤拆句。
 - **时长上限**：flash 同步版建议单段 ≤5 分钟，超过会直接报错；长内容请用前端切片，流水线按 clip 分段转写再合并。
+  在 **graph 编排**下这条限制被转写子图绕过（见下），legacy 仍是整段转写。
 - **语言**：请求带 `language_hints`（en/zh/ja…），缺省自动识别。
 - **LangChain 封装**：转写在 `core/asr-model.ts` 里封成自定义 `BaseChatModel`（`DashScopeAsrChatModel`），
   与 LLM 调用同属一套 Runnable 生态。`transcribeWithRaw` 只负责转码、时长校验、装配消息，请求本身走 `model.invoke()`；
@@ -232,17 +236,50 @@ pnpm forge -- --audio song.mp3 --title "某首歌" --type music
   因此 trace 里这条观测的 **input 是可读摘要**（文件/格式/采样率/时长/体积/语言提示），结构化字段走 `metadata.asr`，
   **output 是完整转写文本**；词级时间戳体积大且以 json 为准，留在 `transcript.raw.json`，不进 trace。
 
+### 6.1 graph 编排的转写子图（captioner 句级 → 切块 → asr-flash 词级）
+
+`FORGE_ORCHESTRATOR=graph`（缺省）时，`transcribe` 是一个子图，三个节点串行：
+
+1. `asrSentence`：unit（clip 或整段）转码 16k wav → 上传**百炼临时 OSS**（`getPolicy` 表单上传，`oss://` + `X-DashScope-OssResourceResolve`）→ 提交 `qwen-audio-3.1-captioner` 异步任务 → 轮询 → 下载结果 → 取句级时间戳。
+2. `processingAudio`：把相邻语音段累积成 ≤180s 的块（边界落在段边界，超长段等分），前后各加 200ms padding，ffmpeg 切块。
+3. `asrWord`：并发调 `qwen-audio-3.1-asr-flash` 拿词级时间戳 → 按「词中点落在归属窗口」去重 → 修复被块边界拆开的碎片词 → 每块一条 ASR 句子 → 复用 `buildTranscriptFromSentences` + `preprocessTranscript`。
+
+产物仍是 `transcript.json` / `transcript.raw.json` / `clips.json`（结构不变），额外落 `caption.json` / `chunk-plan.json` 便于核对时间轴。**任何失败（上传/captioner/任一块 ASR/解析为空）都整体报错**，不静默降级。
+
+captioner 的坑：它的 `transcripts[].sentences[]` 实测只有一条覆盖全文件（`text` 字段里装的是整段标注 JSON），真正的句级边界在 `transcripts[].text` 的 `speech_segments[]`（时间格式 `MM:SS.cc`，含静音/音效段需过滤）。
+
+| 环境变量                           | 默认                                | 说明                                                      |
+| ---------------------------------- | ----------------------------------- | --------------------------------------------------------- |
+| `FORGE_CAPTIONER_BASE_URL`         | 空 → `FORGE_ASR_BASE_URL` 的 origin | captioner 端点；支持裸 origin / 完整端点 / 带网关前缀     |
+| `FORGE_CAPTIONER_MODEL`            | `qwen-audio-3.1-captioner`          | 同时作为 getPolicy 的 `model` 参数                        |
+| `FORGE_CAPTIONER_API_KEY`          | 空 → `FORGE_ASR_API_KEY`            | 私有部署 workspace key 不同时单独配                       |
+| `FORGE_CAPTIONER_TIMEOUT_MS`       | `60000`                             | 单次 HTTP 超时                                            |
+| `FORGE_CAPTIONER_POLL_INTERVAL_MS` | `3000`                              | 轮询间隔                                                  |
+| `FORGE_CAPTIONER_POLL_TIMEOUT_MS`  | `600000`                            | 轮询总超时（必须 < job 超时）                             |
+| `FORGE_ASR_CHUNK_SECONDS`          | `180`                               | 块上限（必须 <300）                                       |
+| `FORGE_ASR_CHUNK_PAD_MS`           | `200`                               | 块前后 padding                                            |
+| `FORGE_ASR_CONCURRENCY`            | `3`                                 | 块级 ASR 并发                                             |
+| `FORGE_KEEP_WORK`                  | `0`                                 | `1` = 成功后保留 `.work`（块音频/逐块结果），排查对齐问题 |
+
+> 探测脚本：`apps/api/scripts/probe-captioner.ts`（验证 `oss://` 是否被接受、`max_file_size_mb`、结果结构），改模型或换 workspace 时先跑它。
+
 ## 7. 句子预处理（ASR 之后、结构化之前）
 
 ASR 返回的是整段文本 + 碎片词表：一个词可能被拦腰拆成多个碎片（`Genu`+`inely`、`I`+`'`+`ve`）。
 预处理把整段 `text` 和编号词表交给 `FORGE_PREPROCESS_MODEL`（默认 `qwen3.8-flash`），由模型**按语义理解**拆成完整句子（不局限于标点），
-只输出每句包含的词序号（`{"sentences":[[0,1,2],[3,4,...]]}`）；代码校验序号必须升序连续、不重不漏覆盖全部词，
+输出每句的词序号**和该句完整中文**（`{"sentences":[{"words":[0,1,2],"chinese":"..."}]}`）。词表只含「编号 + 词文本」（`{"i":0,"word":"I've"}`），
+**不发时间戳**——模型不消费它，句子时间全部由代码回填，省一半以上的 prompt token。代码校验序号必须升序连续、不重不漏覆盖全部词，
 然后确定性地合并碎片词、从原始 ASR 词取 `start`/`end`——**时间戳零幻觉**。
 
 - 每个 clip 的转写单独预处理（天然不跨 clip 拼句），失败自动重试一次，仍不合格则整体报错。
-- 输出仍是标准 `Transcript`：一个 `segment` 即一个完整句，`text = words.join(" ")`。
+- 输出仍是标准 `Transcript`：一个 `segment` 即一个完整句，`text = words.join(" ")`，`chinese` 为该句译文
+  （这一步手上有整段英文全文，比结构阶段只看词表译得准，故句级译文在此产出）。
   `transcript.json` 存预处理后的结果（GUI 人工校对看到的即完整句），`transcript.raw.json` 保留原始 ASR 结果供回溯。
 - 下游结构化与对齐不再做代码拼句：直接以 segment 为句子单位。
+- 结构阶段把 `segment.chinese` 作为**整句权威译文**发给模型（`prompt.ts` 的【本句权威中文】），
+  碎片行中文只能从它切分/派生，整句行的 `chinese` 还会被 `overrideFullRowChinese` 强制覆盖一次；
+  缺失时（旧 transcript / 段级降级 / 单词段）回退为模型自己翻译，行为与以前一致。
+- 输出契约改动对旧形状容错：模型若仍回 `{"sentences":[[0,1],[2,3]]}`，只当作没有句级中文，不会让预处理器失败。
 
 **词表口径**：结构化阶段给模型的编号词表、以及对齐阶段匹配用的词序列，都来自 `words.ts` 的
 `buildTokenUniverse` / `sentenceWordView`（同一套切片：撇号碎片并入前词、纯标点词跳过、空段返回 `null`）。

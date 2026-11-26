@@ -140,6 +140,27 @@ export function validateRowIndexes(rows: number[][], wordCount: number): string 
   return null;
 }
 
+/**
+ * 用拆句阶段给的句级中文覆盖「整句行」的 chinese（就地改 rows，返回同一个数组）。
+ * 整句译文的权威来源是 `preprocess`（那一步手上有整段英文全文，比这里只看到词表更准），
+ * 模型只负责切分碎片，不该重译整句。validateRowIndexes 不禁止重复整句行，所以全部覆盖。
+ * 没有句级中文（旧 transcript / 段级降级 / 单词段）时原样返回，保持模型自己翻译。
+ */
+export function overrideFullRowChinese(
+  rows: DraftRow[],
+  wordCount: number,
+  sentenceChinese?: string,
+): DraftRow[] {
+  const text = sentenceChinese?.trim();
+  if (!text) return rows;
+  for (const row of rows) {
+    if (Array.isArray(row.indexes) && row.indexes.length === wordCount && row.indexes[0] === 0) {
+      row.chinese = text;
+    }
+  }
+  return rows;
+}
+
 /** 把模型的行编号映射为 statement（english 由编号还原）；越界行跳过，仅供失败快照展示 */
 export function rowsToStatements(rows: DraftRow[], words: string[]): DraftStatement[] {
   return rows
@@ -199,6 +220,7 @@ export function stripSingleWordRows(
   rawInput: string | null | undefined,
   wordStart: number,
   words: string[],
+  sentenceChinese?: string,
 ): StripWordsResult {
   const raw = rawInput ?? null;
   const rows = parseDraftRowsFromRaw(raw);
@@ -213,7 +235,12 @@ export function stripSingleWordRows(
     };
   }
   const wordCount = words.length;
-  const kept = rows.filter((r) => !(wordCount > 1 && r.indexes.length === 1));
+  // 删单词行后同样让整句行沿用拆句阶段的权威中文（否则自动补救会让整句译文掉回模型自己的译法）
+  const kept = overrideFullRowChinese(
+    rows.filter((r) => !(wordCount > 1 && r.indexes.length === 1)),
+    wordCount,
+    sentenceChinese,
+  );
   const removed = rows.length - kept.length;
   const statements = rowsToStatements(kept, words);
   if (removed === 0) {
@@ -277,8 +304,9 @@ export function autoStripSingleWordRows(
   rawInput: string | null | undefined,
   wordStart: number,
   words: string[],
+  sentenceChinese?: string,
 ): AutoStripOutcome | null {
-  const result = stripSingleWordRows(rawInput, wordStart, words);
+  const result = stripSingleWordRows(rawInput, wordStart, words, sentenceChinese);
   if (result.chain && result.reason === null) {
     return { removed: result.removed, chain: result.chain, attempt: null };
   }
@@ -356,11 +384,12 @@ async function generateChainForSentence(
   words: string[],
   wordStart: number,
   label: string,
+  sentenceChinese?: string,
 ): Promise<{ statements: DraftStatement[]; spans: StatementSpan[] }> {
   // 提示词从 Langfuse Prompt Management 取（带缓存 + 本地兜底），并把版本关联到本次 trace
   const prompt = await loadSentencePrompt();
   const raw = await withPrompt(prompt, () =>
-    callLlmJson(buildMessages(words, prompt.text) as ChatMessage[]),
+    callLlmJson(buildMessages(words, prompt.text, sentenceChinese) as ChatMessage[]),
   );
   const parsed = draftRowsSchema.safeParse(coerceCourseOutput(raw));
   if (!parsed.success) {
@@ -374,7 +403,12 @@ async function generateChainForSentence(
     );
   }
   // api 的 strictNullChecks=false 会让 zod 把必填字段推断成可选；运行时已由 safeParse 校验
-  const rows = parsed.data.statements as DraftRow[];
+  // 先用句级权威中文覆盖整句行（在转 statements / 生成失败快照之前，保证三处一致）
+  const rows = overrideFullRowChinese(
+    parsed.data.statements as DraftRow[],
+    words.length,
+    sentenceChinese,
+  );
   const invalid = validateRowIndexes(
     rows.map((r) => r.indexes),
     words.length,
@@ -428,6 +462,8 @@ export async function generateDraftCollected(
     .map((seg, index) => ({
       index,
       sentence: seg.text.trim(),
+      // 拆句阶段产出的句级权威中文；缺失时（旧 transcript / 段级降级）为 undefined，结构阶段自行翻译
+      chinese: seg.chinese?.trim() || undefined,
       view: sentenceWordView(universe, index),
     }))
     .filter((j) => targetSet.has(j.index));
@@ -449,7 +485,7 @@ export async function generateDraftCollected(
       );
     }
     try {
-      const chain = await generateChainForSentence(words, job.view.wordStart, label);
+      const chain = await generateChainForSentence(words, job.view.wordStart, label, job.chinese);
       if (job.index === 0 || (job.index + 1) % 10 === 0) {
         console.log(`[llm] ${label} 完成（${chain.statements.length} 行）`);
       }
@@ -468,7 +504,7 @@ export async function generateDraftCollected(
         { reason: error.message, statements: error.statements ?? null, raw },
       ];
       // 只要输出里混着单词行：本地删掉后重新校验，合格就直接用（不调模型、不重试）
-      const auto = autoStripSingleWordRows(raw, job.view.wordStart, words);
+      const auto = autoStripSingleWordRows(raw, job.view.wordStart, words, job.chinese);
       if (auto?.chain) {
         console.log(
           `[llm] ${label} 输出混着 ${auto.removed} 个单词行，已自动删除后通过（${auto.chain.statements.length} 行）`,

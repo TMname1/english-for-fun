@@ -8,6 +8,10 @@
  *   3. 追踪根由 `withRunRoot` 注入 invoke config（Studio 的 API server 拼的 config 里没有
  *      callbacks），保证一次跑只有一条 trace，见 `studio-trace.ts`。
  *
+ * 画布：`transcribe` 是编译后子图节点（见 build.ts / transcribe-build.ts），Studio 会自动
+ * 展开成 asrSentence → processingAudio → asrWord 三个嵌套节点，不需要单独的 Studio 入口。
+ * 注意 `pnpm dev:langsmith` 带 `--no-reload`：改完拓扑必须重启 dev server，否则画布还是旧的。
+ *
  * 调试方式：在 Studio 的 Input 里给一条最小 state，例如
  *   {
  *     "jobId": "studio-dev",                 // 可选：省略则 state.jobId = ""

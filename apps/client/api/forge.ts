@@ -37,6 +37,8 @@ export interface ForgeTranscriptSegment {
   end: number;
   text: string;
   words?: ForgeTranscriptWord[] | null;
+  /** 拆句阶段产出的句级中文（结构阶段以它为整句权威译文） */
+  chinese?: string;
 }
 
 export interface ForgeTranscript {
