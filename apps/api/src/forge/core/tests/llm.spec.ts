@@ -14,7 +14,8 @@ import {
   stripSingleWordRows,
   validateRowIndexes,
 } from "../llm";
-import { buildMessages } from "../prompt";
+import { buildMessages, buildSentenceVars, SYSTEM_PROMPT } from "../prompt";
+import { compilePrompt, PROMPT_EMPTY } from "../prompt-store";
 
 describe("extractJsonObject", () => {
   it("parses plain json", () => {
@@ -464,11 +465,22 @@ describe("messagesWithJsonKeyword", () => {
     { role: "user" as const, content: "编排 statement 链" },
   ];
 
-  it("json_object 分支补含 JSON 一词的消息，原数组不动", () => {
+  it("json_object 分支把关键词追加到 system，不新增 user 消息", () => {
     const out = messagesWithJsonKeyword(msgs, { type: "json_object" });
-    expect(out).toHaveLength(3);
-    expect(out[2].content.toLowerCase()).toContain("json");
-    expect(msgs).toHaveLength(2);
+    expect(out).toHaveLength(2);
+    expect(out[0].role).toBe("system");
+    expect(out[0].content.toLowerCase()).toContain("json");
+    // 原数组不动，user 消息保持原样
+    expect(msgs[0].content).toBe("你是命题专家");
+    expect(out[1]).toBe(msgs[1]);
+  });
+
+  it("system 里已有 json 关键词时原样返回", () => {
+    const withJson = [
+      { role: "system" as const, content: "只输出 JSON" },
+      { role: "user" as const, content: "x" },
+    ];
+    expect(messagesWithJsonKeyword(withJson, { type: "json_object" })).toBe(withJson);
   });
 
   it("json_schema 与纯文本分支原样返回", () => {
@@ -536,19 +548,29 @@ describe("overrideFullRowChinese", () => {
   });
 });
 
-describe("buildMessages 权威中文", () => {
+describe("buildSentenceVars + buildMessages：单条 system 注入权威中文", () => {
   const words = ["I", "like", "the", "food."];
 
-  it("给了句级中文：user 消息带上【本句权威中文】与使用规则", () => {
-    const [, user] = buildMessages(words, undefined, "我喜欢这个食物。");
-    expect(user.content).toContain("【本句权威中文】我喜欢这个食物。");
-    expect(user.content).toContain("原样");
-    // 词表仍是「编号 词」逐行，不受影响
-    expect(user.content).toContain("3 food.");
+  it("给了句级中文：编译进 system 的【本句权威中文】，且只发一条 system", () => {
+    const messages = buildMessages(
+      compilePrompt(SYSTEM_PROMPT, buildSentenceVars(words, "我喜欢这个食物。")),
+    );
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0].role).toBe("system");
+    expect(messages[0].content).toContain("【本句权威中文】我喜欢这个食物。");
+    expect(messages[0].content).toContain("权威译文");
+    // 词表仍是「编号 词」逐行，且变量已全部替换
+    expect(messages[0].content).toContain("3 food.");
+    expect(messages[0].content).not.toContain("{{");
   });
 
-  it("没给句级中文：不含该段（旧行为不变）", () => {
-    const [, user] = buildMessages(words);
-    expect(user.content).not.toContain("本句权威中文");
+  it("没给句级中文：变量取哨兵（无），提示词里的规则仍在", () => {
+    const vars = buildSentenceVars(words);
+    expect(vars.sentence_chinese).toBe(PROMPT_EMPTY);
+    const messages = buildMessages(compilePrompt(SYSTEM_PROMPT, vars));
+    expect(messages[0].content).toContain(`【本句权威中文】${PROMPT_EMPTY}`);
+    expect(messages[0].content).toContain("自行翻译整句");
+    expect(messages[0].content).not.toContain("{{");
   });
 });

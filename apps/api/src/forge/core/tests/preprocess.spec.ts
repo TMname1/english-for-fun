@@ -3,10 +3,13 @@ import { asrSegmentParts, buildTranscriptFromSentences } from "../asr";
 import { callLlmJson } from "../llm";
 import {
   buildPreprocessMessages,
+  buildPreprocessVars,
   mergeWordGroup,
+  PREPROCESS_SYSTEM_PROMPT,
   preprocessTranscript,
   validatePartition,
 } from "../preprocess";
+import { compilePrompt } from "../prompt-store";
 
 jest.mock("../llm", () => ({
   ...jest.requireActual("../llm"),
@@ -108,28 +111,32 @@ describe("mergeWordGroup", () => {
   });
 });
 
-describe("buildPreprocessMessages", () => {
-  it("词表只发编号与词文本，不发 start/end 时间戳", () => {
+describe("buildPreprocessVars + buildPreprocessMessages", () => {
+  it("词表只发编号与词文本，不发 start/end 时间戳；只发一条 system", () => {
     const { raw } = fragmentFixture();
     const parts = asrSegmentParts(raw[0])!;
-    const [system, user] = buildPreprocessMessages(parts.text, parts.words);
+    const vars = buildPreprocessVars(parts.text, parts.words);
+    const messages = buildPreprocessMessages(compilePrompt(PREPROCESS_SYSTEM_PROMPT, vars));
 
+    expect(messages).toHaveLength(1);
+    const system = messages[0];
+    expect(system.role).toBe("system");
     // 提示词与本机实际发送的词表必须一致：都不提时间戳
     expect(system.content).not.toMatch(/start\/end/);
     expect(system.content).not.toContain("可参考停顿");
-    expect(user.content).not.toContain('"start"');
-    expect(user.content).not.toContain('"end"');
+    expect(system.content).not.toContain('"start"');
+    expect(system.content).not.toContain('"end"');
+    expect(system.content).not.toContain("{{");
 
-    const lastLine = user.content.split("\n").pop() as string;
-    const list = JSON.parse(lastLine) as Array<{ i: number; word: string }>;
+    const list = JSON.parse(vars.words as string) as Array<{ i: number; word: string }>;
     // 编号与过滤后的 ASR 词 1:1，碎片词各自可见（i 0/1/2 = I / ' / ve）
     expect(list).toHaveLength(parts.words.length);
     expect(list.map((x) => x.i)).toEqual(parts.words.map((_, i) => i));
     expect(list.map((x) => x.word)).toEqual(parts.words.map((w) => w.word.word));
     expect(Object.keys(list[0])).toEqual(["i", "word"]);
-    // 新契约：user 消息要求同时给句级中文，system 说明里也提到中文翻译
-    expect(user.content).toContain("chinese");
-    expect(system.content).toContain("中文");
+    // 第一次尝试没有诊断，note 取哨兵，正文里能看到
+    expect(system.content).toContain("【重试诊断】（无）");
+    expect(system.content).toContain("chinese");
   });
 });
 
@@ -219,7 +226,8 @@ describe("preprocessTranscript", () => {
     expect(out.segments[0].text).toBe("I've played Zelda. Genuinely fun.");
     expect(callLlmJson).toHaveBeenCalledTimes(2);
     const retryMessages = jest.mocked(callLlmJson).mock.calls[1][0];
-    expect(retryMessages[1].content).toContain("上一次输出不合格");
+    expect(retryMessages).toHaveLength(1);
+    expect(retryMessages[0].content).toContain("上一次输出不合格");
   });
 
   it("重试后仍不合格则整体抛错", async () => {
