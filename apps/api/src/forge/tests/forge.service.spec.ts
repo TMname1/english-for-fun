@@ -27,6 +27,14 @@ function createStorageMock() {
     getBuffer: jest.fn(async (_key: string): Promise<Buffer | null> => null),
     putBuffer: jest.fn(async () => {}),
     presignGet: jest.fn(async (key: string) => `https://oss.test/${key}?sig`),
+    presignPut: jest.fn(async (key: string) => `https://oss.test/${key}?put-sig`),
+    presignPutExpiresSeconds: 600,
+    headObject: jest.fn(
+      async (_key: string): Promise<{ size: number; contentType?: string } | null> => ({
+        size: 1024,
+        contentType: "audio/mpeg",
+      }),
+    ),
     deleteObject: jest.fn(async () => {}),
   };
 }
@@ -392,5 +400,96 @@ describe("ForgeService（视频切片两段式启动 + 对象存储）", () => {
     await expect(
       service.resolveFailures(jobId, { decisions: [{ index: 1, action: "nuke" }] } as any),
     ).rejects.toThrow(BadRequestException);
+  });
+});
+
+describe("ForgeService（浏览器直传 OSS 两段式）", () => {
+  let store: JobStore;
+  let service: ForgeService;
+  let storage: ReturnType<typeof createStorageMock>;
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+    mockSpawn.mockClear();
+    storage = createStorageMock();
+    store = new JobStore(storage as unknown as StorageService);
+    service = new ForgeService(store, storage as unknown as StorageService);
+
+    jest.spyOn(fs, "existsSync").mockReturnValue(false);
+    jest.spyOn(fsp, "mkdir").mockResolvedValue(undefined);
+    jest.spyOn(fsp, "rm").mockResolvedValue(undefined);
+    jest.spyOn(fsp, "readFile").mockResolvedValue(Buffer.from("{}") as never);
+    jest.spyOn(fsp, "writeFile").mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    store.onModuleDestroy();
+    jest.clearAllTimers();
+    jest.useRealTimers();
+    jest.restoreAllMocks();
+  });
+
+  it("presignUpload：按原扩展名生成 uuid key 并下发 PUT URL + 有效期", async () => {
+    const ticket = await service.presignUpload("我的 素材.MP3");
+
+    expect(ticket.key).toMatch(/^course-video\/[0-9a-f-]{36}\.mp3$/);
+    expect(ticket.uploadUrl).toBe(`https://oss.test/${ticket.key}?put-sig`);
+    expect(ticket.expiresInSeconds).toBe(600);
+    expect(storage.presignPut).toHaveBeenCalledWith(ticket.key);
+  });
+
+  it("presignUpload：白名单外的扩展名 400，且不签发 URL", async () => {
+    await expect(service.presignUpload("note.txt")).rejects.toThrow(BadRequestException);
+    expect(storage.presignPut).not.toHaveBeenCalled();
+  });
+
+  it("createJobFromUploadedKey：defer 建 pending 记录，videoKey 与前端上传的 key 一致", async () => {
+    const key = "course-video/11111111-1111-1111-1111-111111111111.mp3";
+    const { jobId } = await service.createJobFromUploadedKey({
+      videoKey: key,
+      ...baseDto,
+      defer: true,
+    });
+
+    expect(storage.headObject).toHaveBeenCalledWith(key);
+    expect(storage.uploadFile).not.toHaveBeenCalled();
+    expect(store.get(jobId)!.status).toBe("pending");
+    expect(store.get(jobId)!.videoKey).toBe(key);
+    expect(store.get(jobId)!.mediaKind).toBe("audio");
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
+  it("createJobFromUploadedKey：对象不存在时 400（直传没完成），不建任务", async () => {
+    storage.headObject.mockResolvedValueOnce(null);
+    const key = "course-video/22222222-2222-2222-2222-222222222222.mp4";
+
+    await expect(
+      service.createJobFromUploadedKey({ videoKey: key, ...baseDto, defer: true }),
+    ).rejects.toThrow(/对象不存在/);
+    expect(store.get("22222222-2222-2222-2222-222222222222")).toBeUndefined();
+  });
+
+  it("createJobFromUploadedKey：空文件与超限文件都拒绝", async () => {
+    const key = "course-video/33333333-3333-3333-3333-333333333333.mp4";
+
+    storage.headObject.mockResolvedValueOnce({ size: 0, contentType: "video/mp4" });
+    await expect(
+      service.createJobFromUploadedKey({ videoKey: key, ...baseDto, defer: true }),
+    ).rejects.toThrow(/对象为空/);
+
+    storage.headObject.mockResolvedValueOnce({ size: 3 * 1024 * 1024 * 1024 });
+    await expect(
+      service.createJobFromUploadedKey({ videoKey: key, ...baseDto, defer: true }),
+    ).rejects.toThrow(/上限/);
+    expect(storage.deleteObject).toHaveBeenCalledWith(key);
+  });
+
+  it("createJobFromUploadedKey：非 course-video 前缀或带 .. 的 key 一律 400", async () => {
+    for (const videoKey of ["tts/a.mp3", "course-video/../etc/passwd.mp4", "course-video/a.txt"]) {
+      await expect(
+        service.createJobFromUploadedKey({ videoKey, ...baseDto, defer: true }),
+      ).rejects.toThrow(/非法的 videoKey/);
+    }
+    expect(storage.headObject).not.toHaveBeenCalled();
   });
 });
