@@ -1,9 +1,10 @@
-import type { $Fetch } from "ofetch";
-
-import { useRuntimeConfig } from "#imports";
-import { ofetch } from "ofetch";
-
 import type { CoursePack, CoursePackLearning, CoursePacksItem } from "~/types";
+import {
+  assertUploadable,
+  mediaFetch,
+  putFileToOss,
+  requestUploadTicket,
+} from "~/api/media-upload";
 import { resolveMediaKind } from "~/utils/media";
 import { getHttp } from "./http";
 
@@ -213,24 +214,22 @@ export async function updateCoursePack(coursePackId: string, payload: CreateCour
 
 /**
  * 上传本地视频/音频文件到对象存储，返回对象键（入库用）、预签名预览 URL 与媒体类型。
- * 单独走 ofetch：让浏览器自设 multipart boundary（共享 http 实例默认 application/json 会破坏上传）。
+ * 浏览器直传 OSS（见 ~/api/media-upload）：大文件不经服务器，避免 Cloudflare 100s 回源超时。
  */
-function coursePackFetch(): $Fetch {
-  const config = useRuntimeConfig();
-  return ofetch.create({ baseURL: config.public.apiBase as string, credentials: "include" });
-}
-
 export async function uploadCoursePackVideo(
   file: File,
+  onProgress?: (percent: number) => void,
 ): Promise<{ video: string; videoUrl: string; mediaKind?: "video" | "audio" }> {
-  const formData = new FormData();
-  formData.append("videoFile", file);
-  const $fetch = coursePackFetch();
+  assertUploadable(file);
+  const ticket = await requestUploadTicket("/course-pack/video/presign", file.name);
+  await putFileToOss(ticket, file, onProgress);
+
+  const $fetch = mediaFetch();
   return await $fetch<{ video: string; videoUrl: string; mediaKind?: "video" | "audio" }>(
-    "/course-pack/video",
+    "/course-pack/video/from-upload",
     {
       method: "post",
-      body: formData,
+      body: { videoKey: ticket.key },
       retry: 0,
     },
   );

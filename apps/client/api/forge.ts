@@ -3,6 +3,8 @@ import type { $Fetch } from "ofetch";
 import { useRuntimeConfig } from "#imports";
 import { ofetch } from "ofetch";
 
+import { assertUploadable, putFileToOss, requestUploadTicket } from "~/api/media-upload";
+
 export interface ForgeJobCourseStatement {
   english: string;
   chinese: string;
@@ -137,28 +139,64 @@ export interface UploadForgeJobParams {
   language?: string;
   /** true 时只上传不启动流水线，之后用 startForgeJob 提交切点 */
   defer?: boolean;
+  /** 直传进度回调（0~1）；浏览器直写对象存储，不经过 API，所以只受本地网络影响 */
+  onProgress?: (percent: number) => void;
 }
 
 /**
  * 单独走 ofetch：
- * 1. 让浏览器自设 multipart boundary（共享 http 实例默认 Content-Type: application/json）
- * 2. 轮询期间不希望触发全局 onResponseError 的 toast 噪音
+ * 1. 轮询期间不希望触发全局 onResponseError 的 toast 噪音
+ * 2. 加 timeout：Cloudflare 524 会拖到 100s，业务请求不该等这么久
  */
 function forgeFetch(): $Fetch {
   const config = useRuntimeConfig();
-  return ofetch.create({ baseURL: config.public.apiBase as string, credentials: "include" });
+  return ofetch.create({
+    baseURL: config.public.apiBase as string,
+    credentials: "include",
+    timeout: 20_000,
+  });
 }
 
-export async function uploadForgeJob(params: UploadForgeJobParams): Promise<{ jobId: string }> {
-  const formData = new FormData();
-  formData.append("videoFile", params.file);
-  formData.append("title", params.title);
-  formData.append("type", params.type);
-  if (params.desc) formData.append("desc", params.desc);
-  if (params.language) formData.append("language", params.language);
-  if (params.defer) formData.append("defer", "true");
+/** 直传完成后的建任务请求（JSON，秒级返回） */
+export async function createForgeJobFromUpload(params: {
+  videoKey: string;
+  title: string;
+  type: "dialogue" | "music";
+  desc?: string;
+  language?: string;
+  defer?: boolean;
+}): Promise<{ jobId: string }> {
   const $fetch = forgeFetch();
-  return await $fetch<{ jobId: string }>("/forge/jobs", { method: "post", body: formData });
+  return await $fetch<{ jobId: string }>("/forge/jobs/from-upload", {
+    method: "post",
+    body: {
+      videoKey: params.videoKey,
+      title: params.title,
+      type: params.type,
+      desc: params.desc,
+      language: params.language,
+      defer: params.defer === true,
+    },
+    retry: 0,
+  });
+}
+
+/**
+ * 上传音视频并建任务：申请票据 → 浏览器直传 OSS → 只带 videoKey 建任务。
+ * 直传逻辑见 ~/api/media-upload（与课程包配套视频共用）。
+ */
+export async function uploadForgeJob(params: UploadForgeJobParams): Promise<{ jobId: string }> {
+  assertUploadable(params.file);
+  const ticket = await requestUploadTicket("/forge/uploads/presign", params.file.name);
+  await putFileToOss(ticket, params.file, params.onProgress);
+  return await createForgeJobFromUpload({
+    videoKey: ticket.key,
+    title: params.title,
+    type: params.type,
+    desc: params.desc,
+    language: params.language,
+    defer: params.defer,
+  });
 }
 
 /** 视频切片流程：defer 上传后提交选中区间并启动转写；clips 缺省转写整段 */
