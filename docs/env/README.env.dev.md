@@ -62,15 +62,16 @@ MinIO 账号可用根目录 `.env` 的 `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD`
 前端通过**预签名 URL 直连**播放。统一走 `@earthworm/storage`（`packages/storage`）。
 **dev 下 `S3_*` 全部可省略**，默认值即本地 MinIO：
 
-| 变量                         | 默认值（dev MinIO）     | 用途                                                             |
-| ---------------------------- | ----------------------- | ---------------------------------------------------------------- |
-| `S3_ENDPOINT`                | `http://localhost:9000` | S3 端点。                                                        |
-| `S3_REGION`                  | `us-east-1`             | 区域。MinIO 随意，默认即可。                                     |
-| `S3_ACCESS_KEY_ID`           | `minioadmin`            | 访问密钥 ID（改过 MinIO 账号时同步改）。                         |
-| `S3_SECRET_ACCESS_KEY`       | `minioadmin`            | 访问密钥 Secret。                                                |
-| `S3_BUCKET`                  | `earthworm`             | 桶名，由 compose 的 `minio-init` 自动创建。                      |
-| `S3_FORCE_PATH_STYLE`        | `true`                  | MinIO 必须 `true`（path-style）。                                |
-| `S3_PRESIGN_EXPIRES_SECONDS` | `21600`（6 小时）       | 预签名 URL 有效期（秒）。过期后前端重新请求 API 即可拿到新 URL。 |
+| 变量                             | 默认值（dev MinIO）     | 用途                                                                                       |
+| -------------------------------- | ----------------------- | ------------------------------------------------------------------------------------------ |
+| `S3_ENDPOINT`                    | `http://localhost:9000` | S3 端点。                                                                                  |
+| `S3_REGION`                      | `us-east-1`             | 区域。MinIO 随意，默认即可。                                                               |
+| `S3_ACCESS_KEY_ID`               | `minioadmin`            | 访问密钥 ID（改过 MinIO 账号时同步改）。                                                   |
+| `S3_SECRET_ACCESS_KEY`           | `minioadmin`            | 访问密钥 Secret。                                                                          |
+| `S3_BUCKET`                      | `earthworm`             | 桶名，由 compose 的 `minio-init` 自动创建。                                                |
+| `S3_FORCE_PATH_STYLE`            | `true`                  | MinIO 必须 `true`（path-style）。                                                          |
+| `S3_PRESIGN_EXPIRES_SECONDS`     | `21600`（6 小时）       | 预签名 URL 有效期（秒）。过期后前端重新请求 API 即可拿到新 URL。                           |
+| `S3_PRESIGN_PUT_EXPIRES_SECONDS` | `600`（10 分钟）        | 浏览器直传（预签名 PUT）有效期（秒）。MinIO 默认允许所有来源的跨域 PUT，本地无需额外配置。 |
 
 ### 最小可用配置（复制 `apps/api/.env.example` 后改这几项）
 

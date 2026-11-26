@@ -28,15 +28,16 @@ OSS 原生兼容 S3 协议，代码统一走 `@earthworm/storage`（AWS SDK）�
 只需配一处（Docker 部署为 `/opt/earthworm/.env.prod`，非容器为 `apps/api/.env.prod`；forge 子进程自动继承，CLI 共用该文件）。
 **生产没有默认值兜底可用，`S3_*` 必须显式填写**（代码默认值面向 dev MinIO）：
 
-| 变量                         | 生产取值                               | 说明                                                                                      |
-| ---------------------------- | -------------------------------------- | ----------------------------------------------------------------------------------------- |
-| `S3_ENDPOINT`                | `https://oss-cn-<region>.aliyuncs.com` | OSS 的 **S3 兼容端点**，如 `https://oss-cn-hangzhou.aliyuncs.com`。不要填管理控制台地址。 |
-| `S3_REGION`                  | `oss-cn-<region>`                      | 如 `oss-cn-hangzhou`、`oss-cn-shanghai`，与端点一致。                                     |
-| `S3_ACCESS_KEY_ID`           | RAM 子账号 AccessKey ID                | 见下文「RAM 授权」。                                                                      |
-| `S3_SECRET_ACCESS_KEY`       | RAM 子账号 AccessKey Secret            | 只放服务端 `.env.prod`，绝不进前端或仓库。                                                |
-| `S3_BUCKET`                  | 你在 OSS 控制台创建的桶名              | 桶需与端点同地域。                                                                        |
-| `S3_FORCE_PATH_STYLE`        | **`false`**                            | OSS 用虚拟主机风格（`<bucket>.<endpoint>`）。填 `true` 会 404/签名错误。                  |
-| `S3_PRESIGN_EXPIRES_SECONDS` | 按需，如 `21600`（6 小时，可省略）     | 预签名 URL 有效期。过期后前端重新请求 API 自动换新 URL，无需人工干预。                    |
+| 变量                             | 生产取值                               | 说明                                                                                      |
+| -------------------------------- | -------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `S3_ENDPOINT`                    | `https://oss-cn-<region>.aliyuncs.com` | OSS 的 **S3 兼容端点**，如 `https://oss-cn-hangzhou.aliyuncs.com`。不要填管理控制台地址。 |
+| `S3_REGION`                      | `oss-cn-<region>`                      | 如 `oss-cn-hangzhou`、`oss-cn-shanghai`，与端点一致。                                     |
+| `S3_ACCESS_KEY_ID`               | RAM 子账号 AccessKey ID                | 见下文「RAM 授权」。                                                                      |
+| `S3_SECRET_ACCESS_KEY`           | RAM 子账号 AccessKey Secret            | 只放服务端 `.env.prod`，绝不进前端或仓库。                                                |
+| `S3_BUCKET`                      | 你在 OSS 控制台创建的桶名              | 桶需与端点同地域。                                                                        |
+| `S3_FORCE_PATH_STYLE`            | **`false`**                            | OSS 用虚拟主机风格（`<bucket>.<endpoint>`）。填 `true` 会 404/签名错误。                  |
+| `S3_PRESIGN_EXPIRES_SECONDS`     | 按需，如 `21600`（6 小时，可省略）     | **下载/播放**预签名 URL 有效期。过期后前端重新请求 API 自动换新 URL，无需人工干预。       |
+| `S3_PRESIGN_PUT_EXPIRES_SECONDS` | 按需，如 `600`（10 分钟，可省略）      | **浏览器直传**（预签名 PUT）的有效期。浏览器拿到后要立刻开始上传，不宜过长。              |
 
 ### OSS 侧前置步骤
 
@@ -45,8 +46,20 @@ OSS 原生兼容 S3 协议，代码统一走 `@earthworm/storage`（AWS SDK）�
 2. **RAM 子账号**：创建 RAM 用户并生成 AccessKey，授予该桶的读写权限（系统策略 `AliyunOSSFullAccess`
    可用但偏大；推荐自定义策略限定 `acs:oss:*:*:<bucket>` 与 `acs:oss:*:*:<bucket>/*` 的
    `oss:GetObject` / `oss:PutObject` / `oss:DeleteObject` / `oss:ListObjects` / `oss:AbortMultipartUpload`）。
-3. **CORS（可选）**：`<video src>` / `<audio src>` 播放预签名 URL **不需要** CORS。
-   只有当前端用 `fetch()` 直接读对象内容时才需要在桶的「跨域设置」里放行站点来源（GET、允许头 `*`）。
+3. **CORS（上传必配，播放不必）**：`<video src>` / `<audio src>` 播放预签名 URL **不需要** CORS。
+   但 forge 的音视频上传是**浏览器直接 PUT 到 OSS**（见 `README.backend.md`「为什么素材要直传」），
+   浏览器会先发 `OPTIONS` 预检，所以桶的「跨域设置」必须放行前端来源：
+
+   | 项           | 值                                                            |
+   | ------------ | ------------------------------------------------------------- |
+   | 来源 Origin  | `https://bananablog.cc`（有多个前端域名就逐条列出，别用 `*`） |
+   | 允许 Methods | `PUT`、`GET`、`HEAD`                                          |
+   | 允许 Headers | `*`（至少要有 `Content-Type`，浏览器 PUT 文件时会带）         |
+   | 暴露 Headers | `ETag`（可选，便于以后做校验/断点续传）                       |
+   | 缓存时间     | `600`                                                         |
+
+   没配或配错时，浏览器控制台报 `blocked by CORS policy`，前端提示「直传对象存储失败（多半是 OSS 桶未配置 CORS 跨域规则）」。
+
 4. **网络**：服务器与 OSS 同地域时可改用内网端点 `https://oss-cn-<region>-internal.aliyuncs.com`
    省流量费；但**预签名 URL 的 host 也会变成内网域名，浏览器无法访问**——只要前端要直连播放，
    `S3_ENDPOINT` 必须用公网端点。
@@ -87,6 +100,7 @@ S3_SECRET_ACCESS_KEY="RAM子账号AccessKeySecret"
 S3_BUCKET="你的桶名"
 S3_FORCE_PATH_STYLE="false"
 S3_PRESIGN_EXPIRES_SECONDS="21600"
+S3_PRESIGN_PUT_EXPIRES_SECONDS="600"
 ```
 
 ## 二、前端 Client（`apps/client/.env.prod`，构建时注入）
