@@ -1,8 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync } from "node:fs";
 import { rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { extname, join } from "node:path";
+import { extname } from "node:path";
 
 import {
   BadRequestException,
@@ -10,6 +9,7 @@ import {
   Controller,
   Delete,
   Get,
+  Logger,
   Param,
   Patch,
   Post,
@@ -20,18 +20,27 @@ import {
 import { FileInterceptor } from "@nestjs/platform-express";
 import { diskStorage } from "multer";
 
-import { isAllowedMediaExt, MEDIA_EXT_LABELS, mediaKindOf } from "../common/media-ext";
+import {
+  isAllowedMediaExt,
+  MAX_MEDIA_BYTES,
+  MEDIA_EXT_LABELS,
+  mediaKindOf,
+} from "../common/media-ext";
+import {
+  CompleteMediaUploadDto,
+  presignMediaUpload,
+  PresignMediaUploadDto,
+  verifyUploadedMedia,
+} from "../common/media-upload";
+import { UPLOAD_TMP_DIR } from "../common/upload-tmp";
 import { StorageService } from "../storage/storage.service";
 import { CoursePackService } from "./course-pack.service";
 import { CreateCoursePackDto } from "./dto/create-course-pack.dto";
 
-/** 音视频统一白名单（见 src/common/media-ext.ts） */
-const MAX_VIDEO_BYTES = 2 * 1024 * 1024 * 1024;
-/** multer 落盘只是中转，上传对象存储后即删 */
-const UPLOAD_TMP_DIR = join(tmpdir(), "earthworm-uploads");
-
 @Controller("course-pack")
 export class CoursePackController {
+  private readonly logger = new Logger(CoursePackController.name);
+
   constructor(
     private readonly coursePackService: CoursePackService,
     private readonly storage: StorageService,
@@ -48,8 +57,32 @@ export class CoursePackController {
   }
 
   /**
-   * 上传本地视频/音频文件到对象存储（不跑 ASR），返回对象键、预签名预览 URL 与媒体类型。
-   * 添加/修改课程表单用对象键回填 video 字段（入库），URL 仅供即时预览。
+   * 浏览器直传第一步：签发预签名 PUT。
+   * 大文件不能走 API 中转（Cloudflare 100s 回源超时，见 README.backend.md）。
+   */
+  @Post("video/presign")
+  presignVideo(@Body() dto: PresignMediaUploadDto) {
+    return presignMediaUpload(this.storage, dto.fileName);
+  }
+
+  /** 浏览器直传第二步：校验对象后返回入库用的对象键 + 预览 URL */
+  @Post("video/from-upload")
+  async uploadVideoFromKey(@Body() dto: CompleteMediaUploadDto) {
+    const startedAt = Date.now();
+    const { key, size } = await verifyUploadedMedia(this.storage, dto.videoKey);
+    this.logger.log(
+      `[course-pack:video] 直传完成 key=${key} size=${(size / 1024 / 1024).toFixed(2)}MB 校验 ${Date.now() - startedAt}ms`,
+    );
+    return {
+      video: key,
+      videoUrl: await this.storage.presignGet(key),
+      mediaKind: mediaKindOf(key),
+    };
+  }
+
+  /**
+   * 【旧入口 · 兼容保留】上传本地视频/音频文件到对象存储（不跑 ASR）。
+   * 前端已改为 video/presign + video/from-upload 直传；这里只给缓存了旧产物的页面兜底。
    */
   @Post("video")
   @UseInterceptors(
@@ -66,7 +99,7 @@ export class CoursePackController {
           cb(null, `${randomUUID()}${ext}`);
         },
       }),
-      limits: { fileSize: MAX_VIDEO_BYTES },
+      limits: { fileSize: MAX_MEDIA_BYTES },
       fileFilter: (_req, file, cb) => {
         const ext = extname(file.originalname).toLowerCase();
         if (!isAllowedMediaExt(ext)) {

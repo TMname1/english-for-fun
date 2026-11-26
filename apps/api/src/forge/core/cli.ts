@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { config } from "./config";
 import { forgeMake, paths } from "./forge";
 import { forgeImport } from "./importer";
+import { flushTracing } from "./tracing";
 
 interface ParsedArgs {
   command: string;
@@ -123,7 +124,11 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error) => {
-  console.error(`\n[course-forge] 失败：${(error as Error).message}\n`);
-  process.exit(1);
-});
+main()
+  .then(() => flushTracing())
+  .catch(async (error) => {
+    console.error(`\n[course-forge] 失败：${(error as Error).message}\n`);
+    // 失败也要把已产生的 span 推出去，否则出问题的那次 trace 恰好丢掉
+    await flushTracing();
+    process.exit(1);
+  });

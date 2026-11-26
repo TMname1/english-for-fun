@@ -32,12 +32,14 @@ pnpm dev:client     # 等价于 pnpm -F client dev
 
 ### 导入视频（forge GUI）
 
-步骤：**upload → edit → working → review → 自动 import**（失败进 failed）：
+步骤：**upload → edit → working →（有失败句时 fix）→ 自动 import**（失败进 failed）：
 
 1. **upload**：本地上传视频，或从 B 站下载（扫码登录 → 选分 P → 后台下载）。
 2. **edit**：时间轴打切点（空格播放/暂停，`C` 在播放头加切点）、勾选片段；≤5 分钟可不打切点整段转写，单片段上限 300s。
 3. **working**：`useForgeJob` 每 2s 轮询后端 job，展示 ASR / LLM 阶段与耗时，可取消。
-4. **review**：`components/ForgeImport/ForgeTranscriptReview` 人工校对转写文字，提交后自动续跑结构化 + 时间戳对齐。
+4. **fix**：后端进入 `needs_fix` 时用 `components/ForgeImport/ForgeStructureFix` 逐句选「删除 / 重试」，
+   提交 `POST /forge/jobs/:id/resolve`，后端按 checkpoint 续跑（不重跑已成功句）。
+   旧的「转写后人工校对」步骤（`ForgeTranscriptReview`）已停用，组件文件保留未删。
 5. **import**：`buildCoursePackPayload` 把产物转成入库 payload → `createCoursePack` → 跳转游戏页。
 
 相关 composables：`composables/forge`（job 轮询、payload 组装）、`composables/videoClip`（`clipMath` 切点/区间纯函数与校验、`useClipEditor` 勾选状态、`useClipPlayer` 播放头/区间预览）。

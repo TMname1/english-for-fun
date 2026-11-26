@@ -37,6 +37,10 @@ docker compose 会启动：
 MinIO 账号可用根目录 `.env` 的 `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` 覆盖（改了的话，
 下面 `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` 也要同步改）。
 
+`docker compose up -d` **不会**启动 Langfuse（它在 `langfuse` profile 里，见 §3.5）。
+显式起它时会额外占用：`3002`（UI）+ `127.0.0.1` 上的 `3030`（worker）/ `8124`（ClickHouse HTTP）/
+`9095`、`9096`（对象存储与控制台）/ `6380`（Redis）/ `5454`（Postgres）——都避开上面 dev 已用的端口。
+
 首次启动后跑 `pnpm db:init` 建表。
 
 ## 一、后端 API（`apps/api/.env`）
@@ -58,15 +62,16 @@ MinIO 账号可用根目录 `.env` 的 `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD`
 前端通过**预签名 URL 直连**播放。统一走 `@earthworm/storage`（`packages/storage`）。
 **dev 下 `S3_*` 全部可省略**，默认值即本地 MinIO：
 
-| 变量                         | 默认值（dev MinIO）     | 用途                                                             |
-| ---------------------------- | ----------------------- | ---------------------------------------------------------------- |
-| `S3_ENDPOINT`                | `http://localhost:9000` | S3 端点。                                                        |
-| `S3_REGION`                  | `us-east-1`             | 区域。MinIO 随意，默认即可。                                     |
-| `S3_ACCESS_KEY_ID`           | `minioadmin`            | 访问密钥 ID（改过 MinIO 账号时同步改）。                         |
-| `S3_SECRET_ACCESS_KEY`       | `minioadmin`            | 访问密钥 Secret。                                                |
-| `S3_BUCKET`                  | `earthworm`             | 桶名，由 compose 的 `minio-init` 自动创建。                      |
-| `S3_FORCE_PATH_STYLE`        | `true`                  | MinIO 必须 `true`（path-style）。                                |
-| `S3_PRESIGN_EXPIRES_SECONDS` | `21600`（6 小时）       | 预签名 URL 有效期（秒）。过期后前端重新请求 API 即可拿到新 URL。 |
+| 变量                             | 默认值（dev MinIO）     | 用途                                                                                       |
+| -------------------------------- | ----------------------- | ------------------------------------------------------------------------------------------ |
+| `S3_ENDPOINT`                    | `http://localhost:9000` | S3 端点。                                                                                  |
+| `S3_REGION`                      | `us-east-1`             | 区域。MinIO 随意，默认即可。                                                               |
+| `S3_ACCESS_KEY_ID`               | `minioadmin`            | 访问密钥 ID（改过 MinIO 账号时同步改）。                                                   |
+| `S3_SECRET_ACCESS_KEY`           | `minioadmin`            | 访问密钥 Secret。                                                                          |
+| `S3_BUCKET`                      | `earthworm`             | 桶名，由 compose 的 `minio-init` 自动创建。                                                |
+| `S3_FORCE_PATH_STYLE`            | `true`                  | MinIO 必须 `true`（path-style）。                                                          |
+| `S3_PRESIGN_EXPIRES_SECONDS`     | `21600`（6 小时）       | 预签名 URL 有效期（秒）。过期后前端重新请求 API 即可拿到新 URL。                           |
+| `S3_PRESIGN_PUT_EXPIRES_SECONDS` | `600`（10 分钟）        | 浏览器直传（预签名 PUT）有效期（秒）。MinIO 默认允许所有来源的跨域 PUT，本地无需额外配置。 |
 
 ### 最小可用配置（复制 `apps/api/.env.example` 后改这几项）
 
@@ -124,7 +129,28 @@ API_BASE="http://localhost:3001"
 | `FORGE_ASR_API_KEY`    | ✅ 是 | 空                                                                                     | 百炼 DashScope API Key（`sk-` 开头）。未配置会直接报 `[asr] 未配置 FORGE_ASR_API_KEY`。 |
 | `FORGE_ASR_BASE_URL`   | 否    | `https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation` | ASR 端点（DashScope 原生 multimodal-generation，非 OpenAI 兼容）。                      |
 | `FORGE_ASR_MODEL`      | 否    | `qwen-audio-3.1-asr-flash`                                                             | ASR 模型；同步返回整段 text + 句/词级毫秒时间戳。                                       |
-| `FORGE_ASR_TIMEOUT_MS` | 否    | `180000`（3 分钟）                                                                     | 单次转写请求超时。长音频可调大；flash 同步版单段建议 ≤5 分钟，超长用切片分段。          |
+| `FORGE_ASR_TIMEOUT_MS` | 否    | `300000`（5 分钟）                                                                     | 单次转写请求超时。转写子图按 ≤180s 切块，低于 `240000` 在高峰期容易误判超时。           |
+
+### 3.1.1 转写子图（captioner 句级 → 切块 → asr-flash 词级）
+
+`transcribe` 现在是独立子图：`asrSentence`（句级边界）→ `processingAudio`（按句边界切块）→ `asrWord`（逐块词级）。下面这些不填也能跑（都有默认值），生产环境建议至少确认 `FORGE_CAPTIONER_BASE_URL`。
+
+> Langfuse：`asrSentence` 的 captioner 调用（上传临时 OSS → 提交异步任务 → 轮询 → 下载）被封装成 `DashScopeCaptionerChatModel`，
+> 因此在 `asrSentence` 节点下是一条名为 `caption` 的 generation（model = `FORGE_CAPTIONER_MODEL`，output 含任务号/段数/轮询耗时）；
+> 与 `asrWord` 的 `asr` generation 同构。**不需要新增任何环境变量**，追踪开关仍是 `LANGFUSE_*`。
+
+| 变量                               | 必填 | 默认值                         | 用途                                                                                                                                                |
+| ---------------------------------- | ---- | ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `FORGE_CAPTIONER_BASE_URL`         | 建议 | 空（回退 ASR 的 origin）       | captioner 异步端点。留空时用 `FORGE_ASR_BASE_URL` 的 origin 并打一次警告；公网 `dashscope.aliyuncs.com` 未开通该模型时，必须显式填 workspace 域名。 |
+| `FORGE_CAPTIONER_MODEL`            | 否   | `qwen-audio-3.1-captioner`     | 音频打标模型，只取句级时间戳（文本由 `asrWord` 给）。                                                                                               |
+| `FORGE_CAPTIONER_API_KEY`          | 否   | 空（回退 `FORGE_ASR_API_KEY`） | 同一 workspace 通常共用一把 Key。                                                                                                                   |
+| `FORGE_CAPTIONER_TIMEOUT_MS`       | 否   | `60000`                        | 单次 HTTP 超时（getPolicy / 提交 / 查询 / 下载各自）。                                                                                              |
+| `FORGE_CAPTIONER_POLL_INTERVAL_MS` | 否   | `3000`                         | 异步任务轮询间隔。                                                                                                                                  |
+| `FORGE_CAPTIONER_POLL_TIMEOUT_MS`  | 否   | `600000`（10 分钟）            | 轮询总超时，**必须小于 job 超时（30 分钟）**。                                                                                                      |
+| `FORGE_ASR_CHUNK_SECONDS`          | 否   | `180`                          | 块上限（秒），必须 <300（flash 同步接口上限）；相邻语音段按顺序累积到不超过此值。                                                                   |
+| `FORGE_ASR_CHUNK_PAD_MS`           | 否   | `200`                          | 块音频前后 padding（毫秒），防止切掉词头词尾；块间靠「词中点归属」去重，不会重复。                                                                  |
+| `FORGE_ASR_CONCURRENCY`            | 否   | `3`                            | 块级 ASR 并发。DashScope 同步 ASR 对并发敏感，别调太高。                                                                                            |
+| `FORGE_KEEP_WORK`                  | 否   | `0`                            | `1` = 成功后也保留 `.work`（块音频 + 逐块原始结果 + captioner 原始响应），排查时间对齐问题时用。                                                    |
 
 ### 3.2 LLM（预处理拆句与课程结构化）
 
@@ -153,7 +179,52 @@ API_BASE="http://localhost:3001"
 
 ### 3.4 流水线运行时变量（由后端自动注入，**无需手动配置**）
 
-后端通过 `runner-client` 以子进程方式跑 `pipeline-runner`，会传入：`FORGE_PHASE`（`transcribe`\|`structure`）、`FORGE_OUT_DIR`、`FORGE_MEDIA_PATH`、`FORGE_TITLE`、`FORGE_TYPE`（`dialogue`\|`music`）、`FORGE_CLIPS`（`[{start,end}]` JSON）、`FORGE_LANGUAGE`、`FORGE_DESC`。仅在手动跑 CLI/子进程时才需要了解。
+后端通过 `runner-client` 以子进程方式跑 `pipeline-runner`，会传入：`FORGE_PHASE`（`transcribe`\|`structure`\|`structure-resolve`）、`FORGE_OUT_DIR`、`FORGE_MEDIA_PATH`、`FORGE_TITLE`、`FORGE_TYPE`（`dialogue`\|`music`）、`FORGE_CLIPS`（`[{start,end}]` JSON）、`FORGE_LANGUAGE`、`FORGE_DESC`。仅在手动跑 CLI/子进程时才需要了解。
+
+### 3.5 编排层开关与追踪调试（可选）
+
+| 变量                           | 必填 | 默认值                            | 用途                                                                                                                    |
+| ------------------------------ | ---- | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `FORGE_ORCHESTRATOR`           | 否   | `graph`                           | 编排层实现：`graph`（LangGraph `StateGraph`）/ `legacy`（重构前的命令式阶段函数）。改回 `legacy` 即回滚，无需重新构建。 |
+| `FORGE_GRAPH_CHECKPOINT_KEEP`  | 否   | `8`                               | 每个任务保留的 checkpoint 份数（含最近的中断态，须 ≥2）；调小可减小 `graph.checkpoint.json`。                           |
+| `LANGSMITH_TRACING`            | 否   | `false`                           | 设为 `true` 才把图的节点/LLM 调用上报到 LangSmith（需要 `LANGSMITH_API_KEY`）；只在本机调图时不用开。                   |
+| `LANGSMITH_ENDPOINT`           | 否   | `https://api.smith.langchain.com` | LangSmith 域名；EU 区改成 `https://eu.api.smith.langchain.com`。                                                        |
+| `LANGSMITH_API_KEY`            | 否   | 空                                | 上报 tracing / 用 Studio 时填。                                                                                         |
+| `LANGFUSE_BASE_URL`            | 否   | `https://cloud.langfuse.com`      | 本地自托管填 `http://localhost:3002`（见下）。                                                                          |
+| `LANGFUSE_PUBLIC_KEY`          | 否   | 空                                | 与 `LANGFUSE_SECRET_KEY` **同时**有值才启用；任一为空则整条追踪自动关闭（fail-open）。                                  |
+| `LANGFUSE_SECRET_KEY`          | 否   | 空                                | 同上。本地自托管栈起好后用 `LANGFUSE_INIT_PROJECT_*` 的默认值。                                                         |
+| `LANGFUSE_TRACING`             | 否   | `1`                               | 设 `0` 强制关闭（排障时排除追踪干扰）。                                                                                 |
+| `LANGFUSE_TRACING_ENVIRONMENT` | 否   | `development`                     | Langfuse 里的 environment 标签，用来区分本地/线上。                                                                     |
+| `LANGFUSE_PROMPTS`             | 否   | `1`                               | 是否从 Langfuse 拉提示词；`0` 只关提示词托管，不影响追踪。                                                              |
+| `LANGFUSE_PROMPT_LABEL`        | 否   | `production`                      | 拉哪个 label；改完提示词要把 label 移到新版本，否则一直用旧版。                                                         |
+| `LANGFUSE_PROMPT_CACHE_TTL_MS` | 否   | `60000`                           | SDK 提示词缓存时长（毫秒→秒）；过期先返回旧值并后台刷新；`0` 关闭缓存（每句都拉）。                                     |
+| `FORGE_PROMPT_SENTENCE_NAME`   | 否   | `forge-sentence-chain`            | 句子链提示词 name，必须与 Langfuse 界面里完全一致。                                                                     |
+| `FORGE_PROMPT_PREPROCESS_NAME` | 否   | `forge-preprocess-split`          | 拆句提示词 name。                                                                                                       |
+
+**提示词托管（`apps/api/src/forge/core/prompt-store.ts`）**：取模板与渲染都走官方 `@langfuse/client`
+（`prompt.get` + `TextPromptClient.compile`），一次调用只发**一条 system 消息**，代码里没有自造的 user 内容；
+静态指令在 Langfuse，动态值用变量注入（变量名只允许字母/下划线）：句子链 `{{words}}` `{{word_count}}` `{{last_index}}` `{{sentence_chinese}}`，
+拆句 `{{transcript}}` `{{words}}` `{{note}}`。硬条件：**Text 类型 + 正整数版本 + label 指向该版本 + 含全部变量 + 无 Mustache 控制语法**；
+不满足会回退代码里的本地常量并打中文日志（`[prompt] … 失败（原因）`），SDK 自身另有一条英文 error（每 name 每 30s 最多一次）。
+渲染是 Mustache：**未提供的变量会变成空串**。版本缺失或为 0 时 Langfuse 关联不到观测，
+prompt 详情页的 **Number of Observations 会一直是 0** —— 这是最常见的“计数为空”原因。
+
+**Langfuse（追踪 LangGraph 图、节点与每次 LLM 调用）**：本地自托管栈已并入根 `docker-compose.yml`，
+和 db/minio 一起由 `pnpm docker:start` 拉起，不单独挂 profile：
+
+```bash
+pnpm docker:start   # 起 db/minio + langfuse-web/worker/clickhouse/redis/postgres/minio
+pnpm docker:stop    # 停
+pnpm docker:down    # 删容器（数据卷保留）
+```
+
+界面 `http://localhost:3002`（默认 `dev@local.test` / `langfuse1234`）。端口是特意错开的：3000 留给
+Nuxt dev，8124/9095/9096/6380/5454 避开 dev 的 minio 与 db。首次启动 ClickHouse 要 1-2 分钟。
+`apps/api/.env.example` 里的 `LANGFUSE_PUBLIC_KEY` / `SECRET_KEY` 就是 compose 预置的那对，直接可用。
+
+本地只想调 forge 的图（不需要 DB、OSS 和整个 Nest）：根目录 `pnpm dev:langsmith` 起 LangGraph Studio
+（图 API `:2024`，Studio 链接见启动横幅），入口与 Input 示例见 `apps/api/src/forge/core/README.md` §8.2。
+注意 Studio 那条链路不接 Langfuse（它自己调 invoke，塞不进 callbacks），看 trace 请跑真实流水线。
 
 ### 最小可用配置（在 `apps/api/.env` 的 FORGE\_\* 段填 Key，参考 `.env.example`）
 

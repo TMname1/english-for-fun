@@ -15,14 +15,16 @@ pnpm dev:serve      # 启动后端（watch 模式，自动先构建 schema / sto
 
 配置：复制 `apps/api/.env.example` 为 `apps/api/.env`。
 
-| 变量              | 用途                                                                                                              |
-| ----------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `DATABASE_URL`    | Postgres 连接串                                                                                                   |
-| `SECRET`          | 签名密钥                                                                                                          |
-| `PORT`            | 监听端口，默认 3001                                                                                               |
-| `S3_*`            | 对象存储（dev MinIO / prod 阿里云 OSS），见根目录 `README.env.dev.md` 与 `README.env.prod.md`；默认值即 dev MinIO |
-| `TTS_PROXY_URL`   | Edge TTS websocket 代理（可选）                                                                                   |
-| `FORGE_REPO_ROOT` | forge 子进程定位 monorepo 根的覆盖项（可选，默认自动向上找）                                                      |
+| 变量                 | 用途                                                                                                              |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`       | Postgres 连接串                                                                                                   |
+| `SECRET`             | 签名密钥                                                                                                          |
+| `PORT`               | 监听端口，默认 3001                                                                                               |
+| `S3_*`               | 对象存储（dev MinIO / prod 阿里云 OSS），见根目录 `README.env.dev.md` 与 `README.env.prod.md`；默认值即 dev MinIO |
+| `TTS_PROXY_URL`      | Edge TTS websocket 代理（可选）                                                                                   |
+| `FORGE_REPO_ROOT`    | forge 子进程定位 monorepo 根的覆盖项（可选，默认自动向上找）                                                      |
+| `FORGE_ORCHESTRATOR` | forge 编排层：`graph`（默认，LangGraph）\| `legacy`（命令式，回滚用）；运行时生效，无需重新构建                   |
+| `LANGSMITH_*`        | 可选：`LANGSMITH_TRACING=true` 时把图的节点/LLM 调用上报 LangSmith；本地调图不用配（见下方「调试图」）            |
 
 `NODE_ENV` 决定读哪个 env 文件：`prod` → `.env.prod`，`test` → `.env.test`，否则 `.env`。
 
@@ -36,17 +38,17 @@ pnpm dev:serve      # 启动后端（watch 模式，自动先构建 schema / sto
 
 ## 业务模块
 
-| 模块                     | 职责                                                                                                                                                                                                                                                                                                                                                         |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `course-pack`            | 课程包 CRUD、学习内容（句子+进度）、完成计数；视频上传（multer 落临时目录 → 传对象存储 `course-video/`，2GB 上限、扩展名白名单）；播放接口把对象键转预签名 URL（`videoIsExternal` 区分外链）                                                                                                                                                                 |
-| `course-history`         | 课程完成历史查询                                                                                                                                                                                                                                                                                                                                             |
-| `user-course-progress`   | 最近课程包（limit 钳制 1–3）+ upsert 当前 statement 进度                                                                                                                                                                                                                                                                                                     |
-| `user-learning-activity` | 按日 / 总计学习时长统计与上报                                                                                                                                                                                                                                                                                                                                |
-| `mastered-element`       | 已掌握单词的增删查                                                                                                                                                                                                                                                                                                                                           |
-| `tts`                    | **msedge-tts**（Edge 神经网络语音）：美式 `en-US-AriaNeural` / 英式 `en-GB-SoniaNeural`；sha256(voice\|text) 对象存储缓存 mp3（`tts/` 前缀）、并发去重、SSML 转义；text ≤500 字符                                                                                                                                                                            |
-| `tool`                   | `GET /tool/dailySentence` 代理金山词霸每日一句                                                                                                                                                                                                                                                                                                               |
-| `bili`                   | B 站扫码登录（二维码 data URL + 轮询）、视频信息/分 P、后台下载（并发上限 3、可取消）；下载成品上传对象存储后自动调 `ForgeService.createJobFromUploadedVideo` 建流水线任务，本地临时文件用后即删。`bilidown-bridge.ts` 静态 import 内置的 `src/bili/bilidown` 内核                                                                                           |
-| `forge`                  | 课程制作流水线 job API：spawn node 跑编译产物 `src/forge/core/pipeline-runner.js` 子进程，stdout 走 JSON Lines 事件协议；job 存内存 Map（终态 4h 清理）；视频存对象存储，ffmpeg/ASR 用本地临时工作区（阶段结束上传 JSON 产物到 `forge/<jobId>/` 后清理）；转写完成后停在 `awaiting_review` 等前端校对，resume 后续跑结构化+对齐；单 clip ≤300s、须升序不重叠 |
+| 模块                     | 职责                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `course-pack`            | 课程包 CRUD、学习内容（句子+进度）、完成计数；视频上传（multer 落临时目录 → 传对象存储 `course-video/`，2GB 上限、扩展名白名单）；播放接口把对象键转预签名 URL（`videoIsExternal` 区分外链）                                                                                                                                                                                                                                                                                                         |
+| `course-history`         | 课程完成历史查询                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `user-course-progress`   | 最近课程包（limit 钳制 1–3）+ upsert 当前 statement 进度                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `user-learning-activity` | 按日 / 总计学习时长统计与上报                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `mastered-element`       | 已掌握单词的增删查                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `tts`                    | **msedge-tts**（Edge 神经网络语音）：美式 `en-US-AriaNeural` / 英式 `en-GB-SoniaNeural`；sha256(voice\|text) 对象存储缓存 mp3（`tts/` 前缀）、并发去重、SSML 转义；text ≤500 字符                                                                                                                                                                                                                                                                                                                    |
+| `tool`                   | `GET /tool/dailySentence` 代理金山词霸每日一句                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `bili`                   | B 站扫码登录（二维码 data URL + 轮询）、视频信息/分 P、后台下载（并发上限 3、可取消）；下载成品上传对象存储后自动调 `ForgeService.createJobFromUploadedVideo` 建流水线任务，本地临时文件用后即删。`bilidown-bridge.ts` 静态 import 内置的 `src/bili/bilidown` 内核                                                                                                                                                                                                                                   |
+| `forge`                  | 课程制作流水线 job API：spawn node 跑编译产物 `src/forge/core/pipeline-runner.js` 子进程，stdout 走 JSON Lines 事件协议；子进程内用 LangGraph `StateGraph` 编排（`prepare → transcribe → structureBatch → finalize`，结构化出现失败句时停在 `reviewGate` 的 interrupt 并置 `needs_fix`），续跑靠 `forge/<jobId>/graph.checkpoint.json`；job 存内存 Map（终态 4h 清理）；视频存对象存储，ffmpeg/ASR 用本地临时工作区（阶段结束上传 JSON 产物到 `forge/<jobId>/` 后清理）；单 clip ≤300s、须升序不重叠 |
 
 ## 端点一览
 
@@ -82,8 +84,8 @@ pnpm dev:serve      # 启动后端（watch 模式，自动先构建 schema / sto
 | `POST /bili/downloads/:id/cancel`               | 取消下载                                                          |
 | `POST /forge/jobs`                              | multipart 上传视频 + 建 job（defer 可延后启动）                   |
 | `POST /forge/jobs/:id/start`                    | 提交切片区间，启动转写                                            |
-| `GET /forge/jobs/:id`                           | 轮询状态（awaiting_review 附 transcript，done 附 courseJson）     |
-| `POST /forge/jobs/:id/resume`                   | 提交校对分段，续跑结构化 + 对齐                                   |
+| `GET /forge/jobs/:id`                           | 轮询状态（needs_fix 附 structureProgress，done 附 courseJson）    |
+| `POST /forge/jobs/:id/resolve`                  | 对失败句提交删除 / 重试决策，续跑结构化 + 对齐                    |
 | `DELETE /forge/jobs/:id`                        | 取消 job（杀子进程，幂等）                                        |
 
 ## 对象存储（单桶 + 前缀）
@@ -93,7 +95,7 @@ pnpm dev:serve      # 启动后端（watch 模式，自动先构建 schema / sto
 - `course-video/`：上传 / B 站下载 / forge 导入的视频（流水线输入，预签名 URL 播放）
 - `course-audio/`：课程音频（保留前缀与读取能力）
 - `tts/`：TTS mp3 缓存
-- `forge/<jobId>/`：流水线 JSON 产物（meta / transcript / transcript.edited / clips / alignment / course）
+- `forge/<jobId>/`：流水线 JSON 产物（meta / transcript / clips / alignment / course / structure.progress / `graph.checkpoint.json`）
 
 ffmpeg/ASR 必需的临时文件在 `os.tmpdir()/earthworm-*` 下，阶段结束即清理；B 站扫码登录的 cookie 持久化在数据库 `bili_cookie` 表（不再写本地文件）。
 数据库 `course_packs.video` 存对象键（或外部 URL），播放接口按需转预签名 URL。
@@ -104,6 +106,21 @@ ffmpeg/ASR 必需的临时文件在 `os.tmpdir()/earthworm-*` 下，阶段结束
   级联删除视频对象与 `forge/<id>/`（id = 视频文件名去扩展名）。清理失败仅记 warn 日志，不影响删包。
 - **tts/ 缓存**：内容寻址的共享缓存，不参与级联删除，由生命周期规则 30 天过期
   （dev 由 compose `minio-init` 自动配置；prod 在 OSS 控制台配置，见 README.env.prod.md）。
+
+## 调试图（只调 forge 的 LangGraph 编排）
+
+不需要 DB / OSS / 整个 Nest，单独把图加载进 LangGraph Studio，可单步看每步 state、手动 resume interrupt：
+
+```bash
+pnpm dev:langsmith    # 根目录；图 API :2024，Studio 链接见启动横幅
+```
+
+- 入口 `src/forge/core/graph/dev-entry.ts`（MemorySaver，不写 checkpoint），配置 `apps/api/langgraph.json`。
+- 需要 Node ≥ 20.16（`@langchain/langgraph-cli` 的 `engines`）；仓库 `.node-version` 的 20.12.2 低于该值，
+  装依赖只会告警，但真正跑 Studio 请用更新的 20.x 或 22。
+- 节点仍会真实调 ffmpeg / ASR / LLM，用小素材；Input / Resume 的 JSON 示例见
+  `src/forge/core/README.md` §8.2。
+- 与 `dev:serve` 的关系：后者是完整业务链路（前端 → Nest → 子进程 → 同一张图），前者只看图本身。
 
 ## 测试
 

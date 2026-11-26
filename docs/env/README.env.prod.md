@@ -28,15 +28,16 @@ OSS 原生兼容 S3 协议，代码统一走 `@earthworm/storage`（AWS SDK）�
 只需配一处（Docker 部署为 `/opt/earthworm/.env.prod`，非容器为 `apps/api/.env.prod`；forge 子进程自动继承，CLI 共用该文件）。
 **生产没有默认值兜底可用，`S3_*` 必须显式填写**（代码默认值面向 dev MinIO）：
 
-| 变量                         | 生产取值                               | 说明                                                                                      |
-| ---------------------------- | -------------------------------------- | ----------------------------------------------------------------------------------------- |
-| `S3_ENDPOINT`                | `https://oss-cn-<region>.aliyuncs.com` | OSS 的 **S3 兼容端点**，如 `https://oss-cn-hangzhou.aliyuncs.com`。不要填管理控制台地址。 |
-| `S3_REGION`                  | `oss-cn-<region>`                      | 如 `oss-cn-hangzhou`、`oss-cn-shanghai`，与端点一致。                                     |
-| `S3_ACCESS_KEY_ID`           | RAM 子账号 AccessKey ID                | 见下文「RAM 授权」。                                                                      |
-| `S3_SECRET_ACCESS_KEY`       | RAM 子账号 AccessKey Secret            | 只放服务端 `.env.prod`，绝不进前端或仓库。                                                |
-| `S3_BUCKET`                  | 你在 OSS 控制台创建的桶名              | 桶需与端点同地域。                                                                        |
-| `S3_FORCE_PATH_STYLE`        | **`false`**                            | OSS 用虚拟主机风格（`<bucket>.<endpoint>`）。填 `true` 会 404/签名错误。                  |
-| `S3_PRESIGN_EXPIRES_SECONDS` | 按需，如 `21600`（6 小时，可省略）     | 预签名 URL 有效期。过期后前端重新请求 API 自动换新 URL，无需人工干预。                    |
+| 变量                             | 生产取值                               | 说明                                                                                      |
+| -------------------------------- | -------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `S3_ENDPOINT`                    | `https://oss-cn-<region>.aliyuncs.com` | OSS 的 **S3 兼容端点**，如 `https://oss-cn-hangzhou.aliyuncs.com`。不要填管理控制台地址。 |
+| `S3_REGION`                      | `oss-cn-<region>`                      | 如 `oss-cn-hangzhou`、`oss-cn-shanghai`，与端点一致。                                     |
+| `S3_ACCESS_KEY_ID`               | RAM 子账号 AccessKey ID                | 见下文「RAM 授权」。                                                                      |
+| `S3_SECRET_ACCESS_KEY`           | RAM 子账号 AccessKey Secret            | 只放服务端 `.env.prod`，绝不进前端或仓库。                                                |
+| `S3_BUCKET`                      | 你在 OSS 控制台创建的桶名              | 桶需与端点同地域。                                                                        |
+| `S3_FORCE_PATH_STYLE`            | **`false`**                            | OSS 用虚拟主机风格（`<bucket>.<endpoint>`）。填 `true` 会 404/签名错误。                  |
+| `S3_PRESIGN_EXPIRES_SECONDS`     | 按需，如 `21600`（6 小时，可省略）     | **下载/播放**预签名 URL 有效期。过期后前端重新请求 API 自动换新 URL，无需人工干预。       |
+| `S3_PRESIGN_PUT_EXPIRES_SECONDS` | 按需，如 `600`（10 分钟，可省略）      | **浏览器直传**（预签名 PUT）的有效期。浏览器拿到后要立刻开始上传，不宜过长。              |
 
 ### OSS 侧前置步骤
 
@@ -45,8 +46,20 @@ OSS 原生兼容 S3 协议，代码统一走 `@earthworm/storage`（AWS SDK）�
 2. **RAM 子账号**：创建 RAM 用户并生成 AccessKey，授予该桶的读写权限（系统策略 `AliyunOSSFullAccess`
    可用但偏大；推荐自定义策略限定 `acs:oss:*:*:<bucket>` 与 `acs:oss:*:*:<bucket>/*` 的
    `oss:GetObject` / `oss:PutObject` / `oss:DeleteObject` / `oss:ListObjects` / `oss:AbortMultipartUpload`）。
-3. **CORS（可选）**：`<video src>` / `<audio src>` 播放预签名 URL **不需要** CORS。
-   只有当前端用 `fetch()` 直接读对象内容时才需要在桶的「跨域设置」里放行站点来源（GET、允许头 `*`）。
+3. **CORS（上传必配，播放不必）**：`<video src>` / `<audio src>` 播放预签名 URL **不需要** CORS。
+   但 forge 的音视频上传是**浏览器直接 PUT 到 OSS**（见 `README.backend.md`「为什么素材要直传」），
+   浏览器会先发 `OPTIONS` 预检，所以桶的「跨域设置」必须放行前端来源：
+
+   | 项           | 值                                                            |
+   | ------------ | ------------------------------------------------------------- |
+   | 来源 Origin  | `https://bananablog.cc`（有多个前端域名就逐条列出，别用 `*`） |
+   | 允许 Methods | `PUT`、`GET`、`HEAD`                                          |
+   | 允许 Headers | `*`（至少要有 `Content-Type`，浏览器 PUT 文件时会带）         |
+   | 暴露 Headers | `ETag`（可选，便于以后做校验/断点续传）                       |
+   | 缓存时间     | `600`                                                         |
+
+   没配或配错时，浏览器控制台报 `blocked by CORS policy`，前端提示「直传对象存储失败（多半是 OSS 桶未配置 CORS 跨域规则）」。
+
 4. **网络**：服务器与 OSS 同地域时可改用内网端点 `https://oss-cn-<region>-internal.aliyuncs.com`
    省流量费；但**预签名 URL 的 host 也会变成内网域名，浏览器无法访问**——只要前端要直连播放，
    `S3_ENDPOINT` 必须用公网端点。
@@ -87,6 +100,7 @@ S3_SECRET_ACCESS_KEY="RAM子账号AccessKeySecret"
 S3_BUCKET="你的桶名"
 S3_FORCE_PATH_STYLE="false"
 S3_PRESIGN_EXPIRES_SECONDS="21600"
+S3_PRESIGN_PUT_EXPIRES_SECONDS="600"
 ```
 
 ## 二、前端 Client（`apps/client/.env.prod`，构建时注入）
@@ -110,12 +124,25 @@ S3_PRESIGN_EXPIRES_SECONDS="21600"
 后端发起的流水线子进程自动继承 API 进程的环境变量，**无需单独配置**。
 在生产服务器上手动跑 CLI（如 `forge:import`）时读的也是同一文件：
 
-| 变量                          | 生产取值                                | 说明                          |
-| ----------------------------- | --------------------------------------- | ----------------------------- |
-| `FORGE_API_URL`               | 生产 API 地址                           | 课程导入目标。                |
-| `AUTH_*`                      | 与生产 API 一致                         | 导入前自动登录用。            |
-| `S3_*`                        | 与上文 OSS 配置一致                     | 视频与 JSON 产物上传目标。    |
-| `FORGE_ASR_*` / `FORGE_LLM_*` | 同 dev（见 `README.env.dev.md` 第三节） | ASR / LLM 的 Key 与模型配置。 |
+| 变量                                          | 生产取值                                | 说明                                                                                                                                                                    |
+| --------------------------------------------- | --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `FORGE_API_URL`                               | 生产 API 地址                           | 课程导入目标。                                                                                                                                                          |
+| `AUTH_*`                                      | 与生产 API 一致                         | 导入前自动登录用。                                                                                                                                                      |
+| `S3_*`                                        | 与上文 OSS 配置一致                     | 视频与 JSON 产物上传目标。                                                                                                                                              |
+| `FORGE_ASR_*` / `FORGE_LLM_*`                 | 同 dev（见 `README.env.dev.md` 第三节） | ASR / LLM 的 Key 与模型配置。                                                                                                                                           |
+| `FORGE_CAPTIONER_BASE_URL`                    | 百炼 workspace 域名                     | 转写子图的句级打标端点（异步任务）。**必须显式填 workspace 域名**——公网 `dashscope.aliyuncs.com` 不一定开通该模型；留空会回退 `FORGE_ASR_BASE_URL` 的 origin 并打警告。 |
+| `FORGE_CAPTIONER_API_KEY`                     | 留空                                    | 回退 `FORGE_ASR_API_KEY`（同一 workspace 共用一把 Key）。                                                                                                               |
+| `FORGE_ASR_CHUNK_*` / `FORGE_ASR_CONCURRENCY` | 用默认值                                | 切块上限 180s / padding 200ms / 块级并发 3。单个 job 仍受 30 分钟超时约束，超长素材注意拆分。                                                                           |
+| `FORGE_ORCHESTRATOR`                          | 不填（默认 `graph`）                    | 编排层实现；线上排障时可临时设 `legacy` 回滚到命令式实现，改完重启进程即生效，无需重新构建镜像。                                                                        |
+| `LANGSMITH_*`                                 | 不填                                    | 仅当需要把线上跑图/LLM 调用上报 LangSmith 时填（`LANGSMITH_TRACING=true` + `LANGSMITH_API_KEY`）。                                                                      |
+| `LANGFUSE_PUBLIC_KEY`                         | Langfuse Cloud 项目的 pk                | 追踪 LangGraph 图/节点/每次 LLM 调用。与 `LANGFUSE_SECRET_KEY` 同时有值才启用。                                                                                         |
+| `LANGFUSE_SECRET_KEY`                         | 对应的 sk                               | 任一为空 = 关闭追踪（fail-open，不影响流水线）。                                                                                                                        |
+| `LANGFUSE_BASE_URL`                           | `https://cloud.langfuse.com`            | 线上**不自托管**，直连 Langfuse Cloud。                                                                                                                                 |
+| `LANGFUSE_TRACING_ENVIRONMENT`                | `production`                            | 用来在 Langfuse 里把线上与本地 trace 分开。                                                                                                                             |
+
+> **为什么线上不自托管 Langfuse**：完整栈（web/worker/ClickHouse/Postgres/Redis/MinIO）官方单机建议
+> 4 核 16G，精简后仍需额外 ~1.9G 常驻内存，当前 2 核 2G 的 ECS 放不下。走 Cloud 只需容器能**出站**
+> 访问 `443`，安全组入方向保持只开 22 不变，`apps/api/deploy/docker-compose.yml` 无需任何改动。
 
 ## 四、不需要部署 / 配置的项
 
@@ -128,7 +155,7 @@ S3_PRESIGN_EXPIRES_SECONDS="21600"
 
 1. 管理页上传一个视频 → OSS 控制台出现 `course-video/<name>` → 创建课程包 → 学习页可播放、可 seek。
 2. TTS 发音一次 → OSS 出现 `tts/<hash>.mp3`，第二次请求命中缓存。
-3. （若开启 forge）上传 → 切片 → 转写 → 校对 → 入库，OSS 出现 `forge/<jobId>/*.json`。
+3. （若开启 forge）上传 → 切片 → 转写 → 结构化（有失败句时前端 resolve）→ 入库，OSS 出现 `forge/<jobId>/*.json`（含 `graph.checkpoint.json`）。
 4. 服务器本地临时目录（`os.tmpdir()/earthworm-*`）任务结束后无残留。
 5. 删除一个课程包 → OSS 控制台对应 `course-video/<name>` 与 `forge/<id>/` 消失（若无其他包引用该视频）。
 

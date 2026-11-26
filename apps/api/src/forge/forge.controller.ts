@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { extname, join } from "node:path";
+import { extname } from "node:path";
 
 import {
   BadRequestException,
@@ -17,7 +16,10 @@ import {
 import { FileInterceptor } from "@nestjs/platform-express";
 import { diskStorage } from "multer";
 
-import { isAllowedMediaExt, MEDIA_EXT_LABELS } from "../common/media-ext";
+import { isAllowedMediaExt, MAX_MEDIA_BYTES, MEDIA_EXT_LABELS } from "../common/media-ext";
+import { PresignMediaUploadDto } from "../common/media-upload";
+import { UPLOAD_TMP_DIR } from "../common/upload-tmp";
+import { CreateForgeJobFromUploadDto } from "./dto/create-forge-job-from-upload.dto";
 import { CreateForgeJobDto } from "./dto/create-forge-job.dto";
 import { ResolveForgeFailuresDto } from "./dto/resolve-forge-failures.dto";
 // 【已停用 · 转录校对】仅 resume 接口使用，该接口已注释保留（见下方 resumeJob 说明）。
@@ -25,16 +27,32 @@ import { ResolveForgeFailuresDto } from "./dto/resolve-forge-failures.dto";
 import { StartForgeJobDto } from "./dto/start-forge-job.dto";
 import { ForgeService } from "./forge.service";
 
-/** 音视频统一白名单（见 src/common/media-ext.ts），与流水线支持的 mediaPath 类型一致 */
-const MAX_VIDEO_BYTES = 2 * 1024 * 1024 * 1024;
-/** multer 落盘只是中转，service 上传对象存储后即删 */
-const UPLOAD_TMP_DIR = join(tmpdir(), "earthworm-uploads");
-
 @Controller("forge")
 export class ForgeController {
   constructor(private readonly forgeService: ForgeService) {}
 
-  /** 接收 multipart 上传 + 启动流水线，返回 jobId；不等待流水线完成 */
+  /**
+   * 浏览器直传第一步：拿预签名 PUT URL（JSON 请求，秒级返回）。
+   * 前端 PUT 到 OSS 成功后，再调 POST forge/jobs/from-upload 建任务。
+   */
+  @Post("uploads/presign")
+  presignUpload(@Body() dto: PresignMediaUploadDto) {
+    return this.forgeService.presignUpload(dto.fileName);
+  }
+
+  /** 浏览器直传第二步：只带 videoKey 的 JSON，服务端 HeadObject 校验后建任务 */
+  @Post("jobs/from-upload")
+  createJobFromUpload(@Body() dto: CreateForgeJobFromUploadDto) {
+    return this.forgeService.createJobFromUploadedKey(dto);
+  }
+
+  /**
+   * 【旧入口 · 兼容保留】multipart 上传。
+   *
+   * 线上 Cloudflare Tunnel 回源有效上行只有 ~47KB/s，请求体必须在 100s 内传完才不会被 524 掐断，
+   * 8MB 素材就会失败。前端已改用 uploads/presign + jobs/from-upload 直传 OSS；
+   * 这里保留是为了让缓存了旧静态产物的页面仍能工作，新代码不要再用。
+   */
   @Post("jobs")
   @UseInterceptors(
     FileInterceptor("videoFile", {
@@ -50,7 +68,7 @@ export class ForgeController {
           cb(null, `${randomUUID()}${ext}`);
         },
       }),
-      limits: { fileSize: MAX_VIDEO_BYTES },
+      limits: { fileSize: MAX_MEDIA_BYTES },
       fileFilter: (_req, file, cb) => {
         const ext = extname(file.originalname).toLowerCase();
         if (!isAllowedMediaExt(ext)) {

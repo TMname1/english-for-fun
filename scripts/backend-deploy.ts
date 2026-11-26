@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createReadStream, readFileSync } from "node:fs";
 import path from "node:path";
 
@@ -54,23 +54,42 @@ function isDockerNotRunning(output: string): boolean {
   );
 }
 
-function run(cmd: string, args: string[]): void {
+/**
+ * 执行一条可能很耗时的外部命令（docker build/push 等）。
+ * 输出实时透传到当前终端——否则构建阶段十几分钟毫无反馈，容易被误判为卡死。
+ * 同时只在内存里保留末尾一小段输出，供失败时判定并展示错误。
+ */
+function run(cmd: string, args: string[]): Promise<void> {
   log([cmd, ...args].join(" "));
-  const result = spawnSync(cmd, args, {
-    cwd: repoRoot,
-    stdio: "pipe",
-    encoding: "utf8",
-    shell: process.platform === "win32",
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd, args, {
+      cwd: repoRoot,
+      stdio: ["inherit", "pipe", "pipe"],
+      shell: process.platform === "win32",
+    });
+
+    const MAX_TAIL = 20_000;
+    let tail = "";
+    const collect = (chunk: Buffer, out: NodeJS.WriteStream): void => {
+      out.write(chunk);
+      tail = (tail + chunk.toString()).slice(-MAX_TAIL);
+    };
+    child.stdout?.on("data", (chunk: Buffer) => collect(chunk, process.stdout));
+    child.stderr?.on("data", (chunk: Buffer) => collect(chunk, process.stderr));
+
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) return resolve();
+      if (cmd === "docker" && isDockerNotRunning(tail)) {
+        return reject(
+          new Error(
+            `Docker 环境未就绪，请先启动本地 Docker Desktop（或 Docker 服务），确认 Docker 引擎正常运行后重试。\n原始错误：${tail}`,
+          ),
+        );
+      }
+      reject(new Error(`命令失败（退出码 ${code}）：${cmd} ${args.join(" ")}\n${tail}`));
+    });
   });
-  if (result.status !== 0) {
-    const output = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
-    if (cmd === "docker" && isDockerNotRunning(output)) {
-      throw new Error(
-        `Docker 环境未就绪，请先启动本地 Docker Desktop（或 Docker 服务），确认 Docker 引擎正常运行后重试。\n原始错误：${output}`,
-      );
-    }
-    throw new Error(`命令失败（退出码 ${result.status}）：${cmd} ${args.join(" ")}\n${output}`);
-  }
 }
 
 /** 取最后一条 git 提交的短哈希，拼成唯一镜像 tag。 */
@@ -199,8 +218,8 @@ async function main(): Promise<void> {
 
   log(`本次镜像 tag：${tag}（远端引用：${remoteImageRef}）`);
 
-  // 1. 本地构建 linux/amd64 镜像
-  run("docker", [
+  // 1. 本地构建 linux/amd64 镜像（耗时最长的一步，输出会实时打印）
+  await run("docker", [
     "build",
     "--platform",
     "linux/amd64",
@@ -212,7 +231,7 @@ async function main(): Promise<void> {
   ]);
 
   // 2. 打 tag 指向 ACR
-  run("docker", ["tag", localImageRef, remoteImageRef]);
+  await run("docker", ["tag", localImageRef, remoteImageRef]);
 
   // 3. 本地登录 ACR（密码走 stdin）
   log("docker login (本地)");
@@ -232,7 +251,7 @@ async function main(): Promise<void> {
   }
 
   // 4. 推送镜像
-  run("docker", ["push", remoteImageRef]);
+  await run("docker", ["push", remoteImageRef]);
 
   // 5-9. 连接服务器：覆盖 env/compose → 登录 ACR → cd → pull → up
   log(`SSH 连接 ${SSH_USER}@${SSH_HOST}:${SSH_PORT}`);

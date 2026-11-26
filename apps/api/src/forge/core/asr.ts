@@ -1,32 +1,23 @@
 import { readFile } from "node:fs/promises";
+import { basename } from "node:path";
 
+import { HumanMessage } from "@langchain/core/messages";
+
+import type { QwenAsrSentence } from "./asr-model";
 import type { ClipRange, Transcript, TranscriptSegment, TranscriptWord } from "./types";
+import { asrSentencesOf, buildAsrModel } from "./asr-model";
 import { config } from "./config";
 import { runFfmpeg } from "./util";
+
+/** 协议层（请求/响应形状）在 asr-model.ts；这里再导出，保持既有 import 路径不变 */
+export { parseSyncSentence } from "./asr-model";
+export type { QwenAsrSentence, QwenAsrWord } from "./asr-model";
 
 /**
  * flash 同步版（qwen-audio-3.1-asr-flash）官方建议单段 ≤5 分钟。超过直接报错，
  * 长音频请用切片把选区分段（流水线已支持多 clip 分段转写 + 合并）。
  */
 const MAX_ASR_SECONDS = 300;
-
-/** DashScope Qwen-Audio-ASR 同步返回的词结构（时间戳单位毫秒） */
-export interface QwenAsrWord {
-  text?: string;
-  begin_time?: number;
-  end_time?: number;
-  punctuation?: string;
-}
-
-/** DashScope Qwen-Audio-ASR 同步返回的句子结构（时间戳单位毫秒） */
-export interface QwenAsrSentence {
-  sentence_id?: number;
-  begin_time?: number;
-  end_time?: number;
-  text?: string;
-  sentence_end?: boolean;
-  words?: QwenAsrWord[];
-}
 
 /** 毫秒 → 秒；非法值返回 null */
 function msToSeconds(ms: unknown): number | null {
@@ -45,20 +36,29 @@ export async function transcodeToWav(
   );
   // 输入侧 seek + 重编码：对音频是采样级精确的
   const seekArgs = range ? ["-ss", String(range.start), "-t", String(range.end - range.start)] : [];
-  await runFfmpeg([
-    "-y",
-    ...seekArgs,
-    "-i",
-    audioPath,
-    "-vn",
-    "-ac",
-    "1",
-    "-ar",
-    "16000",
-    "-c:a",
-    "pcm_s16le",
-    wavPath,
-  ]);
+  try {
+    await runFfmpeg([
+      "-y",
+      ...seekArgs,
+      "-i",
+      audioPath,
+      "-vn",
+      "-ac",
+      "1",
+      "-ar",
+      "16000",
+      "-c:a",
+      "pcm_s16le",
+      wavPath,
+    ]);
+  } catch (error) {
+    // 扩展名在白名单里仍可能失败：文件损坏 / 内容与扩展名不符（把 .md 改名成 .mp4）/ 容器里没有音轨
+    throw new Error(
+      `[asr] 无法从这个文件提取音频：${audioPath}\n` +
+        `  ├ 常见原因：文件损坏；扩展名与实际内容不符（例如文本文件改名成 .mp4）；容器内没有音轨\n` +
+        `  └ 原始错误：${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
 }
 
 /** 有效 ASR 词 + 碎片拼接信息（供预处理确定性合并碎片词） */
@@ -161,34 +161,39 @@ export function buildTranscriptFromSentences(
 }
 
 /**
- * 解析同步响应 JSON：output.sentence 为单个句子对象（整段 text + 全部词）。
- * 防御性兼容数组写法；错误载荷（code 且无 output）抛错。
+ * 构造 ASR 观测的「人类可读入参」。
+ *
+ * 为什么不是直接把音频塞进消息：messages 会被 callback 层序列化进 trace，57s 的 wav
+ * base64 就有 1~2MB、5 分钟能到 13MB，会把 Langfuse 整批上报撑挂。所以这里只放摘要，
+ * 结构化字段另外走 `metadata`，音频本体只随请求体发送、不进追踪。
  */
-export function parseSyncSentence(json: unknown): QwenAsrSentence[] {
-  const body = json as {
-    code?: string;
-    message?: string;
-    output?: { sentence?: QwenAsrSentence | QwenAsrSentence[] };
-  };
-  if (body?.code && !body.output) {
-    throw new Error(`[asr] 服务返回错误: ${body.code} ${body.message ?? ""}`.trim());
-  }
-  const sentence = body?.output?.sentence;
-  if (!sentence) {
-    throw new Error(`[asr] 同步响应缺少 output.sentence: ${JSON.stringify(json).slice(0, 300)}`);
-  }
-  return Array.isArray(sentence) ? sentence : [sentence];
+export function asrInputSummary(input: {
+  wavName: string;
+  durationSec: number;
+  audioBytes: number;
+  language: string;
+}): string {
+  const mb = (input.audioBytes / 1024 / 1024).toFixed(2);
+  return [
+    "转写音频（DashScope Qwen-Audio-ASR，同步返回句/词级毫秒时间戳）",
+    `- 文件：${input.wavName}（wav / 16 kHz / 单声道 / 16-bit PCM）`,
+    `- 时长：${input.durationSec.toFixed(1)}s（单段上限 ${MAX_ASR_SECONDS}s）`,
+    `- 音频数据：base64 内联约 ${mb} MB（体积过大，不写入追踪输入）`,
+    `- 语言提示：${input.language}`,
+  ].join("\n");
 }
 
 /**
- * 调百炼 Qwen-Audio-ASR 转写 wav：base64 data URI 上传 + 同步调用，等待完整结果一次返回
- * （output.sentence 单句对象，含整段 text 与全部词级毫秒时间戳）。
- * 超 5 分钟直接报错（flash 同步版建议上限）。同时返回原始句子供预处理合并碎片词。
+ * 调百炼 Qwen-Audio-ASR 转写 wav，返回**原始句子**（毫秒时间戳，未经换算）。
+ *
+ * 与 `transcribeWithRaw` 的区别：这里允许「空结果」（返回空数组），因为转写子图按
+ * 块调用，单块静音是正常情况，是否算失败由上层（全部块都为空）决定。
+ * 超 5 分钟直接报错（flash 同步版建议上限）。
  */
-export async function transcribeWithRaw(
+export async function transcribeSentences(
   wavPath: string,
   language = "en",
-): Promise<{ transcript: Transcript; sentences: QwenAsrSentence[] }> {
+): Promise<{ sentences: QwenAsrSentence[]; durationSec: number; audioBytes: number }> {
   if (!config.asrApiKey) {
     throw new Error("[asr] 未配置 FORGE_ASR_API_KEY（百炼 DashScope API Key，sk- 开头）");
   }
@@ -202,46 +207,63 @@ export async function transcribeWithRaw(
     );
   }
 
-  const body = JSON.stringify({
-    model: config.asrModel,
-    input: {
-      messages: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "input_audio",
-              input_audio: { data: `data:audio/wav;base64,${buf.toString("base64")}` },
-            },
-          ],
-        },
-      ],
-    },
-    parameters: {
-      format: "wav",
-      sample_rate: "16000",
-      language_hints: [language],
-    },
-  });
-
   console.log(
     `[asr] 提交转写请求: ${wavPath}（${config.asrModel}，约 ${durationSec.toFixed(1)}s，同步等待完整结果）`,
   );
-  const res = await fetch(config.asrBaseUrl, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${config.asrApiKey}`,
-      "Content-Type": "application/json",
-    },
-    body,
-    signal: AbortSignal.timeout(config.asrTimeoutMs),
-  });
-  if (!res.ok) {
-    const detail = await res.text().catch(() => "");
-    throw new Error(`[asr] 转写请求失败（HTTP ${res.status}）: ${detail.slice(0, 400)}`);
-  }
 
-  const sentences = parseSyncSentence(await res.json());
+  // 音频走构造参数（不进 messages）：messages 会被 callback 层序列化进 trace，
+  // 5 分钟 wav 的 base64 约 13MB，直接放进消息会把 Langfuse 上报撑挂。
+  const model = buildAsrModel({
+    audio: `data:audio/wav;base64,${buf.toString("base64")}`,
+    language,
+    durationSec,
+  });
+  const message = await model
+    .withConfig({
+      runName: "asr",
+      // 结构化字段走 metadata：Langfuse 会把它们并到这条观测上，便于按模型/时长筛选
+      metadata: {
+        asr: {
+          model: config.asrModel,
+          format: "wav",
+          sample_rate: 16000,
+          channels: 1,
+          bit_depth: 16,
+          duration_sec: Number(durationSec.toFixed(2)),
+          audio_bytes: buf.length,
+          language,
+          wav_path: wavPath,
+        },
+      },
+    })
+    .invoke([
+      new HumanMessage(
+        asrInputSummary({
+          wavName: basename(wavPath),
+          durationSec,
+          audioBytes: buf.length,
+          language,
+        }),
+      ),
+    ]);
+
+  return { sentences: asrSentencesOf(message), durationSec, audioBytes: buf.length };
+}
+
+/**
+ * 调百炼 Qwen-Audio-ASR 转写 wav：经 `asr-model.ts` 的 ChatModel（LangChain Runnable）
+ * 完成「base64 data URI 上传 + 同步等待完整结果」。因此这一步与 LLM 调用同属一个生态：
+ * 图内自动继承根 callbacks，legacy 由模型构造器兜底挂 handler，Langfuse 里是一条独立的
+ * LLM 观测（观测名 = `asr`，model = qwen-audio-3.1-asr-flash）。
+ *
+ * 返回原始句子（毫秒时间戳，未经换算）供预处理合并碎片词；空结果抛错（legacy 语义：
+ * 整段都没有语音属于失败）。转写子图按块调用时用 `transcribeSentences`，允许空块。
+ */
+export async function transcribeWithRaw(
+  wavPath: string,
+  language = "en",
+): Promise<{ transcript: Transcript; sentences: QwenAsrSentence[] }> {
+  const { sentences } = await transcribeSentences(wavPath, language);
   const transcript = buildTranscriptFromSentences(sentences, language);
   if (!transcript.wordLevel) {
     console.warn(`[asr] 警告: 未返回词级时间戳，transcript.json 仅含段级文本与起止时间`);

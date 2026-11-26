@@ -1,2 +1,5 @@
 # local runtime data dir only (anchored); must not match src/storage/
 /storage/
+
+# LangGraph API
+.langgraph_api

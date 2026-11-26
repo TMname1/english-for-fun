@@ -70,10 +70,208 @@ services:
       *) mc ilm rule add --expire-days 30 --prefix 'tts/' local/earthworm ;;
       esac
       "
+
+  # ============================================================================
+  # Langfuse 自托管（只用于本地开发/调试；线上走 cloud.langfuse.com，不部署这套）
+  #
+  # 随 pnpm docker:start / stop / down 一起管理，不再单独挂在 profile 上。
+  # 界面：http://localhost:3002        （默认账号 dev@local.test / langfuse1234）
+  # 只跟日志：docker compose logs -f langfuse-web langfuse-worker
+  #
+  # 默认口令全部是本地开发用的弱值，**只在 127.0.0.1 上暴露**。若要给局域网/公网访问，
+  # 先在仓库根 .env 里覆盖 LANGFUSE_PG_PASSWORD / LANGFUSE_CLICKHOUSE_PASSWORD /
+  # LANGFUSE_REDIS_AUTH / LANGFUSE_MINIO_PASSWORD / LANGFUSE_SALT / LANGFUSE_NEXTAUTH_SECRET /
+  # LANGFUSE_ENCRYPTION_KEY（后者用 `openssl rand -hex 32` 生成）再启动。
+  #
+  # 组件职责（v3/v4 架构，缺一不可）：
+  #   langfuse-postgres   用户/组织/项目/API Key/评分定义/数据集/提示词（事务型）
+  #   langfuse-clickhouse traces/observations/scores（所有追踪数据，OLAP）
+  #   langfuse-redis      队列 + API Key/提示词缓存
+  #   langfuse-minio      原始事件落地、多模态附件、导出（线上可换阿里云 OSS）
+  #   langfuse-worker     异步消费队列写 ClickHouse
+  #   langfuse-web        UI + 摄取端点 + SDK 上报入口
+  # ai-gateway 不启用（本项目的 LLM 由 forge 直连 DashScope/ollama，不需要网关中转）
+  # ============================================================================
+  langfuse-worker:
+    image: docker.langfuse.com/langfuse/langfuse-worker:${LANGFUSE_IMAGE_TAG:-4}
+    restart: unless-stopped
+    depends_on: &langfuse-depends-on
+      langfuse-postgres:
+        condition: service_healthy
+      langfuse-minio:
+        condition: service_healthy
+      langfuse-redis:
+        condition: service_healthy
+      langfuse-clickhouse:
+        condition: service_healthy
+    ports:
+      - 127.0.0.1:3030:3030
+    environment: &langfuse-env
+      NEXTAUTH_URL: ${LANGFUSE_NEXTAUTH_URL:-http://localhost:3002}
+      DATABASE_URL: postgresql://postgres:${LANGFUSE_PG_PASSWORD:-langfusepg}@langfuse-postgres:5432/postgres
+      SALT: ${LANGFUSE_SALT:-langfuse-local-salt}
+      ENCRYPTION_KEY: ${LANGFUSE_ENCRYPTION_KEY:-1111111111111111111111111111111111111111111111111111111111111111}
+      TELEMETRY_ENABLED: ${LANGFUSE_TELEMETRY_ENABLED:-false}
+      CLICKHOUSE_MIGRATION_URL: clickhouse://langfuse-clickhouse:9000
+      CLICKHOUSE_URL: http://langfuse-clickhouse:8123
+      CLICKHOUSE_USER: ${LANGFUSE_CLICKHOUSE_USER:-clickhouse}
+      CLICKHOUSE_PASSWORD: ${LANGFUSE_CLICKHOUSE_PASSWORD:-langfusech}
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: ${LANGFUSE_S3_EVENT_UPLOAD_BUCKET:-langfuse}
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: ${LANGFUSE_S3_EVENT_UPLOAD_REGION:-auto}
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: ${LANGFUSE_MINIO_USER:-minio}
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${LANGFUSE_MINIO_PASSWORD:-langfuseminio}
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://langfuse-minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_EVENT_UPLOAD_PREFIX: ${LANGFUSE_S3_EVENT_UPLOAD_PREFIX:-events/}
+      LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: ${LANGFUSE_S3_MEDIA_UPLOAD_BUCKET:-langfuse}
+      LANGFUSE_S3_MEDIA_UPLOAD_REGION: ${LANGFUSE_S3_MEDIA_UPLOAD_REGION:-auto}
+      LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: ${LANGFUSE_MINIO_USER:-minio}
+      LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: ${LANGFUSE_MINIO_PASSWORD:-langfuseminio}
+      LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://langfuse-minio:9000
+      LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: ${LANGFUSE_S3_MEDIA_UPLOAD_PREFIX:-media/}
+      LANGFUSE_S3_BATCH_EXPORT_ENABLED: "false"
+      REDIS_HOST: langfuse-redis
+      REDIS_PORT: "6379"
+      REDIS_AUTH: ${LANGFUSE_REDIS_AUTH:-langfuserd}
+      REDIS_TLS_ENABLED: "false"
+      # Node 默认堆上限按容器内存的一半算，首次启动跑几十个 drizzle 迁移时会 OOM 崩在
+      # "Reached heap limit"，这里显式放开（下面的 mem_limit 才是真上限）
+      NODE_OPTIONS: "--max-old-space-size=1280"
+    mem_limit: 1536m
+    logging: &langfuse-log
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  langfuse-web:
+    image: docker.langfuse.com/langfuse/langfuse:${LANGFUSE_IMAGE_TAG:-4}
+    restart: unless-stopped
+    depends_on: *langfuse-depends-on
+    ports:
+      # 3000 被 Nuxt dev（pnpm dev:client）占用，这里落到 3002
+      - 127.0.0.1:3002:3000
+    environment:
+      <<: *langfuse-env
+      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:-langfuse-local-nextauth-secret}
+      # 浏览器侧直传媒体时用宿主端口；容器内部走服务名
+      LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: ${LANGFUSE_MEDIA_PUBLIC_ENDPOINT:-http://localhost:9095}
+      LANGFUSE_S3_MEDIA_UPLOAD_INTERNAL_ENDPOINT: http://langfuse-minio:9000
+      # 免手工初始化：起来就有组织/项目/API Key/登录账号，省掉去 UI 注册建项目拷 key
+      LANGFUSE_INIT_ORG_ID: ${LANGFUSE_INIT_ORG_ID:-earthworm}
+      LANGFUSE_INIT_ORG_NAME: ${LANGFUSE_INIT_ORG_NAME:-Earthworm}
+      LANGFUSE_INIT_PROJECT_ID: ${LANGFUSE_INIT_PROJECT_ID:-forge}
+      LANGFUSE_INIT_PROJECT_NAME: ${LANGFUSE_INIT_PROJECT_NAME:-forge}
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_INIT_PROJECT_PUBLIC_KEY:-pk-lf-11111111-1111-1111-1111-111111111111}
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_INIT_PROJECT_SECRET_KEY:-sk-lf-22222222-2222-2222-2222-222222222222}
+      LANGFUSE_INIT_USER_EMAIL: ${LANGFUSE_INIT_USER_EMAIL:-dev@local.test}
+      LANGFUSE_INIT_USER_NAME: ${LANGFUSE_INIT_USER_NAME:-dev}
+      LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD:-langfuse1234}
+    # web 要扛 UI 渲染 + 摄取 + 首次迁移，给足堆内存，否则 1G 上限下会 heap OOM 反复重启
+    mem_limit: 2g
+    logging: *langfuse-log
+
+  langfuse-clickhouse:
+    image: docker.io/clickhouse/clickhouse-server:26.3.62.3
+    restart: unless-stopped
+    user: "101:101"
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: ${LANGFUSE_CLICKHOUSE_USER:-clickhouse}
+      CLICKHOUSE_PASSWORD: ${LANGFUSE_CLICKHOUSE_PASSWORD:-langfusech}
+    volumes:
+      - langfuse_clickhouse_data:/var/lib/clickhouse
+      - langfuse_clickhouse_logs:/var/log/clickhouse-server
+    ports:
+      # 8123 与 dev 无冲突；原生协议 9000 被 dev minio 占用且外部用不到，不映射
+      - 127.0.0.1:8124:8123
+    healthcheck:
+      test: wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 1s
+    # ClickHouse 的内存没有走命令行上限（entrypoint 不认 max_server_memory_usage 参数），
+    # 改用容器级上限：超了只杀这个容器，不会把整机拖进 OOM
+    mem_limit: 1500m
+    logging: *langfuse-log
+
+  langfuse-minio:
+    image: cgr.dev/chainguard/minio
+    restart: unless-stopped
+    entrypoint: sh
+    # 启动前先建好 langfuse 桶
+    command: -c 'mkdir -p /data/langfuse && minio server --address ":9000" --console-address ":9001" /data'
+    environment:
+      MINIO_ROOT_USER: ${LANGFUSE_MINIO_USER:-minio}
+      MINIO_ROOT_PASSWORD: ${LANGFUSE_MINIO_PASSWORD:-langfuseminio}
+    volumes:
+      - langfuse_minio_data:/data
+    ports:
+      - 127.0.0.1:9095:9000
+      - 127.0.0.1:9096:9001
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 1s
+      timeout: 5s
+      retries: 5
+      start_period: 1s
+    mem_limit: 512m
+    logging: *langfuse-log
+
+  langfuse-redis:
+    image: docker.io/redis:7
+    restart: unless-stopped
+    command: >
+      --requirepass ${LANGFUSE_REDIS_AUTH:-langfuserd}
+      --maxmemory-policy noeviction
+    volumes:
+      - langfuse_redis_data:/data
+    ports:
+      - 127.0.0.1:6380:6379
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${LANGFUSE_REDIS_AUTH:-langfuserd}", "ping"]
+      interval: 3s
+      timeout: 10s
+      retries: 10
+    mem_limit: 320m
+    logging: *langfuse-log
+
+  langfuse-postgres:
+    image: docker.io/postgres:${LANGFUSE_PG_VERSION:-17}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${LANGFUSE_PG_PASSWORD:-langfusepg}
+      POSTGRES_DB: postgres
+      TZ: UTC
+      PGTZ: UTC
+    volumes:
+      - langfuse_postgres_data:/var/lib/postgresql/data
+    ports:
+      - 127.0.0.1:5454:5432
+    mem_limit: 512m
+    logging: *langfuse-log
+
 volumes:
   db-data:
     driver: local
   testdb-data:
     driver: local
   minio-data:
+    driver: local
+  langfuse_postgres_data:
+    driver: local
+  langfuse_clickhouse_data:
+    driver: local
+  langfuse_clickhouse_logs:
+    driver: local
+  langfuse_minio_data:
+    driver: local
+  langfuse_redis_data:
     driver: local

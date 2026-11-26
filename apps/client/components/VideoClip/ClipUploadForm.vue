@@ -37,6 +37,7 @@
         </div>
         <p class="mt-1 text-xs opacity-70">
           支持 mp4 / m4v / mkv / webm / mov / avi 与 mp3 / m4a / wav / aac，单文件最大 2GB。
+          文件由浏览器直传对象存储（不经服务器中转），进度显示在下方按钮旁。
           音频只显示播放条，同样按 5 分钟切分。
         </p>
       </div>
@@ -281,7 +282,13 @@
       />
     </div>
 
-    <div class="flex justify-end pt-2">
+    <div class="flex items-center justify-end gap-3 pt-2">
+      <span
+        v-if="submitting && typeof uploadPercent === 'number'"
+        class="text-sm opacity-70"
+      >
+        直传中 {{ Math.round(uploadPercent * 100) }}%
+      </span>
       <UButton
         type="submit"
         size="lg"
@@ -323,7 +330,7 @@ export type ClipUploadPayload =
       jobId: string;
     };
 
-const props = defineProps<{ uploading: boolean }>();
+const props = defineProps<{ uploading: boolean; uploadPercent?: number | null }>();
 const emit = defineEmits<{ (e: "submit", payload: ClipUploadPayload): void }>();
 
 /** 与 apps/api/src/common/media-ext.ts 的白名单一致（含音频） */

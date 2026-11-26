@@ -23,6 +23,7 @@
       <ClipUploadForm
         v-if="step === 'upload'"
         :uploading="uploading"
+        :upload-percent="uploadPercent"
         @submit="handleUpload"
       />
 
@@ -198,6 +199,8 @@ type Step = "upload" | "edit" | "working" | "review" | "fix" | "failed";
 
 const step = ref<Step>("upload");
 const uploading = ref(false);
+/** 直传进度（0~1）；B 站下载走服务端，不显示 */
+const uploadPercent = ref<number | null>(null);
 const submitting = ref(false);
 const importing = ref(false);
 const jobId = ref<string | null>(null);
@@ -265,6 +268,7 @@ watch(
 
 async function handleUpload(payload: ClipUploadPayload) {
   uploading.value = true;
+  uploadPercent.value = payload.kind === "file" ? 0 : null;
   try {
     let id: string;
     if (payload.kind === "bili") {
@@ -278,6 +282,9 @@ async function handleUpload(payload: ClipUploadPayload) {
         language: payload.language,
         desc: payload.desc,
         defer: true,
+        onProgress: (percent) => {
+          uploadPercent.value = percent;
+        },
       }));
     }
     jobId.value = id;
@@ -290,6 +297,7 @@ async function handleUpload(payload: ClipUploadPayload) {
     toast.error("上传失败：" + describeError(error));
   } finally {
     uploading.value = false;
+    uploadPercent.value = null;
   }
 }
 

@@ -25,6 +25,9 @@ export const MEDIA_EXT: ReadonlySet<string> = new Set([...VIDEO_EXT, ...AUDIO_EX
 /** 白名单的展示文案（错误提示用） */
 export const MEDIA_EXT_LABELS = "mp4/m4v/mkv/webm/mov/avi 与 mp3/m4a/wav/aac";
 
+/** 单文件上限 2GB（浏览器直传与旧 multipart 上传共用同一口径） */
+export const MAX_MEDIA_BYTES = 2 * 1024 * 1024 * 1024;
+
 export type MediaKind = "video" | "audio";
 
 /** 剥掉 query（预签名 URL）与 hash，再取小写扩展名 */

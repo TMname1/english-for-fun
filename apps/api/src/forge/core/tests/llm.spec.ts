@@ -1,19 +1,21 @@
 import {
   autoStripSingleWordRows,
-  buildChatBody,
   buildEnglishFromIndexes,
+  buildModelKwargs,
   classifyLlmFailure,
   cleanWordToken,
   coerceCourseOutput,
-  collectSseContent,
   draftRowsSchema,
   extractJsonObject,
   mapWithConcurrency,
   messagesWithJsonKeyword,
+  overrideFullRowChinese,
   rowsToStatements,
   stripSingleWordRows,
   validateRowIndexes,
 } from "../llm";
+import { buildMessages, buildSentenceVars, SYSTEM_PROMPT } from "../prompt";
+import { compilePrompt, PROMPT_EMPTY } from "../prompt-store";
 
 describe("extractJsonObject", () => {
   it("parses plain json", () => {
@@ -382,74 +384,28 @@ describe("coerceCourseOutput", () => {
   });
 });
 
-const ev = (obj: unknown) => `data: ${JSON.stringify(obj)}\n\n`;
-
-describe("buildChatBody", () => {
-  const base = { model: "m", maxTokens: 100, messages: [{ role: "user" as const, content: "hi" }] };
-
-  it("streams and includes reasoning_effort when configured", () => {
-    const body = buildChatBody({ ...base, reasoningEffort: "none" });
-    expect(body.stream).toBe(true);
-    expect(body.reasoning_effort).toBe("none");
-    expect(body.response_format).toBeUndefined();
+describe("buildModelKwargs", () => {
+  it("reasoning_effort 有值才发送（空串表示不发送）", () => {
+    expect(buildModelKwargs({ reasoningEffort: "none" }).reasoning_effort).toBe("none");
+    expect("reasoning_effort" in buildModelKwargs({ reasoningEffort: "" })).toBe(false);
   });
 
-  it("omits reasoning_effort when config is empty, includes response_format when given", () => {
-    const body = buildChatBody({
-      ...base,
-      reasoningEffort: "",
-      responseFormat: { type: "json_object" },
-    });
-    expect(body.reasoning_effort).toBeUndefined();
-    expect(body.response_format).toEqual({ type: "json_object" });
+  it("enable_thinking 显式设置（false / true）才发送", () => {
+    expect(buildModelKwargs({ reasoningEffort: "", enableThinking: false }).enable_thinking).toBe(
+      false,
+    );
+    expect(buildModelKwargs({ reasoningEffort: "", enableThinking: true }).enable_thinking).toBe(
+      true,
+    );
+    expect("enable_thinking" in buildModelKwargs({ reasoningEffort: "" })).toBe(false);
   });
 
-  it("includes enable_thinking when explicitly set (false or true)", () => {
+  it("response_format 按需透传（json_object 降级档位用）", () => {
     expect(
-      buildChatBody({ ...base, reasoningEffort: "", enableThinking: false }).enable_thinking,
-    ).toBe(false);
-    expect(
-      buildChatBody({ ...base, reasoningEffort: "", enableThinking: true }).enable_thinking,
-    ).toBe(true);
-  });
-
-  it("omits enable_thinking when not configured", () => {
-    const body = buildChatBody({ ...base, reasoningEffort: "" });
-    expect("enable_thinking" in body).toBe(false);
-  });
-});
-
-describe("collectSseContent", () => {
-  it("accumulates content deltas until [DONE]", () => {
-    const text =
-      ev({ choices: [{ delta: { content: "{" } }] }) +
-      ": keepalive\n" +
-      ev({ choices: [{ delta: { content: '"a":1}' } }] }) +
-      "data: [DONE]\n\n";
-    expect(collectSseContent(text)).toEqual({ content: '{"a":1}', done: true, error: null });
-  });
-
-  it("ignores reasoning deltas and handles CRLF", () => {
-    const text =
-      `data: ${JSON.stringify({ choices: [{ delta: { reasoning: "lot of thoughts", content: "x" } }] })}\r\n\r\n` +
-      `data: ${JSON.stringify({ choices: [{ delta: { content: "y" } }] })}\r\n\r\n` +
-      "data: [DONE]\r\n";
-    expect(collectSseContent(text)).toEqual({ content: "xy", done: true, error: null });
-  });
-
-  it("supports message-style final chunk (non-delta providers)", () => {
-    const text = ev({ choices: [{ message: { content: "full" } }] }) + "data: [DONE]\n\n";
-    expect(collectSseContent(text).content).toBe("full");
-  });
-
-  it("extracts error payloads (string or object form)", () => {
-    expect(collectSseContent(ev({ error: "boom" })).error).toBe("boom");
-    expect(collectSseContent(ev({ error: { message: "cuda oom" } })).error).toBe("cuda oom");
-  });
-
-  it("no [DONE] when stream truncated", () => {
-    const r = collectSseContent(ev({ choices: [{ delta: { content: "half" } }] }));
-    expect(r).toEqual({ content: "half", done: false, error: null });
+      buildModelKwargs({ reasoningEffort: "", responseFormat: { type: "json_object" } })
+        .response_format,
+    ).toEqual({ type: "json_object" });
+    expect("response_format" in buildModelKwargs({ reasoningEffort: "" })).toBe(false);
   });
 });
 
@@ -509,15 +465,112 @@ describe("messagesWithJsonKeyword", () => {
     { role: "user" as const, content: "编排 statement 链" },
   ];
 
-  it("json_object 分支补含 JSON 一词的消息，原数组不动", () => {
+  it("json_object 分支把关键词追加到 system，不新增 user 消息", () => {
     const out = messagesWithJsonKeyword(msgs, { type: "json_object" });
-    expect(out).toHaveLength(3);
-    expect(out[2].content.toLowerCase()).toContain("json");
-    expect(msgs).toHaveLength(2);
+    expect(out).toHaveLength(2);
+    expect(out[0].role).toBe("system");
+    expect(out[0].content.toLowerCase()).toContain("json");
+    // 原数组不动，user 消息保持原样
+    expect(msgs[0].content).toBe("你是命题专家");
+    expect(out[1]).toBe(msgs[1]);
+  });
+
+  it("system 里已有 json 关键词时原样返回", () => {
+    const withJson = [
+      { role: "system" as const, content: "只输出 JSON" },
+      { role: "user" as const, content: "x" },
+    ];
+    expect(messagesWithJsonKeyword(withJson, { type: "json_object" })).toBe(withJson);
   });
 
   it("json_schema 与纯文本分支原样返回", () => {
     expect(messagesWithJsonKeyword(msgs, { type: "json_schema", json_schema: {} })).toBe(msgs);
     expect(messagesWithJsonKeyword(msgs, undefined)).toBe(msgs);
+  });
+});
+
+describe("overrideFullRowChinese", () => {
+  const rows = (): { indexes: number[]; chinese: string }[] => [
+    { indexes: [0, 1], chinese: "我喜欢" },
+    { indexes: [2, 3], chinese: "这个食物" },
+    { indexes: [0, 1, 2, 3], chinese: "模型自己译的整句" },
+  ];
+
+  it("整句行被权威中文覆盖，碎片行不动", () => {
+    const out = overrideFullRowChinese(rows(), 4, "我喜欢这个食物。");
+    expect(out.map((r) => r.chinese)).toEqual(["我喜欢", "这个食物", "我喜欢这个食物。"]);
+  });
+
+  it("重复的整句行全部覆盖（校验不禁止重复）", () => {
+    const out = overrideFullRowChinese(
+      [
+        { indexes: [0, 1, 2, 3], chinese: "a" },
+        { indexes: [0, 1, 2, 3], chinese: "b" },
+      ],
+      4,
+      "权威译文",
+    );
+    expect(out.map((r) => r.chinese)).toEqual(["权威译文", "权威译文"]);
+  });
+
+  it("无整句行 / 无参 / 空白串：原样返回", () => {
+    expect(overrideFullRowChinese([{ indexes: [0, 1], chinese: "我喜欢" }], 4, "整句")).toEqual([
+      { indexes: [0, 1], chinese: "我喜欢" },
+    ]);
+    expect(overrideFullRowChinese(rows(), 4, undefined)[2].chinese).toBe("模型自己译的整句");
+    expect(overrideFullRowChinese(rows(), 4, "   ")[2].chinese).toBe("模型自己译的整句");
+  });
+
+  it("stripSingleWordRows 带句级中文：删单词行后整句行仍是权威中文", () => {
+    const raw = JSON.stringify({
+      statements: [
+        { indexes: [0], chinese: "我" },
+        { indexes: [0, 1, 2, 3], chinese: "模型译的整句" },
+      ],
+    });
+    const result = stripSingleWordRows(raw, 0, ["I", "like", "the", "food"], "我喜欢这个食物。");
+    expect(result.chain).not.toBeNull();
+    const last = result.chain!.statements[result.chain!.statements.length - 1];
+    expect(last.chinese).toBe("我喜欢这个食物。");
+  });
+
+  it("autoStripSingleWordRows 带句级中文：自动补救后的整句行同样是权威中文", () => {
+    const raw = JSON.stringify({
+      statements: [
+        { indexes: [0], chinese: "我" },
+        { indexes: [1], chinese: "喜欢" },
+        { indexes: [0, 1, 2, 3], chinese: "模型译的整句" },
+      ],
+    });
+    const out = autoStripSingleWordRows(raw, 0, ["I", "like", "the", "food"], "我喜欢这个食物。");
+    const statements = out!.chain!.statements;
+    expect(statements[statements.length - 1].chinese).toBe("我喜欢这个食物。");
+  });
+});
+
+describe("buildSentenceVars + buildMessages：单条 system 注入权威中文", () => {
+  const words = ["I", "like", "the", "food."];
+
+  it("给了句级中文：编译进 system 的【本句权威中文】，且只发一条 system", () => {
+    const messages = buildMessages(
+      compilePrompt(SYSTEM_PROMPT, buildSentenceVars(words, "我喜欢这个食物。")),
+    );
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0].role).toBe("system");
+    expect(messages[0].content).toContain("【本句权威中文】我喜欢这个食物。");
+    expect(messages[0].content).toContain("权威译文");
+    // 词表仍是「编号 词」逐行，且变量已全部替换
+    expect(messages[0].content).toContain("3 food.");
+    expect(messages[0].content).not.toContain("{{");
+  });
+
+  it("没给句级中文：变量取哨兵（无），提示词里的规则仍在", () => {
+    const vars = buildSentenceVars(words);
+    expect(vars.sentence_chinese).toBe(PROMPT_EMPTY);
+    const messages = buildMessages(compilePrompt(SYSTEM_PROMPT, vars));
+    expect(messages[0].content).toContain(`【本句权威中文】${PROMPT_EMPTY}`);
+    expect(messages[0].content).toContain("自行翻译整句");
+    expect(messages[0].content).not.toContain("{{");
   });
 });

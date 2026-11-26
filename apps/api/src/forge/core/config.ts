@@ -70,8 +70,31 @@ export const config = {
   asrModel: env("FORGE_ASR_MODEL", "qwen-audio-3.1-asr-flash"),
   /** 百炼 DashScope API Key（sk- 开头）；与 LLM 解耦，单独配置 */
   asrApiKey: env("FORGE_ASR_API_KEY", ""),
-  /** 单次转写请求超时（毫秒）；同步等待完整结果，长音频耗时较长，默认 3 分钟 */
-  asrTimeoutMs: envInt("FORGE_ASR_TIMEOUT_MS", 3 * 60 * 1000),
+  /** 单次转写请求超时（毫秒）；同步等待完整结果。默认 5 分钟：转写子图按 ≤180s 切块，3 分钟超时对高峰期偏紧 */
+  asrTimeoutMs: envInt("FORGE_ASR_TIMEOUT_MS", 5 * 60 * 1000),
+
+  /**
+   * 音频打标（captioner）：异步任务接口，用于拿句级时间戳给切块提供边界。
+   * 端点与 ASR 同源（百炼 workspace 域名），但模型/Key 可独立配置。
+   */
+  captionerBaseUrl: env("FORGE_CAPTIONER_BASE_URL", ""),
+  captionerModel: env("FORGE_CAPTIONER_MODEL", "qwen-audio-3.1-captioner"),
+  /** 留空时回退 FORGE_ASR_API_KEY（同一 workspace 的 Key 通常是同一把） */
+  captionerApiKey: env("FORGE_CAPTIONER_API_KEY", ""),
+  /** 单次 HTTP 请求超时（getPolicy / 提交 / 查询 / 下载），毫秒 */
+  captionerTimeoutMs: envInt("FORGE_CAPTIONER_TIMEOUT_MS", 60 * 1000),
+  captionerPollIntervalMs: envInt("FORGE_CAPTIONER_POLL_INTERVAL_MS", 3000),
+  /** 轮询总超时；必须小于 service 的 job 超时（30 分钟），默认 10 分钟 */
+  captionerPollTimeoutMs: envInt("FORGE_CAPTIONER_POLL_TIMEOUT_MS", 10 * 60 * 1000),
+
+  /** 转写子图的块上限（秒）：asr-flash 同步接口上限 300s，留出 padding 余量 */
+  asrChunkSeconds: envInt("FORGE_ASR_CHUNK_SECONDS", 180),
+  /** 块音频前后各留的 padding（毫秒）：避免把词头词尾切掉 */
+  asrChunkPadMs: envInt("FORGE_ASR_CHUNK_PAD_MS", 200),
+  /** 块级 ASR 并发上限：DashScope 同步 ASR 对并发敏感，保守取 3 */
+  asrConcurrency: envInt("FORGE_ASR_CONCURRENCY", 3),
+  /** 1 = 成功后也保留 .work（块音频/逐块结果），用于排查切块与时间对齐问题 */
+  keepWork: env("FORGE_KEEP_WORK", "0") === "1",
 
   /** LLM（OpenAI 兼容 chat completions；默认本地 ollama） */
   llmBaseUrl: env("FORGE_LLM_BASE_URL", "http://localhost:11434/v1"),
@@ -99,6 +122,44 @@ export const config = {
   /** API 单用户登录凭证（与 apps/api/.env 的 AUTH_USERNAME/AUTH_PASSWORD 一致），导入前自动登录 */
   authUsername: env("AUTH_USERNAME", ""),
   authPassword: env("AUTH_PASSWORD", ""),
+
+  /**
+   * 编排层实现：graph（LangGraph StateGraph，默认）| legacy（重构前的命令式阶段函数）。
+   * 出问题时设 FORGE_ORCHESTRATOR=legacy 即可回滚（运行时环境变量，无需重新构建）；
+   * 旧任务没有 graph.checkpoint.json 时会自动降级 legacy，不依赖这个开关。
+   */
+  orchestrator: (env("FORGE_ORCHESTRATOR", "graph") === "legacy" ? "legacy" : "graph") as
+    | "graph"
+    | "legacy",
+  /** 文件 checkpointer 每个线程保留的 checkpoint 份数（含最近的中断态，必须 >= 2） */
+  checkpointKeep: envInt("FORGE_GRAPH_CHECKPOINT_KEEP", 8),
+
+  /**
+   * Langfuse 追踪：本地自托管（http://localhost:3002）或 Langfuse Cloud。
+   * PUBLIC/SECRET 任一为空则整条追踪链路自动禁用（fail-open，不影响流水线）。
+   * LANGFUSE_TRACING=0 可强制关闭，用于排障时排除追踪干扰。
+   */
+  langfuseEnabled: env("LANGFUSE_TRACING", "1") !== "0",
+  langfusePublicKey: env("LANGFUSE_PUBLIC_KEY", ""),
+  langfuseSecretKey: env("LANGFUSE_SECRET_KEY", ""),
+  langfuseBaseUrl: env("LANGFUSE_BASE_URL", "https://cloud.langfuse.com"),
+  /** 环境标识（Langfuse 里按 environment 过滤） */
+  langfuseEnvironment: env("LANGFUSE_TRACING_ENVIRONMENT", "development"),
+
+  /**
+   * Langfuse Prompt Management：提示词托管在 Langfuse，运行时按 label 拉取。
+   * 复用上面的 PUBLIC/SECRET/BASE_URL；LANGFUSE_PROMPTS=0 可单独关掉提示词托管
+   * （只关拉取，不影响追踪）。拉取失败一律回退到代码里的本地常量（fail-open）。
+   */
+  langfusePromptsEnabled: env("LANGFUSE_PROMPTS", "1") !== "0",
+  /** 拉哪个 label（Langfuse 概念：production / latest / 自定义） */
+  langfusePromptLabel: env("LANGFUSE_PROMPT_LABEL", "production"),
+  /** 进程内提示词缓存时长（毫秒）：一次任务只拉一次，改完提示词也无需重启即可生效 */
+  langfusePromptCacheTtlMs: envInt("LANGFUSE_PROMPT_CACHE_TTL_MS", 60_000),
+  /** 句子分析（组装链）提示词在 Langfuse 中的名字 */
+  sentencePromptName: env("FORGE_PROMPT_SENTENCE_NAME", "forge-sentence-chain"),
+  /** 预处理（拆句）提示词在 Langfuse 中的名字 */
+  preprocessPromptName: env("FORGE_PROMPT_PREPROCESS_NAME", "forge-preprocess-split"),
 } as const;
 
 export function createRunId(date = new Date()): string {

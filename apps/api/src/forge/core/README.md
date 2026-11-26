@@ -7,7 +7,8 @@
 
 ```
 视频 / 音频文件
-  │  Step 1    转写        ffmpeg -vn 提取音轨 → 百炼 Qwen-Audio-ASR（同步）→ 整段 text + 词级时间戳
+  │  Step 1    转写        graph 编排：captioner 句级时间戳 → 按句切块(≤180s) → asr-flash 词级
+  │                        legacy 编排：整段 Qwen-Audio-ASR（同步，≤5 分钟）
   ▼
   │  Step 1.5  预处理      LLM 按语义拆成完整句（输出词序号分组）→ 代码合并碎片词 → transcript.json
   ▼
@@ -67,6 +68,7 @@ curl http://localhost:11434/v1/models       # ollama 可达（或你的云端）
 | `pnpm forge:import -- ...` | 导入课程包（复制视频 + POST）  | 无（`--out` 缺省=最近一次运行）   |
 
 > `forge:import` 是根目录脚本名，底层调用包内脚本 `import:course`（CLI 子命令 `import`）。
+> 想调图而不是跑流水线，用根目录 `pnpm dev:langsmith`（见 §8.2）。
 
 `forge` 的可选参数：
 
@@ -116,15 +118,18 @@ pnpm forge -- --audio song.mp3 --title "某首歌" --type music
 
 一次 `forge` 产出（下文用 `<out>` 代表 `output/<runId>`）：
 
-| 文件 / 目录           | 谁生成   | 作用                                                                                    | 能否手改                   |
-| --------------------- | -------- | --------------------------------------------------------------------------------------- | -------------------------- |
-| `meta.json`           | Step 1   | 运行元信息（`runId`、`title`、`type`、`audioPath`、**视频输入时的 `videoPath`**、时间） | 可改 `title`/`description` |
-| `transcript.json`     | Step 1.5 | **预处理后**的转写：一个 segment 即一个完整句，碎片词已合并（词级时间戳 / 段级降级）    | GUI 流程可人工校对         |
-| `transcript.raw.json` | Step 1   | 原始 ASR 转写（整段 text + 未合并的碎片词），供回溯对照                                 | 不建议改                   |
-| `clips.json`          | Step 1   | 仅切片流程：选中的时间区间，structure 阶段据此重打 clipIndex                            | 不建议改                   |
-| `alignment.json`      | Step 2.5 | 时间戳对齐报告（每条 statement 的匹配方式与命中时间，可用于人工校对）                   | 只读参考                   |
-| `course.json`         | Step 3   | **最终课程包**（含 `startTime`/`endTime`/`words` 时间戳），这是你要校对和导入的文件     | ✅ 主要校对对象            |
-| `.work/`              | Step 1   | 转码中间 wav，用完即删                                                                  | —                          |
+| 文件 / 目录             | 谁生成   | 作用                                                                                       | 能否手改                   |
+| ----------------------- | -------- | ------------------------------------------------------------------------------------------ | -------------------------- |
+| `meta.json`             | Step 1   | 运行元信息（`runId`、`title`、`type`、`audioPath`、**视频输入时的 `videoPath`**、时间）    | 可改 `title`/`description` |
+| `transcript.json`       | Step 1.5 | **预处理后**的转写：一个 segment 即一个完整句，碎片词已合并（词级时间戳 / 段级降级）       | GUI 流程可人工校对         |
+| `transcript.raw.json`   | Step 1   | 原始 ASR 转写（整段 text + 未合并的碎片词），供回溯对照                                    | 不建议改                   |
+| `clips.json`            | Step 1   | 仅切片流程：选中的时间区间，structure 阶段据此重打 clipIndex                               | 不建议改                   |
+| `caption.json`          | Step 1   | 仅 graph 编排：captioner 给出的语音段（绝对毫秒）+ 任务 ID，切块的时间来源                 | 只读参考                   |
+| `chunk-plan.json`       | Step 1   | 仅 graph 编排：切块计划（core/keep/audio/local 四个窗口），排查时间偏移时看它              | 只读参考                   |
+| `alignment.json`        | Step 2.5 | 时间戳对齐报告（每条 statement 的匹配方式与命中时间，可用于人工校对）                      | 只读参考                   |
+| `course.json`           | Step 3   | **最终课程包**（含 `startTime`/`endTime`/`words` 时间戳），这是你要校对和导入的文件        | ✅ 主要校对对象            |
+| `graph.checkpoint.json` | 编排层   | 仅 Web GUI（graph 编排）：LangGraph 的控制流状态（阶段、成功链、暂停点），resolve 续跑靠它 | 不要手改                   |
+| `.work/`                | Step 1   | 转码中间 wav，用完即删                                                                     | —                          |
 
 生命周期要点：
 
@@ -190,25 +195,32 @@ pnpm forge -- --audio song.mp3 --title "某首歌" --type music
 全部有合理默认，通常不用设；也可集中写进 `apps/api/.env`（参考 `.env.example`，
 已存在的进程环境变量优先于该文件；`.env` 已进包内 `.gitignore` 防泄漏 key）：
 
-| 变量                         | 默认                              | 说明                                                                                                                                                                                                                                  |
-| ---------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `FORGE_ASR_BASE_URL`         | 百炼 `multimodal-generation` 端点 | DashScope Qwen-Audio-ASR 原生接口地址（非 OpenAI 兼容）                                                                                                                                                                               |
-| `FORGE_ASR_MODEL`            | `qwen-audio-3.1-asr-flash`        | 非实时 ASR 模型；同步返回整段 text + 句/词级毫秒时间戳（流水线换算为秒）                                                                                                                                                              |
-| `FORGE_ASR_API_KEY`          | 空（**必填**）                    | 百炼 DashScope API Key（`sk-` 开头）                                                                                                                                                                                                  |
-| `FORGE_ASR_TIMEOUT_MS`       | 180000（3 分）                    | 单次转写请求超时；同步等待完整结果，长音频可调大。flash 同步版建议单段 ≤5 分钟，超长请用切片分段                                                                                                                                      |
-| `FORGE_LLM_BASE_URL`         | `http://localhost:11434/v1`       | OpenAI 兼容 chat 端点（ollama / DeepSeek / OpenAI…）                                                                                                                                                                                  |
-| `FORGE_LLM_MODEL`            | `tongyi-xiaomi-analysis-flash`    | 句子分析（结构化组装链）模型；与预处理模型分开配置，共用 base URL / API Key（见 `.env.example`）                                                                                                                                      |
-| `FORGE_PREPROCESS_MODEL`     | `qwen3.8-flash`                   | 预处理（拆句）模型；本地 ollama 时两个变量可设同一模型                                                                                                                                                                                |
-| `FORGE_LLM_API_KEY`          | `ollama`                          | 云端服务填真实 key                                                                                                                                                                                                                    |
-| `FORGE_LLM_MAX_TOKENS`       | 16000                             | 单次 LLM 输出上限（qwen-plus 支持 32768；本地开思考模式时可调大）                                                                                                                                                                     |
-| `FORGE_LLM_CONCURRENCY`      | 10                                | 一句一调用的并发上限：同时发起多少个句子的模型调用（不是把多少句丢给一次调用）                                                                                                                                                        |
-| `FORGE_LLM_REASONING_EFFORT` | `none`                            | ollama 专用参数；非 ollama（如 DashScope）**必须置空**，留空串即不发送该字段                                                                                                                                                          |
-| `FORGE_LLM_ENABLE_THINKING`  | 空（不发送）                      | 思考开关（`enable_thinking`）；qwen3.8-flash 等默认开思考的云端模型设 `false`，否则思考吃光 max_tokens、生成看似卡死                                                                                                                  |
-| `FORGE_LLM_PREFLIGHT`        | `1`                               | LLM 调用前是否预检（服务连通/模型存在/显存余量）；设为 `0` 跳过                                                                                                                                                                       |
-| `FORGE_LLM_VRAM_STRICT`      | `1`                               | 显存估算不足时是否直接拦停；设为 `0` 仅警告（接受 CPU 卸载慢跑）                                                                                                                                                                      |
-| `FORGE_LLM_VRAM_MARGIN_MB`   | 512                               | 显存估算余量（KV cache + CUDA 上下文开销，MB）                                                                                                                                                                                        |
-| `FORGE_API_URL`              | `http://localhost:3001`           | 导入目标 API                                                                                                                                                                                                                          |
-| `S3_*`                       | dev MinIO 默认值                  | 对象存储配置（`S3_ENDPOINT`/`S3_REGION`/`S3_ACCESS_KEY_ID`/`S3_SECRET_ACCESS_KEY`/`S3_BUCKET`/`S3_FORCE_PATH_STYLE`）；导入时视频与 JSON 产物上传到这里，与 `apps/api/.env` 保持一致，prod 换阿里云 OSS 见根目录 `README.env.prod.md` |
+| 变量                           | 默认                              | 说明                                                                                                                                                                                                                                  |
+| ------------------------------ | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `FORGE_ASR_BASE_URL`           | 百炼 `multimodal-generation` 端点 | DashScope Qwen-Audio-ASR 原生接口地址（非 OpenAI 兼容）                                                                                                                                                                               |
+| `FORGE_ASR_MODEL`              | `qwen-audio-3.1-asr-flash`        | 非实时 ASR 模型；同步返回整段 text + 句/词级毫秒时间戳（流水线换算为秒）                                                                                                                                                              |
+| `FORGE_ASR_API_KEY`            | 空（**必填**）                    | 百炼 DashScope API Key（`sk-` 开头）                                                                                                                                                                                                  |
+| `FORGE_ASR_TIMEOUT_MS`         | 180000（3 分）                    | 单次转写请求超时；同步等待完整结果，长音频可调大。flash 同步版建议单段 ≤5 分钟，超长请用切片分段                                                                                                                                      |
+| `FORGE_LLM_BASE_URL`           | `http://localhost:11434/v1`       | OpenAI 兼容 chat 端点（ollama / DeepSeek / OpenAI…）                                                                                                                                                                                  |
+| `FORGE_LLM_MODEL`              | `tongyi-xiaomi-analysis-flash`    | 句子分析（结构化组装链）模型；与预处理模型分开配置，共用 base URL / API Key（见 `.env.example`）                                                                                                                                      |
+| `FORGE_PREPROCESS_MODEL`       | `qwen3.8-flash`                   | 预处理（拆句）模型；本地 ollama 时两个变量可设同一模型                                                                                                                                                                                |
+| `FORGE_LLM_API_KEY`            | `ollama`                          | 云端服务填真实 key                                                                                                                                                                                                                    |
+| `FORGE_LLM_MAX_TOKENS`         | 16000                             | 单次 LLM 输出上限（qwen-plus 支持 32768；本地开思考模式时可调大）                                                                                                                                                                     |
+| `FORGE_LLM_CONCURRENCY`        | 10                                | 一句一调用的并发上限：同时发起多少个句子的模型调用（不是把多少句丢给一次调用）                                                                                                                                                        |
+| `FORGE_LLM_REASONING_EFFORT`   | `none`                            | ollama 专用参数；非 ollama（如 DashScope）**必须置空**，留空串即不发送该字段                                                                                                                                                          |
+| `FORGE_LLM_ENABLE_THINKING`    | 空（不发送）                      | 思考开关（`enable_thinking`）；qwen3.8-flash 等默认开思考的云端模型设 `false`，否则思考吃光 max_tokens、生成看似卡死                                                                                                                  |
+| `FORGE_LLM_PREFLIGHT`          | `1`                               | LLM 调用前是否预检（服务连通/模型存在/显存余量）；设为 `0` 跳过                                                                                                                                                                       |
+| `FORGE_LLM_VRAM_STRICT`        | `1`                               | 显存估算不足时是否直接拦停；设为 `0` 仅警告（接受 CPU 卸载慢跑）                                                                                                                                                                      |
+| `FORGE_LLM_VRAM_MARGIN_MB`     | 512                               | 显存估算余量（KV cache + CUDA 上下文开销，MB）                                                                                                                                                                                        |
+| `FORGE_ORCHESTRATOR`           | `graph`                           | 编排层实现：`graph`（LangGraph StateGraph）/ `legacy`（重构前的命令式阶段函数）。出问题时改回 `legacy` 即可回滚，无需重新构建；旧任务无 checkpoint 时自动降级 legacy                                                                  |
+| `FORGE_GRAPH_CHECKPOINT_KEEP`  | 8                                 | 文件 checkpointer 每个任务保留的 checkpoint 份数（含最近的中断态，须 ≥2）；调小可减小 `graph.checkpoint.json`                                                                                                                         |
+| `FORGE_API_URL`                | `http://localhost:3001`           | 导入目标 API                                                                                                                                                                                                                          |
+| `LANGFUSE_PROMPTS`             | `1`                               | 是否从 Langfuse 拉取提示词；`0` 只关提示词托管，不影响追踪（见 §8.3）                                                                                                                                                                 |
+| `LANGFUSE_PROMPT_LABEL`        | `production`                      | 拉哪个 label；改完提示词要把该 label 移到新版本，否则一直用旧版本                                                                                                                                                                     |
+| `LANGFUSE_PROMPT_CACHE_TTL_MS` | `60000`                           | `@langfuse/client` 的提示词缓存时长（毫秒，内部换算为秒）；过期后先返回旧值并后台刷新；调试可设 `0` 关闭缓存（每句都会拉）                                                                                                            |
+| `FORGE_PROMPT_SENTENCE_NAME`   | `forge-sentence-chain`            | 句子链提示词在 Langfuse 中的 name，必须与界面里创建的完全一致                                                                                                                                                                         |
+| `FORGE_PROMPT_PREPROCESS_NAME` | `forge-preprocess-split`          | 拆句提示词在 Langfuse 中的 name                                                                                                                                                                                                       |
+| `S3_*`                         | dev MinIO 默认值                  | 对象存储配置（`S3_ENDPOINT`/`S3_REGION`/`S3_ACCESS_KEY_ID`/`S3_SECRET_ACCESS_KEY`/`S3_BUCKET`/`S3_FORCE_PATH_STYLE`）；导入时视频与 JSON 产物上传到这里，与 `apps/api/.env` 保持一致，prod 换阿里云 OSS 见根目录 `README.env.prod.md` |
 
 ## 6. ASR 转写配置（阿里云百炼 Qwen-Audio-ASR）
 
@@ -219,19 +231,68 @@ pnpm forge -- --audio song.mp3 --title "某首歌" --type music
 - **时间戳**：模型固定返回句级与词级时间戳（单位**毫秒**，流水线内换算为秒，写进 `transcript.json` 的 `segments[].{start,end}` 与 `words[].{start,end}`），供逐词高亮与视频 seek 同步。词文字会并入其后标点（与下游对齐口径一致）。
 - **同步返回**：不带 `X-DashScope-SSE` 头，等待完整结果一次返回；`output.sentence` 为单个句子对象，含整段 `text` 与全部词（`words`）。整段文本随后交给预处理步骤拆句。
 - **时长上限**：flash 同步版建议单段 ≤5 分钟，超过会直接报错；长内容请用前端切片，流水线按 clip 分段转写再合并。
+  在 **graph 编排**下这条限制被转写子图绕过（见下），legacy 仍是整段转写。
 - **语言**：请求带 `language_hints`（en/zh/ja…），缺省自动识别。
+- **LangChain 封装**：转写在 `core/asr-model.ts` 里封成自定义 `BaseChatModel`（`DashScopeAsrChatModel`），
+  与 LLM 调用同属一套 Runnable 生态。`transcribeWithRaw` 只负责转码、时长校验、装配消息，请求本身走 `model.invoke()`；
+  ASR 因此自动继承 callback（图内由图根经 AsyncLocalStorage 下发，legacy 由 `tracing.ts` 的
+  `legacyModelCallbacks()` 兜底），Langfuse 里和 LLM 一样是一条独立观测（名 `asr`，model = `qwen-audio-3.1-asr-flash`）。
+  音频只放构造参数、**不进 `messages`**：消息会被 callback 层序列化进 trace，5 分钟 wav 的 base64 约 13MB，会撑挂上报。
+  因此 trace 里这条观测的 **input 是可读摘要**（文件/格式/采样率/时长/体积/语言提示），结构化字段走 `metadata.asr`，
+  **output 是完整转写文本**；词级时间戳体积大且以 json 为准，留在 `transcript.raw.json`，不进 trace。
+- **captioner 同构**：句级打标也封成自定义 `BaseChatModel`（`core/captioner-model.ts` 的
+  `DashScopeCaptionerChatModel`），所以 `asrSentence` 节点在 Langfuse 里同样有一条 generation（见 §6.1）。
+
+### 6.1 graph 编排的转写子图（captioner 句级 → 切块 → asr-flash 词级）
+
+`FORGE_ORCHESTRATOR=graph`（缺省）时，`transcribe` 是一个子图，三个节点串行：
+
+1. `asrSentence`：unit（clip 或整段）转码 16k wav → 上传**百炼临时 OSS**（`getPolicy` 表单上传，`oss://` + `X-DashScope-OssResourceResolve`）→ 提交 `qwen-audio-3.1-captioner` 异步任务 → 轮询 → 下载结果 → 取句级时间戳。
+   转码留在模型 span 之外（ffmpeg 不是模型调用）；上传之后的四步都在 `DashScopeCaptionerChatModel._generate` 里，
+   因此 Langfuse 中 `asrSentence` 节点下是一条名为 **`caption`** 的 generation（model = `qwen-audio-3.1-captioner`），
+   input 是可读摘要（文件名/时长/体积/unit/声道，无本地绝对路径），output 是「任务号 + 段数 + 轮询耗时 + source」摘要，
+   结构化字段走 `metadata.caption`；`spans` 只放 `additional_kwargs`（毫秒区间），不进上报。
+   每个 unit 一条，多个 clip 时按 unit 串行；轮询最长 `FORGE_CAPTIONER_POLL_TIMEOUT_MS`，失败会在该 generation 上标 ERROR。
+2. `processingAudio`：把相邻语音段累积成 ≤180s 的块（边界落在段边界，超长段等分），前后各加 200ms padding，ffmpeg 切块。
+3. `asrWord`：并发调 `qwen-audio-3.1-asr-flash` 拿词级时间戳 → 按「词中点落在归属窗口」去重 → 修复被块边界拆开的碎片词 → 每块一条 ASR 句子 → 复用 `buildTranscriptFromSentences` + `preprocessTranscript`。
+
+产物仍是 `transcript.json` / `transcript.raw.json` / `clips.json`（结构不变），额外落 `caption.json` / `chunk-plan.json` 便于核对时间轴。**任何失败（上传/captioner/任一块 ASR/解析为空）都整体报错**，不静默降级。
+
+captioner 的坑：它的 `transcripts[].sentences[]` 实测只有一条覆盖全文件（`text` 字段里装的是整段标注 JSON），真正的句级边界在 `transcripts[].text` 的 `speech_segments[]`（时间格式 `MM:SS.cc`，含静音/音效段需过滤）。
+
+| 环境变量                           | 默认                                | 说明                                                      |
+| ---------------------------------- | ----------------------------------- | --------------------------------------------------------- |
+| `FORGE_CAPTIONER_BASE_URL`         | 空 → `FORGE_ASR_BASE_URL` 的 origin | captioner 端点；支持裸 origin / 完整端点 / 带网关前缀     |
+| `FORGE_CAPTIONER_MODEL`            | `qwen-audio-3.1-captioner`          | 同时作为 getPolicy 的 `model` 参数                        |
+| `FORGE_CAPTIONER_API_KEY`          | 空 → `FORGE_ASR_API_KEY`            | 私有部署 workspace key 不同时单独配                       |
+| `FORGE_CAPTIONER_TIMEOUT_MS`       | `60000`                             | 单次 HTTP 超时                                            |
+| `FORGE_CAPTIONER_POLL_INTERVAL_MS` | `3000`                              | 轮询间隔                                                  |
+| `FORGE_CAPTIONER_POLL_TIMEOUT_MS`  | `600000`                            | 轮询总超时（必须 < job 超时）                             |
+| `FORGE_ASR_CHUNK_SECONDS`          | `180`                               | 块上限（必须 <300）                                       |
+| `FORGE_ASR_CHUNK_PAD_MS`           | `200`                               | 块前后 padding                                            |
+| `FORGE_ASR_CONCURRENCY`            | `3`                                 | 块级 ASR 并发                                             |
+| `FORGE_KEEP_WORK`                  | `0`                                 | `1` = 成功后保留 `.work`（块音频/逐块结果），排查对齐问题 |
+
+> 探测脚本：`apps/api/scripts/probe-captioner.ts`（验证 `oss://` 是否被接受、`max_file_size_mb`、结果结构），改模型或换 workspace 时先跑它。
 
 ## 7. 句子预处理（ASR 之后、结构化之前）
 
 ASR 返回的是整段文本 + 碎片词表：一个词可能被拦腰拆成多个碎片（`Genu`+`inely`、`I`+`'`+`ve`）。
 预处理把整段 `text` 和编号词表交给 `FORGE_PREPROCESS_MODEL`（默认 `qwen3.8-flash`），由模型**按语义理解**拆成完整句子（不局限于标点），
-只输出每句包含的词序号（`{"sentences":[[0,1,2],[3,4,...]]}`）；代码校验序号必须升序连续、不重不漏覆盖全部词，
+输出每句的词序号**和该句完整中文**（`{"sentences":[{"words":[0,1,2],"chinese":"..."}]}`）。词表只含「编号 + 词文本」（`{"i":0,"word":"I've"}`），
+**不发时间戳**——模型不消费它，句子时间全部由代码回填，省一半以上的 prompt token。代码校验序号必须升序连续、不重不漏覆盖全部词，
 然后确定性地合并碎片词、从原始 ASR 词取 `start`/`end`——**时间戳零幻觉**。
 
 - 每个 clip 的转写单独预处理（天然不跨 clip 拼句），失败自动重试一次，仍不合格则整体报错。
-- 输出仍是标准 `Transcript`：一个 `segment` 即一个完整句，`text = words.join(" ")`。
+- 输出仍是标准 `Transcript`：一个 `segment` 即一个完整句，`text = words.join(" ")`，`chinese` 为该句译文
+  （这一步手上有整段英文全文，比结构阶段只看词表译得准，故句级译文在此产出）。
   `transcript.json` 存预处理后的结果（GUI 人工校对看到的即完整句），`transcript.raw.json` 保留原始 ASR 结果供回溯。
 - 下游结构化与对齐不再做代码拼句：直接以 segment 为句子单位。
+- 结构阶段把 `segment.chinese` 作为**整句权威译文**注入 system 提示词的 `{{sentence_chinese}}` 变量
+  （缺省为「（无）」，提示词正文据此决定照抄还是自行翻译），
+  碎片行中文只能从它切分/派生，整句行的 `chinese` 还会被 `overrideFullRowChinese` 强制覆盖一次；
+  缺失时（旧 transcript / 段级降级 / 单词段）回退为模型自己翻译，行为与以前一致。
+- 输出契约改动对旧形状容错：模型若仍回 `{"sentences":[[0,1],[2,3]]}`，只当作没有句级中文，不会让预处理器失败。
 
 **词表口径**：结构化阶段给模型的编号词表、以及对齐阶段匹配用的词序列，都来自 `words.ts` 的
 `buildTokenUniverse` / `sentenceWordView`（同一套切片：撇号碎片并入前词、纯标点词跳过、空段返回 `null`）。
@@ -270,24 +331,140 @@ CLI 则整体报错退出。唯一例外是**输出里混着单词行**：`autoS
 （`alignment.json` 里 `kind = "span"`，摘要显示「编号直取 N」），不再做 anchor / 模糊猜测；
 旧进度快照（无 span）或转写被人工改过时自动退回原匹配逻辑。
 
+## 8.1 编排层：LangGraph 图（`graph` 模式，默认）
+
+Web GUI 的子进程（`pipeline-runner`）内部用 LangGraph `StateGraph` 编排，阶段即节点：
+
+```
+START → prepare → transcribe → structureBatch ──(无失败)──────────────► finalize → END
+                                     └──(有失败)──► reviewGate(interrupt)
+                                                       └─(resume)──► retryBatch
+                                                                       ├─(仍有失败)─► 回到 reviewGate（最多 3 轮）
+                                                                       └─(已清空)──► finalize → END
+```
+
+- **`reviewGate` 是纯节点**：只读 `structure.progress.json` + `interrupt()`。LangGraph 在 resume 时
+  会从该节点开头重放，有副作用就会重复调用 LLM / 重复写盘。
+- **needs_fix = interrupt**：前端对失败句选「删除/重试」后，service 写 `structure.resolve.json` 并起
+  `structure-resolve` 子进程，runner 用 `new Command({ resume: { decisions } })` 续跑；
+  state 由 `graph.checkpoint.json` 还原，`structureBatch` 不会重跑（不重复计费）。
+- **文件 checkpointer**：`core/graph/file-checkpointer.ts` 把 checkpoint 过 `JsonPlusSerializer`
+  序列化后 base64 存进单个 JSON 文件，随产物上传到 `forge/<jobId>/graph.checkpoint.json`；
+  写入是「串行队列 + .tmp → rename」原子替换，读损坏按空处理。
+- **自动降级**：`structure-resolve` 阶段先校验 checkpoint（文件在 + threadId 一致 + 拓扑版本一致 +
+  确实停在 reviewGate），任一不满足就退回 legacy 的 `forgeStructureResolve`，旧任务无需迁移。
+- **LLM 传输层**：`core/llm-client.ts` 用 `@langchain/openai` 的 ChatOpenAI，但保留三级降级
+  （json_schema → json_object → 纯文本）、流式请求、失败分类与「一句一调用 + 并发上限」的调用形状；
+  降级成功后按模型缓存档位（进程内），后续句子直达。
+- **ASR 传输层**：`core/asr-model.ts` 的自定义 `DashScopeAsrChatModel` 把百炼原生 ASR 接口接进同一个
+  生态（详见 §6）。两条链路共用 `tracing.ts` 的 `legacyModelCallbacks()`——「图内不挂、图外兜底」只有这一处实现。
+
+回滚：`FORGE_ORCHESTRATOR=legacy`（运行时环境变量，无需重新构建）。
+
+## 8.2 本地调试：LangGraph Studio（`pnpm dev:langsmith`）
+
+```
+pnpm dev:langsmith          # 根目录；等价于在 apps/api 里跑 langgraphjs dev --config . --no-reload
+```
+
+启动后横幅里给两个地址：API `http://localhost:2024`、Studio
+`https://smith.langchain.com/studio?baseUrl=http://localhost:2024`（浏览器会自动打开）。
+端口被占就用 `pnpm -F api dev:langsmith --port 2025`。
+
+- 图入口是 `core/graph/dev-entry.ts`，与生产入口 `run.ts` 的差别只有两点：checkpointer 换成
+  `MemorySaver`（Studio 自己按 thread 管会话，不写 `graph.checkpoint.json`）、阶段日志走 stdout
+  而不是 JSON Lines。
+- 配置在 `apps/api/langgraph.json`：`graphs.forge` 指向上面的入口，`env: ".env"`（即
+  `apps/api/.env`，LLM/ASR 的 key 从这里读）。
+- Studio 的 **Input** 给一条最小 state 即可（`outDir` 省略时落在 `config.defaultOutRoot` 下）：
+
+```json
+{
+  "jobId": "studio-dev",
+  "params": {
+    "mediaPath": "D:/tmp/demo.mp4",
+    "title": "Studio 调试",
+    "type": "dialogue",
+    "language": "en"
+  }
+}
+```
+
+- 节点会**真实**执行 ffmpeg / ASR / LLM，请用小素材；只想观察拓扑与中断行为，可先让模型不可用，
+  拿到失败句后在 Studio 里 **Resume** 提交：
+
+```json
+{ "decisions": [{ "index": 0, "action": "delete" }] }
+```
+
+- `--no-reload` 是为了绕开当前环境里 `tsx watch` + `--import preload` 启动即卡死（无任何输出）的问题；
+  若后续 CLI/tsx 升级修好，把该参数去掉即可恢复改代码自动重启。
+
+## 8.3 提示词托管：一条 system + Langfuse 变量
+
+两句提示词都托管在 Langfuse Prompt Management，代码里的常量只是**本地兜底**：
+
+| Langfuse name（可改 env） | 本地兜底                                      | 必须包含的变量                                                       |
+| ------------------------- | --------------------------------------------- | -------------------------------------------------------------------- |
+| `forge-sentence-chain`    | `prompt.ts` 的 `SYSTEM_PROMPT`                | `{{words}}` `{{word_count}}` `{{last_index}}` `{{sentence_chinese}}` |
+| `forge-preprocess-split`  | `preprocess.ts` 的 `PREPROCESS_SYSTEM_PROMPT` | `{{transcript}}` `{{words}}` `{{note}}`                              |
+
+**形态**：一次调用只发**一条 system 消息**。静态指令全在 Langfuse 文本里，动态值（编号词表、整段转写、
+句级中文、重试诊断）用变量注入；代码里不再拼 user 消息（`json_object` 降级档需要 "json" 关键词时，
+也是追加到 system，而不是自造一条 user）。变量统一放在提示词末尾的 `## 本次输入`，静态前缀逐字一致
+才能命中 provider 的前缀缓存。
+
+**空值**用哨兵「（无）」而不是空串：Text 提示词没有条件语法，正文写成「不为（无）就照抄 / 为（无）就自行翻译」。
+句级中文缺失时 `{{sentence_chinese}}` 取「（无）」，整句行仍由 `overrideFullRowChinese` 用真实译文覆盖。
+
+**取模板与渲染**都交给官方 `@langfuse/client`（`prompt-store.ts` 只是薄适配器）：
+`client.prompt.get(name, { type: "text", label, cacheTtlSeconds, fetchTimeoutMs: 3000, maxRetries: 0 })`
+→ `TextPromptClient.compile(vars)`，即 **Mustache** 渲染（SDK 已把 `mustache.escape` 置为恒等函数，
+`& < > "` 不会被 HTML 转义、变量值也不会被二次渲染）。因此**未提供的变量会渲染成空串**（旧实现保留 `{{x}}`）；
+`{{#section}}`、`{{>partial}}`、`{{=…=}}`、`{{{x}}}` 等控制语法会被适配器拒绝并回退 —— 提示词里只允许 `{{变量}}`。
+
+**必须满足的硬条件**（不满足会回退本地兜底，日志会点名原因）：
+
+1. 类型必须是 **Text**。SDK 的 `type` 参数运行时不校验（远端是 chat 时会返回消息数组），
+   适配器用 `typeof prompt === "string"` 拦截，命中即回退；
+2. **version 必须是正整数**，且 `LANGFUSE_PROMPT_LABEL` 指向该版本 —— 缺失版本以前会被兜成 `0`，
+   SDK 校验能过但后端关联不到，表现就是 prompt 详情页的 **Number of Observations 恒为 0**；
+3. 模板必须包含上表全部变量 —— 否则视为不可用（避免把「没有输入」的提示词发给模型），
+   这也是「Langfuse 里还是旧版无变量提示词」时唯一的防线；
+4. 正文不得含 Mustache 控制语法，且不能有未闭合的 `{{`（会抛 `Unclosed tag`）。
+
+**观测计数原理**：`withPrompt` → `propagateAttributes({prompt:{name,version}})`，由
+`LangfuseSpanProcessor.onStart` 从父上下文把 `langfuse.observation.prompt.name/version` 写到 generation 上，
+Langfuse 后端按 `(name, version)` 统计 observations。本地兜底不写这两个属性（不伪装版本），
+但会在 trace metadata 里留 `prompt_source=fallback`，便于区分「模型正常但没关联提示词」。
+`tests/prompt-link.spec.ts` 用内存 exporter 直接断言这两个属性，防止再出现「静默 0 观测」。
+
+**改提示词的顺序**：先在 Langfuse 新建版本（含上表变量）→ 把 `production` label 移过去 →
+代码里的兜底常量同步成同一份文本（否则兜底与线上行为不一致）。缓存由 SDK 管理（默认 60s）；
+过期后先返回旧值并在后台刷新，刷新失败只打一条 SDK 英文 warn，`prompt_source` 仍显示 `remote`（**没有 stale 标记**）。
+Langfuse 不可达时，适配器的「单飞 + 30s 负缓存」保证每个 name 在窗口内最多 1 次失败请求、1 条中文 error。
+
 ## 9. 故障排查
 
-| 现象                             | 原因 / 处理                                                                                                                                                                                                                                                                     |
-| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `[asr] 未配置 FORGE_ASR_API_KEY` | 在 `apps/api/.env` 填百炼 DashScope Key（`sk-` 开头）                                                                                                                                                                                                                           |
-| `[asr] 转写请求失败（HTTP …）`   | Key 失效 / 欠费 / 网络不通 / 模型名不对。核对 `FORGE_ASR_API_KEY`、`FORGE_ASR_MODEL`、`FORGE_ASR_BASE_URL`                                                                                                                                                                      |
-| `[asr] …超过单段上限 300s`       | flash 同步版建议 ≤5 分钟。用前端切片把选区缩短，或分段转写（流水线按 clip 合并）                                                                                                                                                                                                |
-| `[asr] 转写结果为空`             | 音频里没语音，或音乐伴奏太密（见下「音乐」）                                                                                                                                                                                                                                    |
-| `[preprocess] …最终失败`         | 预处理 LLM 拆句输出重试后仍不合格（词序号分组不合法/结构错误）。换更强的 `FORGE_PREPROCESS_MODEL`，或检查该段转写是否异常                                                                                                                                                       |
-| `[llm] 词编号不合法`             | 结构化模型给的 `indexes` 跳号/越界/缺整句行，或出现单词成行的碎片（每行至少 2 个词）。文案会指出第几行、期望编号；不自动重试，GUI 里可选「重试该句」或「删除该句」（输出里混着单词行的句子已由后端自动删掉单词行，仍不合规才出现），也可换更强模型（小模型易出现从 1 开始编号） |
-| `[forge] 对齐成功率低于 85%`     | 正常路径应为 0 失败（编号直取）。若出现失败，多半是 `transcript.json` 在进度快照之后被人工改过，span 与词表错位后自动退回猜测式匹配。对照 `alignment.json` 检查                                                                                                                 |
-| `[llm] 无法连接 …`               | ollama 没起 / 没 `pull` 该模型 / 云端 key 或 base 不对。检查 `FORGE_LLM_*` 与 `ollama list`                                                                                                                                                                                     |
-| `[llm] 输出结构校验失败`         | 模型没按要求输出 JSON schema。换更强的模型，代码已内置 `json_schema→json_object→纯文本` 逐级降级                                                                                                                                                                                |
-| `[import] 无法连接 API`          | 后端没起。`pnpm dev:serve` 后重试，或核对 `FORGE_API_URL`                                                                                                                                                                                                                       |
-| `[import] 视频不是 mp4`          | 部分浏览器（Safari）不能播放 mkv/webm。用 ffmpeg 转成 H.264+AAC mp4 后重跑导入                                                                                                                                                                                                  |
-| 页面全播 TTS、没有原声           | 检查：① course.json 的 statement 是否有 `startTime`/`endTime`；② 视频输入时 `meta.json` 是否有 `videoPath`；③ 导入是否成功（日志有「视频已复制」）                                                                                                                              |
-| 歌曲识别差                       | ASR 对带伴奏音频有限。优先喂**人声干声**                                                                                                                                                                                                                                        |
-| 重复导入会不会产生重复课程包？   | 会。`forge:import` 每次都是**新建**一个课程包（`POST /course-pack`），不覆盖旧的；测试满意后如需清理，在客户端/API 删除旧包                                                                                                                                                     |
+| 现象                                    | 原因 / 处理                                                                                                                                                                                                                                                                     |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `[forge] …不是音视频文件（扩展名 .md）` | `params.mediaPath` 指到了文档/提示词等非媒体文件。改成 mp4/mov/mkv/webm/avi 或 mp3/m4a/wav/aac（白名单与上传入口共用 `common/media-ext`）                                                                                                                                       |
+| `[forge] …文件不存在`                   | 多半是 Windows 路径里的反斜杠没转义：JSON 里 `\t`/`\n` 会被吃掉。改用正斜杠（`D:/media/a.mp4`）或写成 `\\`                                                                                                                                                                      |
+| `[asr] 无法从这个文件提取音频`          | 扩展名对但内容不对：文件损坏 / 文本改名成 `.mp4` / 容器内没有音轨。用 `ffprobe 文件` 确认后再转码                                                                                                                                                                               |
+| `[asr] 未配置 FORGE_ASR_API_KEY`        | 在 `apps/api/.env` 填百炼 DashScope Key（`sk-` 开头）                                                                                                                                                                                                                           |
+| `[asr] 转写请求失败（HTTP …）`          | Key 失效 / 欠费 / 网络不通 / 模型名不对。核对 `FORGE_ASR_API_KEY`、`FORGE_ASR_MODEL`、`FORGE_ASR_BASE_URL`                                                                                                                                                                      |
+| `[asr] …超过单段上限 300s`              | flash 同步版建议 ≤5 分钟。用前端切片把选区缩短，或分段转写（流水线按 clip 合并）                                                                                                                                                                                                |
+| `[asr] 转写结果为空`                    | 音频里没语音，或音乐伴奏太密（见下「音乐」）                                                                                                                                                                                                                                    |
+| `[preprocess] …最终失败`                | 预处理 LLM 拆句输出重试后仍不合格（词序号分组不合法/结构错误）。换更强的 `FORGE_PREPROCESS_MODEL`，或检查该段转写是否异常                                                                                                                                                       |
+| `[llm] 词编号不合法`                    | 结构化模型给的 `indexes` 跳号/越界/缺整句行，或出现单词成行的碎片（每行至少 2 个词）。文案会指出第几行、期望编号；不自动重试，GUI 里可选「重试该句」或「删除该句」（输出里混着单词行的句子已由后端自动删掉单词行，仍不合规才出现），也可换更强模型（小模型易出现从 1 开始编号） |
+| `[forge] 对齐成功率低于 85%`            | 正常路径应为 0 失败（编号直取）。若出现失败，多半是 `transcript.json` 在进度快照之后被人工改过，span 与词表错位后自动退回猜测式匹配。对照 `alignment.json` 检查                                                                                                                 |
+| `[llm] 无法连接 …`                      | ollama 没起 / 没 `pull` 该模型 / 云端 key 或 base 不对。检查 `FORGE_LLM_*` 与 `ollama list`                                                                                                                                                                                     |
+| `[llm] 输出结构校验失败`                | 模型没按要求输出 JSON schema。换更强的模型，代码已内置 `json_schema→json_object→纯文本` 逐级降级                                                                                                                                                                                |
+| `[import] 无法连接 API`                 | 后端没起。`pnpm dev:serve` 后重试，或核对 `FORGE_API_URL`                                                                                                                                                                                                                       |
+| `[import] 视频不是 mp4`                 | 部分浏览器（Safari）不能播放 mkv/webm。用 ffmpeg 转成 H.264+AAC mp4 后重跑导入                                                                                                                                                                                                  |
+| 页面全播 TTS、没有原声                  | 检查：① course.json 的 statement 是否有 `startTime`/`endTime`；② 视频输入时 `meta.json` 是否有 `videoPath`；③ 导入是否成功（日志有「视频已复制」）                                                                                                                              |
+| 歌曲识别差                              | ASR 对带伴奏音频有限。优先喂**人声干声**                                                                                                                                                                                                                                        |
+| 重复导入会不会产生重复课程包？          | 会。`forge:import` 每次都是**新建**一个课程包（`POST /course-pack`），不覆盖旧的；测试满意后如需清理，在客户端/API 删除旧包                                                                                                                                                     |
 
 ## 10. 客户端播放行为（导入后会怎样）
 
@@ -314,3 +491,13 @@ pnpm -F api test:unit
 ```
 
 转写解析 / 词表口径（`words.spec.ts`）/ 预处理分组校验与碎片合并 / 词编号校验与 english 还原 / 预检 / 时间戳对齐（含 span 直取）均为纯函数单测，不需要 Docker、ollama 或 ffmpeg。
+
+编排层（`graph/`）另有四组单测，同样不依赖外部服务：
+`file-checkpointer.spec.ts`（put/getTuple 往返、parentConfig 链、裁剪、原子写、真实图跨实例 resume）、
+`build.spec.ts`（拓扑与条件边、interrupt/resume 不重跑 structureBatch、3 轮上限）、
+`run.spec.ts`（checkpoint 不可用的五种情形都返回 unavailable）、
+`llm-client.spec.ts`（三级降级链、能力缓存、超时/审核快速失败，mock `@langchain/openai`）。
+
+`langgraph.smoke.spec.ts` 锁定依赖的实际行为（serde 的 `dumpsTyped` 返回 Promise、resume 会重放
+interrupt 所在节点、`withStructuredOutput` 接受原生 JSON Schema、`maxTokens → max_tokens`），
+升级 `@langchain/*` 时先看这组是否还绿。

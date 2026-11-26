@@ -5,6 +5,15 @@ export interface TranscriptWord {
   end: number;
 }
 
+/** 流水线阶段；`transcribed` 表示「已转录、等待人工校对」，仅已停用的两段式流程使用 */
+export type ForgeStage =
+  | "transcoding"
+  | "transcribing"
+  | "transcribed"
+  | "structuring"
+  | "aligning"
+  | "done";
+
 /** 用户选中的视频时间区间（秒，相对原视频绝对时间） */
 export interface ClipRange {
   start: number;
@@ -18,6 +27,11 @@ export interface TranscriptSegment {
   end: number;
   text: string;
   words?: TranscriptWord[];
+  /**
+   * 这句的完整中文（拆句阶段顺手产出：模型手上有整段英文全文，比结构阶段只看到词表更准）。
+   * 结构阶段以它为整句权威译文；缺失时（旧 transcript / 段级降级 / 单词段）回退为模型自己翻译。
+   */
+  chinese?: string;
   /** 所属 clip 序号；仅切片转写流程存在，用于禁止跨 clip 拼句 */
   clipIndex?: number;
 }

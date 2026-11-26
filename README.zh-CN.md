@@ -1,210 +1,124 @@
-## ⚡ 介绍
+# 🐛 Earthworm（蚯蚓英语）
 
-通过连词构句的方式让你更好的学习英语~ 😊
+[English](./README.md) | **简体中文**
 
-## 📦 项目结构
+> 用「连词成句」的打字游戏学英语：把课程视频切成一句一句话，用键盘把中文敲成英文（或听写），边打边听原声。
 
-pnpm monorepo：两个应用（`apps/`）+ 六个共享包（`packages/`）。各包详细文档见对应 README。
+## ✨ 它能做什么
 
-### 应用（apps/）
+- **打字式学习游戏**：中译英（默认）与听写两种模式，自绘逐字符输入框 + 打字音效，每句分 Question / Answer 两阶段，实时判分。
+- **视频原声跟读**：句子带起止时间戳时，播放会精确 seek 到对应视频片段（支持倍速、重复）；没有视频时回退微软 Edge 神经网络 TTS 发音。
+- **课程包管理**：网页端新建 / 编辑课程包，句子列表编辑、JSON 批量导入，视频上传（2GB 上限）。
+- **一键「视频 → 课程」（Course Forge）**：上传视频或 B 站扫码下载 → 时间轴打切点 → ASR 词级转写 → LLM 拆分句子并生成中文释义 → 自动入库；有失败句时可逐句「删除 / 重试」，按 checkpoint 续跑（LangGraph 编排，Langfuse / LangSmith 可观测）。
+- **学习数据**：学习时长统计与日历热力图、最近课程包、完成历史、已掌握句子。
+- **单用户私有部署**：没有注册功能，账号密码写在环境变量里；未登录时全站跳登录页。
 
-| 目录          | 说明                                                                                                                                                            | 文档                              |
-| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
-| `apps/api`    | 后端服务（NestJS + Drizzle/Postgres，默认 3001 端口）：课程包 CRUD、学习进度/时长统计、已掌握词、Edge TTS、每日一句、B 站扫码下载、forge 课程制作流水线 job API | [README](./apps/api/README.md)    |
-| `apps/client` | 前端（Nuxt 3 SPA + Nuxt UI + Pinia）：打字输入式学习游戏（中译英/听写）、课程包管理、视频原声 seek 播放、「导入视频」流水线 GUI（切片→转写→校对→导入）          | [README](./apps/client/README.md) |
+## 🧱 技术栈
 
-### 共享包（packages/）
+pnpm monorepo，两个应用 + 四个共享包：
 
-| 目录                        | 说明                                                                                                                        | 文档                                            |
-| --------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
-| `packages/schema`           | 全部 Drizzle 表定义的单一事实来源（课程包/句子/进度/学习时长/已掌握词/历史），tsup 构建                                     | [README](./packages/schema/README.md)           |
-| `packages/game-data-sdk`    | 课程包数据访问层：`createCoursePack` / `updateCoursePack` / `deleteCoursePack`（事务写库，含视频时间戳），供 API 与脚本复用 | [README](./packages/game-data-sdk/README.md)    |
-| `packages/xingrong-courses` | 内置示例课程「星荣零基础学英语」的数据与导入脚本（`pnpm db:upload`，仅首次初始化用）                                        | [README](./packages/xingrong-courses/README.md) |
+| 目录                        | 说明                                                                    |
+| --------------------------- | ----------------------------------------------------------------------- |
+| `apps/client`               | 前端：Nuxt 3 纯 SPA（`ssr: false`）+ Vue 3 + Nuxt UI / Tailwind + Pinia |
+| `apps/api`                  | 后端：NestJS 10 + Drizzle ORM + Postgres，Swagger 在 `/swagger`         |
+| `packages/schema`           | 全部 Drizzle 表定义的单一事实来源                                       |
+| `packages/storage`          | S3 协议对象存储封装（dev MinIO / prod 阿里云 OSS）                      |
+| `packages/game-data-sdk`    | 课程包写入层（事务写库，含视频时间戳）                                  |
+| `packages/xingrong-courses` | 内置示例课程「星荣零基础学英语」与导入脚本                              |
 
-依赖关系大致为：`client → api → game-data-sdk → schema`；课程流水线（forge）、B 站下载内核（bilidown）与数据库迁移（db）已内置进 api（分别见 `apps/api/src/forge/core`、`src/bili/bilidown`、`src/db` 的 README）。
+依赖方向大致为 `client → api → game-data-sdk → schema`；视频流水线（forge）、B 站下载内核（bilidown）与数据库迁移都内置在 api 里。
 
-## 🚀 如何开始？
+## 🚀 本地启动
 
-**以下所有相关操作都基于项目根目录位置，请注意检查不要出错！**
+**前置条件**：Node.js ≥ 20（CI 用 22.x；前端静态构建请用 `20.12.2`，见 `.node-version`）、pnpm 9（`corepack enable`）、已运行中的 Docker。
 
-### 注意事项
-
-- **pnpm version >= 8**
-
-  ```bash
-  corepack enable
-  ```
-
-- **Node.js version >= v20**
-  > 使用来自 .node-version 的版本 [支持的工具](https://github.com/shadowspawn/node-version-usage#compatibility-testing)
-- **Postgres version >= 8.0.0**
-- 项目依赖 **Docker**，所以请确保你本地已安装并成功运行
-
-### 编辑器
-
-#### VSCode
-
-- 安装推荐的插件 [extensions.json](./.vscode/extensions.json)
+> 以下命令都在**仓库根目录**执行。
 
 ```bash
-docker --version # Docker version 24.0.7, build afdd53b
-
-node --version # v20+
-
-pnpm -v # 8+
-```
-
-### 1. 安装依赖
-
-```bash
+# 1. 安装依赖
 pnpm install
-```
 
-### 2. 配置 `.env` 文件
+# 2. 准备环境变量
+cp apps/api/.env.example apps/api/.env       # 必填：AUTH_TFGZSDVU / AUTH_PASSWORD / SECRET
+cp apps/client/.env.example apps/client/.env # 默认 API_BASE=http://localhost:3001
 
-可以选择将 `./apps/api/.env.example` 文件内容复制到 `./apps/api/.env`，请注意 `example` 文件中的是示例配置，主要是一些系统的环境变量信息，比如：数据库连接地址、用户名、密码、端口、密钥等等，后端服务会从此文件中读取配置信息，**当然你也可以更改成你自己的配置信息**。
-
-Windows 用户推荐快捷键复制粘贴，Linux 用户可以通过下面的命令进行操作。
-
-#### Server
-
-```bash
-cp ./apps/api/.env.example ./apps/api/.env
-```
-
-#### Client
-
-```bash
-cp ./apps/client/.env.example ./apps/client/.env
-```
-
-### 3. 启动 Docker Compose 服务
-
-后端用到了 Postgres 和 MinIO（对象存储，dev 环境；prod 用阿里云 OSS，见 `README.env.prod.md`）服务，通过下面在 `package.json` 中配置的命令启动和停止。MinIO 首次启动会自动创建私有桶 `earthworm` 并给 `tts/` 缓存配置 30 天过期的生命周期规则，控制台在 `http://localhost:9001`（默认账号密码 minioadmin/minioadmin）。
-
-```bash
-# 启动
+# 3. 启动 Postgres（5433）+ MinIO（9000 / 控制台 9001）
 pnpm docker:start
 
-# 下面这些命令等你用的时候在执行，不要傻乎乎的刚启动就停止哈 😊
-# 停止
-pnpm docker:stop
-# 删除容器和网络（不会删除数据卷，数据保留在 db-data / testdb-data / minio-data 卷里）
-pnpm docker:down
-```
-
-当然如果你更喜欢手动挡
-
-```bash
-docker compose up -d
-docker compose stop
-docker compose down
-
-# 兼容老版本 docker 的命令
-docker-compose up -d
-```
-
-### 4. 初始化数据库表结构
-
-执行这个命令时，尽量与上个命令间隔一点时间，因为刚刚使用的 `-d` 参数会让其服务挂起在后台执行，此时 docker 服务可能还在 running 中，若是发现报错了那就再执行一遍。😊
-
-```bash
+# 4. 建表（drizzle-kit push）
 pnpm db:init
-```
 
-### 5. 创建并上传课程数据
-
-**只有第一次初始化数据库后需要执行**。
-
-```bash
+# 5. 导入示例课程（只有首次建库需要）
 pnpm db:upload
-```
 
-### 6. 启动后端服务
-
-```bash
+# 6. 启动后端 http://localhost:3001
 pnpm dev:serve
-```
 
-### 7. 启动前端服务
-
-```bash
+# 7. 另开一个终端启动前端 http://localhost:3000
 pnpm dev:client
 ```
 
-## 🩺 排障：relation "xxx" does not exist
+浏览器打开 <http://localhost:3000>，用 `apps/api/.env` 里的 `AUTH_TFGZSDVU` / `AUTH_PASSWORD` 登录。
 
-后端启动和 `dev:serve` 都**不会自动建表**，所以看到下面这类报错时，基本都是数据库是空的（或者连到了别的库）：
+**常见报错**：`relation "user_course_progress" does not exist` 说明没建表或连错库，按 3 → 4 → 5 → 6 重跑一遍即可（API 启动时也会自检必需表，缺表直接报错提示）。
+
+**可选功能**：
+
+- 「导入视频」流水线需要阿里云百炼 Key（`FORGE_ASR_API_KEY` / `FORGE_LLM_API_KEY`），变量逐项见 [本地开发环境变量](./docs/env/README.env.dev.md)。
+- 本地 Langfuse 面板随 `pnpm docker:start` 一起启动：<http://localhost:3002>（`dev@local.test` / `langfuse1234`）。
+- 停服务：`pnpm docker:stop`；删容器但保留数据卷：`pnpm docker:down`。
+
+## ☁️ 线上部署
+
+线上是「静态前端 + 单机后端」的组合，媒体文件不进服务器：
 
 ```
-ERROR [ExceptionsHandler] relation "user_course_progress" does not exist
+浏览器 → Cloudflare Pages（Nuxt 静态产物）
+       → https://api.<你的域名>（Cloudflare 自动签证书）
+       → Cloudflare Tunnel（只要求服务器出站，无需开入站端口）
+       → ECS 上的 api 容器（NestJS :3001）+ Postgres 容器
+媒体：浏览器用预签名 URL 直连阿里云 OSS
 ```
 
-修复顺序：
+| 部分 | 做法                                                       | 命令                 |
+| ---- | ---------------------------------------------------------- | -------------------- |
+| 前端 | 构建静态产物，Wrangler 直传 Cloudflare Pages               | `pnpm deploy:client` |
+| 后端 | 本地跨平台打镜像 → 推阿里云 ACR → SSH 让服务器拉新镜像重启 | `pnpm deploy:serve`  |
+
+首次上云需要一次性准备：ECS（2 核 2G 起、有公网出口）、托管在 Cloudflare 的域名、阿里云 ACR 个人实例、OSS 桶 + RAM AccessKey、Cloudflare Tunnel。**一键命令只更新已有部署，不会帮你建这些资源**，第一次请按文档手动做一遍并验证通过。
+
+生产环境变量（`DATABASE_URL`、`SECRET`、`AUTH_*`、`S3_*` 等）与 OSS 侧前置步骤见 [生产环境变量](./docs/env/README.env.prod.md)；前端 `apps/client/.env.prod` 只放 `API_BASE` 这类公开值（会进浏览器产物，禁放密钥）。
+
+**部署文档**：
+
+- [首次后端部署：ECS / ACR / Cloudflare Tunnel](./docs/deploy/README.backend.md)
+- [前端部署：Cloudflare Pages](./docs/deploy/README.frontend.md)
+- [日常一键部署与两套 env 的区分](./docs/deploy/README.deploy.md)
+- [生产环境变量逐项说明](./docs/env/README.env.prod.md)
+
+## 🧪 测试
+
+提交前请先跑测试。
 
 ```bash
-pnpm docker:start   # 起 db / testdb
-pnpm db:init        # 按 schema 建表（drizzle-kit push）
-pnpm db:upload      # 只有第一次建库需要：导入星荣课程数据
-pnpm dev:serve      # 重新启动后端
+pnpm test          # 后端 Jest 单测 + 前端 Vitest
+pnpm test:ci       # CI 模式（前端会先起 dev server）
 ```
 
-从本版本起，Postgres 数据持久化在 compose 声明的 `db-data` / `testdb-data` 命名卷里（挂载点为容器内真实的 PGDATA 路径 `/var/lib/postgresql/data`），容器重建不会再丢数据；早先的写法把卷挂到了 `/var/lib/postgres/main-data`，那个路径 Postgres 根本不读，数据其实一直写在匿名卷里，容器一重建就归零。
+前端 E2E：`cd apps/client && pnpm test:e2e:run`（Cypress）。
+后端 E2E 需要测试库：`docker compose --profile test up -d` 起 testdb（宿主 5480），并把 `apps/api/.env.test.example` 复制为 `.env.test`。
 
-排查用的只读命令：
+## 📚 更多文档
 
-```bash
-docker compose ls
-docker inspect english-for-fun-db-1 --format "{{json .Mounts}}"   # 看真实挂载点
-docker volume ls                                                  # 看命名卷 / 匿名卷
+| 文档                                                       | 内容                                   |
+| ---------------------------------------------------------- | -------------------------------------- |
+| [docs/README.instruction.md](./docs/README.instruction.md) | 本地开发端口与默认账号速查             |
+| [docs/README.login.md](./docs/README.login.md)             | 单用户登录机制与凭证配置               |
+| [docs/env/README.env.dev.md](./docs/env/README.env.dev.md) | 本地开发环境变量逐项说明               |
+| [apps/api/README.md](./apps/api/README.md)                 | 后端模块、端点一览、启动自检           |
+| [apps/client/README.md](./apps/client/README.md)           | 前端页面、状态管理、播放与 Forge GUI   |
+| [AGENTS.md](./AGENTS.md)                                   | 给 AI 编码助手用的代码知识图谱使用说明 |
 
-# 注意：不要执行 docker volume prune
-# 它会连带删掉所有未被引用的卷（包括历史遗留的数据库数据卷），数据不可恢复
-```
+## 📄 License
 
-若 API 启动时直接报 “数据库表缺失：...”，说明自检没通过，按提示跑上面几条命令即可；这类错误现在会在启动阶段一次性暴露，而不是每个请求都 500。
-
-## 🛠️ 关于测试
-
-**提交 commit 前先跑测试，测试通过后再提交代码，以免产生多次 commit 来解决测试问题的情况出现**。
-
-### 前端测试
-
-主要就是 Vitest 的单测以及 cypress 的自动化测试，执行以下命令：
-
-```bash
-# 进入前端项目目录
-cd apps/client
-
-# vitest
-pnpm test:unit:run
-# cypress
-pnpm test:e2e:run
-
-# 监听 vitest，方便热更新看测试结果
-pnpm test:unit:watch
-```
-
-### 后端测试
-
-主要就是 Jest 的单测和端对端测试，但需要接入测试的数据库，所以需要先确保：
-
-1. Docker Compose 中的 testdb 服务正常启动。
-2. `.env.test` 文件中的配置信息是正确的，如果没有这个文件，可以复制 `apps/api/.env.test.example` 文件内容到 `apps/api/.env.test` 文件，下面有提供命令直接用。
-
-执行以下命令：
-
-```bash
-# 进入后端项目目录
-cd apps/api
-
-# 如果有 .env.test 文件，就不需要跑这一步了
-cp .env.test.example .env.test
-
-# 单测
-pnpm test:unit
-# 端对端测试
-pnpm test:e2e
-# 单测和端对端测试一起跑
-pnpm test
-```
+[AGPL-3.0](./LICENSE)

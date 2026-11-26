@@ -4,7 +4,19 @@
  * 结构约束（json_schema + zod + validateRowIndexes）由代码承担，
  * 这里保留教学法（六步拆句：谓语 → 主干 → 从句 → 非谓语 → 修饰/插入 → 翻译整句）、
  * 一条正例和一条反例，尽量精简——一次课程会发起与句子数等量的模型调用。
+ *
+ * 形态：**一条 system 消息**。静态指令 + 末尾「## 本次输入」变量区，
+ * 变量由 `buildSentenceVars` 注入（`{{words}}` / `{{word_count}}` /
+ * `{{last_index}}` / `{{sentence_chinese}}`），代码不再拼 user 消息。
+ *
+ * 这份文本是 **本地兜底**：正常运行时提示词从 Langfuse Prompt Management 拉取
+ * （见 prompt-store.ts），只有未配置 key、拉取失败、变量不匹配或 LANGFUSE_PROMPTS=0 时才用它。
+ * 所以在 Langfuse 里改完提示词后，记得把同样的内容同步回这里，保持兜底一致。
  */
+import type { ManagedPrompt, PromptVars } from "./prompt-store";
+import { config } from "./config";
+import { getManagedPrompt, PROMPT_EMPTY } from "./prompt-store";
+
 export const SYSTEM_PROMPT = `你在为「蚯蚓学英语」把【一句英文】做成组装链：先把这句拆成短语碎片，再沿「短语 → 整句」一步步拼回这句完整的话，让用户学会拼出它。
 
 输入是一份【编号词表】：每行「编号 词」，编号从 0 开始，把词按编号顺序拼起来就是这句原句。
@@ -31,6 +43,7 @@ export const SYSTEM_PROMPT = `你在为「蚯蚓学英语」把【一句英文�
 5. phonetic 按该行对应的词逐个给 IPA，用空格分隔（如 /aɪ/ /laɪk/）；不确定就填空字符串 ""。
 6. chinese 给该行英文片段的简洁自然中文翻译，不要加引号。
 7. 只输出 JSON，不要输出任何解释文字。
+8. 【本句权威中文】不为「（无）」时，它就是这句的权威译文：整句行（indexes 恰为 0,1,…,N-1）的 chinese 原样照抄这段文字，不要改写；碎片行的 chinese 只能从这段中文里切分或派生，用词与它保持一致，不得另起一套译法。为「（无）」时说明本句没有权威译文，按第 6 步自行翻译整句。
 
 示例——词表：
 0 I
@@ -50,27 +63,52 @@ export const SYSTEM_PROMPT = `你在为「蚯蚓学英语」把【一句英文�
 {"indexes":[1],"chinese":"喜欢","phonetic":"/laɪk/"},
 {"indexes":[2,3],"chinese":"这个食物","phonetic":"/ðə/ /fuːd/"}
 ]}
-（不合格：只是逐词表和碎片，没有 indexes 恰为 [0,1,2,3] 的整句行，同时把每个词单独成行）`;
+（不合格：只是逐词表和碎片，没有 indexes 恰为 [0,1,2,3] 的整句行，同时把每个词单独成行）
+
+## 本次输入
+本句词表（共 {{word_count}} 个词，编号 0..{{last_index}}，格式「编号 词」，词表按顺序拼起来就是这句原句）：
+{{words}}
+
+【本句权威中文】{{sentence_chinese}}`;
 
 /** 编号词表：每行「编号 词」，比 JSON 形式省 60% token，且模型不需要数括号 */
 export function formatNumberedWords(words: string[]): string {
   return words.map((w, i) => `${i} ${w}`).join("\n");
 }
 
-/** 一句一次调用：不再附带「上一次不合格」的纠错说明（校验失败不再自动重试） */
-export function buildMessages(
-  words: string[],
-): Array<{ role: "system" | "user"; content: string }> {
-  const last = words.length - 1;
-  return [
-    { role: "system", content: SYSTEM_PROMPT },
-    {
-      role: "user",
-      content:
-        `请把下面这句英文拆成碎片并逐级拼回完整原句，输出组装链。\n` +
-        `本句词表（共 ${words.length} 个词，编号 0..${last}，格式「编号 词」，词表按顺序拼起来就是这句原句）：\n` +
-        `${formatNumberedWords(words)}\n` +
-        `要求：只能用这些编号引用词，不要输出英文单词文本；最后一行 indexes 必须恰为 0,1,…,${last}。`,
-    },
-  ];
+/** 句子分析提示词在 Langfuse 中的名字（可用 FORGE_PROMPT_SENTENCE_NAME 覆盖） */
+export const SENTENCE_PROMPT_NAME = config.sentencePromptName;
+
+/** 句子链提示词必须包含的变量：远端模板缺任何一个都回退本地兜底（避免模型拿不到输入） */
+export const SENTENCE_PROMPT_VARS = ["words", "word_count", "last_index", "sentence_chinese"];
+
+/**
+ * 本轮调用的变量值。`sentence_chinese` 缺省用哨兵「（无）」而不是空串：
+ * Text 提示词没有条件语法，空串会让「权威中文」规则悬空；哨兵让提示词正文
+ * 可以写成无条件的「不是（无）就照抄 / 是（无）就自行翻译」。
+ */
+export function buildSentenceVars(words: string[], sentenceChinese?: string): PromptVars {
+  return {
+    words: formatNumberedWords(words),
+    word_count: words.length,
+    last_index: words.length - 1,
+    sentence_chinese: sentenceChinese?.trim() || PROMPT_EMPTY,
+  };
+}
+
+/** 取句子分析提示词：Langfuse 优先，失败回退 SYSTEM_PROMPT */
+export function loadSentencePrompt(vars?: PromptVars): Promise<ManagedPrompt> {
+  return getManagedPrompt(SENTENCE_PROMPT_NAME, SYSTEM_PROMPT, {
+    vars,
+    requiredVars: SENTENCE_PROMPT_VARS,
+  });
+}
+
+/**
+ * 只发一条 system 消息：静态指令与变量都在提示词里，代码不再拼 user 内容。
+ * sentenceChinese（句级译文）已由 buildSentenceVars 注入，整句行还会被代码强制覆盖一次
+ * （见 llm.ts 的 overrideFullRowChinese），因此模型改写/漏写都不会进产物。
+ */
+export function buildMessages(systemPrompt: string): Array<{ role: "system"; content: string }> {
+  return [{ role: "system", content: systemPrompt }];
 }
